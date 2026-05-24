@@ -89,3 +89,22 @@ export interface RiskAnalysisResponse {
   risks: RiskAnalysis[];
   overall_risk_level: string;
 }
+
+export interface FeatureWinner {
+  feature: string;
+  winner: string;
+  reason: string;
+}
+
+export interface ComparisonSynthesis {
+  synthesis: string;
+  best_for: string;
+  verdict: string;
+  feature_winners: FeatureWinner[];
+}
+
+export interface CompareResponse {
+  documents: DocumentDetail[];
+  comparison_synthesis: ComparisonSynthesis;
+}
+

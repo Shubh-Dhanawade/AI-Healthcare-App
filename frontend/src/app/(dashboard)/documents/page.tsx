@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { documentsApi } from '@/lib/apiHelpers';
 import { Document } from '@/types';
 import Link from 'next/link';
-import { FileText, Upload, Trash2, Eye, Search } from 'lucide-react';
+import { FileText, Upload, Trash2, Eye, Search, Scale } from 'lucide-react';
 import { useState } from 'react';
 import DocumentStatusBadge from '@/components/documents/DocumentStatusBadge';
 import toast from 'react-hot-toast';
@@ -16,6 +16,7 @@ function formatBytes(bytes: number) {
 
 export default function DocumentsListPage() {
   const [search, setSearch] = useState('');
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const queryClient = useQueryClient();
 
   const { data: documents = [], isLoading } = useQuery<Document[]>({
@@ -83,7 +84,8 @@ export default function DocumentsListPage() {
           <table className="w-full">
             <thead>
               <tr className="border-b border-slate-700/50">
-                <th className="text-left px-6 py-4 text-xs font-semibold text-slate-400 uppercase tracking-wider">Document</th>
+                <th className="w-12 px-6 py-4"></th>
+                <th className="text-left px-2 py-4 text-xs font-semibold text-slate-400 uppercase tracking-wider">Document</th>
                 <th className="text-left px-6 py-4 text-xs font-semibold text-slate-400 uppercase tracking-wider">Status</th>
                 <th className="text-left px-6 py-4 text-xs font-semibold text-slate-400 uppercase tracking-wider hidden md:table-cell">Size</th>
                 <th className="text-left px-6 py-4 text-xs font-semibold text-slate-400 uppercase tracking-wider hidden lg:table-cell">Uploaded</th>
@@ -91,53 +93,108 @@ export default function DocumentsListPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-700/30">
-              {filtered.map((doc) => (
-                <tr key={doc.id} className="hover:bg-white/3 transition-colors">
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
-                        style={{ background: doc.file_type === 'pdf' ? 'rgba(239,68,68,0.15)' : 'rgba(59,130,246,0.15)' }}>
-                        <FileText className="w-4 h-4" style={{ color: doc.file_type === 'pdf' ? '#f87171' : '#60a5fa' }} />
-                      </div>
-                      <div>
-                        <p className="font-medium text-sm truncate max-w-[200px] md:max-w-xs">{doc.original_filename}</p>
-                        <p className="text-xs text-slate-500 capitalize">{doc.file_type} • {doc.page_count} page{doc.page_count !== 1 ? 's' : ''}</p>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <DocumentStatusBadge status={doc.status} />
-                  </td>
-                  <td className="px-6 py-4 text-sm text-slate-400 hidden md:table-cell">
-                    {formatBytes(doc.file_size_bytes)}
-                  </td>
-                  <td className="px-6 py-4 text-sm text-slate-400 hidden lg:table-cell">
-                    {new Date(doc.created_at).toLocaleDateString()}
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="flex items-center justify-end gap-2">
-                      <Link href={`/documents/${doc.id}`} className="btn-secondary py-1.5 px-3 text-xs">
-                        <Eye className="w-3.5 h-3.5" /> View
-                      </Link>
-                      <button
-                        onClick={() => {
-                          if (confirm('Delete this document and all its analysis data?')) {
-                            deleteMutation.mutate(doc.id);
+              {filtered.map((doc) => {
+                const isSelectable = doc.status === 'completed' || doc.status === 'summarized';
+                const isSelected = selectedIds.includes(doc.id);
+                return (
+                  <tr key={doc.id} className={`hover:bg-white/3 transition-colors ${isSelected ? 'bg-blue-500/5 hover:bg-blue-500/10' : ''}`}>
+                    <td className="px-6 py-4 text-center">
+                      <input
+                        type="checkbox"
+                        className="w-4 h-4 rounded border-slate-700 bg-[#0c1322] text-blue-500 focus:ring-blue-500/20 focus:ring-offset-0 transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                        disabled={!isSelectable}
+                        checked={isSelected}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            if (selectedIds.length >= 3) {
+                              toast.error('You can compare a maximum of 3 policies.');
+                              return;
+                            }
+                            setSelectedIds([...selectedIds, doc.id]);
+                          } else {
+                            setSelectedIds(selectedIds.filter((id) => id !== doc.id));
                           }
                         }}
-                        className="btn-danger py-1.5 px-3 text-xs"
-                        disabled={deleteMutation.isPending}
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                      />
+                    </td>
+                    <td className="px-2 py-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
+                          style={{ background: doc.file_type === 'pdf' ? 'rgba(239,68,68,0.15)' : 'rgba(59,130,246,0.15)' }}>
+                          <FileText className="w-4 h-4" style={{ color: doc.file_type === 'pdf' ? '#f87171' : '#60a5fa' }} />
+                        </div>
+                        <div>
+                          <p className="font-medium text-sm truncate max-w-[200px] md:max-w-xs">{doc.original_filename}</p>
+                          <p className="text-xs text-slate-500 capitalize">{doc.file_type} • {doc.page_count} page{doc.page_count !== 1 ? 's' : ''}</p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <DocumentStatusBadge status={doc.status} />
+                    </td>
+                    <td className="px-6 py-4 text-sm text-slate-400 hidden md:table-cell">
+                      {formatBytes(doc.file_size_bytes)}
+                    </td>
+                    <td className="px-6 py-4 text-sm text-slate-400 hidden lg:table-cell">
+                      {new Date(doc.created_at).toLocaleDateString()}
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="flex items-center justify-end gap-2">
+                        <Link href={`/documents/${doc.id}`} className="btn-secondary py-1.5 px-3 text-xs">
+                          <Eye className="w-3.5 h-3.5" /> View
+                        </Link>
+                        <button
+                          onClick={() => {
+                            if (confirm('Delete this document and all its analysis data?')) {
+                              deleteMutation.mutate(doc.id);
+                              setSelectedIds(selectedIds.filter((id) => id !== doc.id));
+                            }
+                          }}
+                          className="btn-danger py-1.5 px-3 text-xs"
+                          disabled={deleteMutation.isPending}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}
       </div>
+
+      {/* Floating Compare Bar */}
+      {selectedIds.length > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center justify-between gap-6 px-6 py-4 rounded-2xl bg-slate-900/90 border border-blue-500/30 shadow-[0_0_30px_rgba(59,130,246,0.2)] backdrop-blur-xl animate-fade-in w-[90%] max-w-2xl">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-blue-500/20 flex items-center justify-center border border-blue-500/30">
+              <Scale className="w-5 h-5 text-blue-400" />
+            </div>
+            <div>
+              <p className="font-semibold text-white text-sm">Policy Comparison</p>
+              <p className="text-slate-400 text-xs">{selectedIds.length} of 3 selected</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setSelectedIds([])}
+              className="px-4 py-2 text-sm text-slate-400 hover:text-white transition-colors"
+            >
+              Clear
+            </button>
+            <Link
+              href={`/compare?ids=${selectedIds.join(',')}`}
+              className={`px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white font-semibold text-sm shadow-lg shadow-blue-500/20 hover:shadow-blue-500/30 hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center gap-2 ${
+                selectedIds.length < 2 ? 'opacity-50 pointer-events-none' : ''
+              }`}
+            >
+              Compare Selected
+            </Link>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

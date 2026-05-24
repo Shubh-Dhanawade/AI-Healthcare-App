@@ -126,3 +126,30 @@ class RiskAnalysisResponse(BaseModel):
 class SummarizeResponse(BaseModel):
     document_id: str
     summary: SummarySchema
+
+
+# ─────────────────────────────────────────
+# Comparison Schemas
+# ─────────────────────────────────────────
+
+class CompareRequest(BaseModel):
+    document_ids: List[str]
+
+
+class FeatureWinnerSchema(BaseModel):
+    feature: str
+    winner: str
+    reason: str
+
+
+class ComparisonSynthesisSchema(BaseModel):
+    synthesis: str
+    best_for: str
+    verdict: str
+    feature_winners: List[FeatureWinnerSchema] = []
+
+
+class CompareResponse(BaseModel):
+    documents: List[DocumentDetailResponse]
+    comparison_synthesis: ComparisonSynthesisSchema
+

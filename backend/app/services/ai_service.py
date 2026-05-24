@@ -78,6 +78,26 @@ Return:
 }}"""
 
 
+COMPARISON_PROMPT = """You are an expert insurance advisor. Compare the following healthcare insurance policies side-by-side based on their costs, coverage limits, restrictions, and risk profiles.
+
+POLICIES DATA:
+{policies_data}
+
+Return ONLY valid JSON with these exact keys:
+{{
+  "synthesis": "A brief 1-paragraph summary of the main differences and trade-offs between these policies (maximum 100 words)",
+  "best_for": "A bulleted or short description specifying who each policy is best suited for (maximum 50 words)",
+  "verdict": "Your expert recommendation/verdict on which policy offers the best overall value and why (maximum 50 words)",
+  "feature_winners": [
+    {{
+      "feature": "Premium Cost | Coverage Limits | Deductibles & Co-payments | Network Size | Waiting Periods",
+      "winner": "Exact Name of the winning policy (or 'Tie' if equal)",
+      "reason": "Very brief explanation of why this policy wins for this feature (maximum 15 words)"
+    }}
+  ]
+}}"""
+
+
 # ─────────────────────────────────────────
 # Mock Data (used when Ollama is unavailable)
 # ─────────────────────────────────────────
@@ -335,3 +355,95 @@ async def analyze_risks(document_text: str) -> dict:
         logger.warning(f"Ollama unavailable ({e}), using demo risk data")
 
     return {"risks": list(MOCK_RISKS), "overall_risk_level": "high"}
+
+
+async def generate_comparison_synthesis(policies_data: list[dict]) -> dict:
+    """Compare multiple policies side-by-side. Falls back to dynamic mock comparison if Ollama is offline."""
+    # Build text representation of the policies being compared
+    formatted_policies = []
+    policy_names = []
+    
+    for idx, p in enumerate(policies_data):
+        fields = p.get("extracted_fields", [])
+        policy_name = next((f["field_value"] for f in fields if f["field_name"].lower() in ("policy name", "policy_name")), "Unknown Policy")
+        insurer_name = next((f["field_value"] for f in fields if f["field_name"].lower() in ("insurer name", "insurer_name")), "Unknown Insurer")
+        
+        full_name = f"{insurer_name} - {policy_name}"
+        policy_names.append(full_name)
+        
+        sum_insured = next((f["field_value"] for f in fields if f["field_name"].lower() in ("sum insured", "sum_insured")), "Not specified")
+        premium = next((f["field_value"] for f in fields if f["field_name"].lower() in ("premium amount", "premium_amount")), "Not specified")
+        deductible = next((f["field_value"] for f in fields if f["field_name"].lower() in ("deductible",)), "None")
+        copay = next((f["field_value"] for f in fields if f["field_name"].lower() in ("co payment", "co_payment")), "None")
+        
+        summary_text = p.get("summary", {}).get("summary_text", "") if p.get("summary") else ""
+        risks = p.get("risk_analyses", [])
+        risk_level = p.get("overall_risk_level", "medium")
+        
+        formatted_policies.append(
+            f"POLICY #{idx+1}: {full_name}\n"
+            f"- Sum Insured: {sum_insured}\n"
+            f"- Premium: {premium}\n"
+            f"- Deductible: {deductible}\n"
+            f"- Co-payment: {copay}\n"
+            f"- AI Summary: {summary_text}\n"
+            f"- Overall Risk Level: {risk_level}\n"
+            f"- Key Risks: {', '.join([r['risk_type'] for r in risks[:3]]) if risks else 'None'}\n"
+        )
+    
+    policies_text = "\n\n".join(formatted_policies)
+    
+    try:
+        response = await call_ollama(COMPARISON_PROMPT.format(policies_data=policies_text))
+        result = extract_json_from_response(response)
+        if result.get("synthesis"):
+            logger.info("✅ Ollama comparison synthesis successful")
+            return {
+                "synthesis": str(result["synthesis"]),
+                "best_for": str(result["best_for"]),
+                "verdict": str(result["verdict"]),
+                "feature_winners": result.get("feature_winners", [])
+            }
+    except Exception as e:
+        logger.warning(f"Ollama unavailable for comparison ({e}), using dynamic mock comparison")
+
+    # Generate custom mock comparison based on policy names
+    p1 = policy_names[0] if len(policy_names) > 0 else "Policy A"
+    p2 = policy_names[1] if len(policy_names) > 1 else "Policy B"
+    p3 = f" and {policy_names[2]}" if len(policy_names) > 2 else ""
+    
+    feature_winners = [
+        {
+            "feature": "Premium Cost",
+            "winner": p1,
+            "reason": "Lower annual premium compared to others."
+        },
+        {
+            "feature": "Coverage Limits",
+            "winner": p2,
+            "reason": "Higher sum insured and room rent limits."
+        },
+        {
+            "feature": "Deductibles & Co-payments",
+            "winner": p2 if len(policy_names) > 1 else p1,
+            "reason": "Zero co-payment requirement on claims."
+        },
+        {
+            "feature": "Network Size",
+            "winner": p1,
+            "reason": "Slightly larger network of partner hospitals."
+        },
+        {
+            "feature": "Waiting Periods",
+            "winner": p2 if len(policy_names) > 1 else p1,
+            "reason": "Shorter waiting period for pre-existing conditions."
+        }
+    ]
+    
+    return {
+        "synthesis": f"Comparing {p1}, {p2}{p3} reveals distinct differences in coverage limits, cost sharing, and waiting restrictions. {p1} tends to offer standard benefits with lower premiums but contains more co-payment limitations. In contrast, {p2} provides more comprehensive protection and lower out-of-pocket costs, though it comes at a higher annual cost.",
+        "best_for": f"• {p1}: Best for budget-conscious individuals who have low regular healthcare expenditures.\n• {p2}: Best for families or individuals seeking maximum protection with lower risk of unexpected hospital bills.\n" + (f"• {policy_names[2]}: Best as a middle-ground plan balancing premiums and outpatient coverage." if len(policy_names) > 2 else ""),
+        "verdict": f"For most users, {p2} offers the best overall security if the premium is within budget, as it avoids high co-payments during major health crises. If affordability is the main concern, {p1} is a reliable starter plan.",
+        "feature_winners": feature_winners
+    }
+

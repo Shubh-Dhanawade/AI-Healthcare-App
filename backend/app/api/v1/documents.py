@@ -16,8 +16,9 @@ from app.core.config import settings
 from app.models.user import User
 from app.models.document import Document, ExtractedField
 from app.models.risk_analysis import Summary, RiskAnalysis
-from app.schemas.schemas import DocumentResponse, DocumentDetailResponse
+from app.schemas.schemas import DocumentResponse, DocumentDetailResponse, CompareRequest, CompareResponse, ComparisonSynthesisSchema
 from app.services.ocr_service import extract_document_text
+from app.services.ai_service import generate_comparison_synthesis
 
 router = APIRouter()
 
@@ -204,3 +205,116 @@ async def delete_document(
     
     await db.delete(doc)
     logger.info(f"Document {document_id} deleted")
+
+
+@router.post("/compare", response_model=CompareResponse)
+async def compare_documents(
+    request: CompareRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Compare 2 or 3 documents side-by-side."""
+    from sqlalchemy.orm import selectinload
+    
+    # Check length
+    if len(request.document_ids) < 2 or len(request.document_ids) > 3:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You must select between 2 and 3 documents to compare.",
+        )
+    
+    # Fetch documents with their summary, extracted fields, and risks
+    result = await db.execute(
+        select(Document)
+        .where(
+            Document.id.in_(request.document_ids),
+            Document.user_id == current_user.id
+        )
+        .options(
+            selectinload(Document.summary),
+            selectinload(Document.extracted_fields),
+            selectinload(Document.risk_analyses),
+        )
+    )
+    docs = result.scalars().all()
+    
+    # Verify all exist and belong to user
+    if len(docs) != len(request.document_ids):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="One or more documents not found or access denied.",
+        )
+        
+    # Check status of documents - they must have been processed (completed/summarized/text_extracted)
+    for doc in docs:
+        if doc.status in ("uploaded", "processing"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Document '{doc.original_filename}' is still processing. Please wait.",
+            )
+        if doc.status == "failed":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Document '{doc.original_filename}' failed to process and cannot be compared.",
+            )
+
+    # Format documents data for the AI synthesis service call
+    policies_data = []
+    for doc in docs:
+        doc_dict = {
+            "id": doc.id,
+            "original_filename": doc.original_filename,
+            "status": doc.status,
+            "summary": {
+                "summary_text": doc.summary.summary_text if doc.summary else "",
+                "coverage_summary": doc.summary.coverage_summary if doc.summary else "",
+                "exclusions_summary": doc.summary.exclusions_summary if doc.summary else "",
+                "waiting_period_summary": doc.summary.waiting_period_summary if doc.summary else "",
+                "premium_summary": doc.summary.premium_summary if doc.summary else "",
+            } if doc.summary else None,
+            "extracted_fields": [
+                {
+                    "field_name": f.field_name,
+                    "field_value": f.field_value,
+                    "field_category": f.field_category,
+                }
+                for f in doc.extracted_fields
+            ],
+            "risk_analyses": [
+                {
+                    "clause_text": r.clause_text,
+                    "risk_type": r.risk_type,
+                    "severity": r.severity,
+                    "explanation": r.explanation,
+                    "recommendation": r.recommendation,
+                }
+                for r in doc.risk_analyses
+            ]
+        }
+        
+        # Calculate dynamic overall risk level
+        high_count = sum(1 for r in doc.risk_analyses if r.severity == "high")
+        med_count = sum(1 for r in doc.risk_analyses if r.severity == "medium")
+        if high_count > 0:
+            doc_dict["overall_risk_level"] = "high"
+        elif med_count > 0:
+            doc_dict["overall_risk_level"] = "medium"
+        else:
+            doc_dict["overall_risk_level"] = "low"
+            
+        policies_data.append(doc_dict)
+
+    # Generate comparison synthesis using Ollama or fallback mock
+    synthesis_report = await generate_comparison_synthesis(policies_data)
+    
+    # Return documents details + comparative synthesis
+    return CompareResponse(
+        documents=[DocumentDetailResponse.model_validate(d) for d in docs],
+        comparison_synthesis=ComparisonSynthesisSchema(
+            synthesis=synthesis_report.get("synthesis", ""),
+            best_for=synthesis_report.get("best_for", ""),
+            verdict=synthesis_report.get("verdict", ""),
+            feature_winners=synthesis_report.get("feature_winners", [])
+        )
+    )
+

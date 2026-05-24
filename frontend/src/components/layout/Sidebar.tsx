@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
-  Activity, LayoutDashboard, FileText, Upload, Shield, Settings, LogOut,
+  Activity, LayoutDashboard, FileText, Upload, Shield, Settings, LogOut, Scale,
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -11,6 +11,7 @@ const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/upload', label: 'Upload', icon: Upload },
   { href: '/documents', label: 'Documents', icon: FileText },
+  { href: '/compare', label: 'Compare Policies', icon: Scale },
 ];
 
 export default function Sidebar() {

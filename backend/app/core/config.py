@@ -35,10 +35,11 @@ class Settings(BaseSettings):
         "http://localhost",
         "http://127.0.0.1:3000",
     ]
-
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    model_config = {
+        "env_file": ".env",
+        "case_sensitive": True,
+        "extra": "ignore"
+    }
 
 
 settings = Settings()

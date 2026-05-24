@@ -2,7 +2,7 @@
  * Authentication API functions
  */
 import apiClient from '@/lib/api';
-import { TokenResponse, User } from '@/types';
+import { TokenResponse, User, CompareResponse } from '@/types';
 
 interface RegisterData {
   email: string;
@@ -59,6 +59,11 @@ export const documentsApi = {
 
   delete: async (id: string) => {
     await apiClient.delete(`/documents/${id}`);
+  },
+
+  compare: async (documentIds: string[]): Promise<CompareResponse> => {
+    const res = await apiClient.post('/documents/compare', { document_ids: documentIds });
+    return res.data;
   },
 };
 
