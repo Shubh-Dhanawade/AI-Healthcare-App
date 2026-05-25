@@ -85,6 +85,9 @@ class DocumentResponse(BaseModel):
     page_count: int
     status: str
     extraction_method: Optional[str] = None
+    renewal_date: Optional[datetime] = None
+    premium_due_date: Optional[datetime] = None
+    safety_score: int = 100
     created_at: datetime
     updated_at: datetime
 
@@ -152,4 +155,50 @@ class ComparisonSynthesisSchema(BaseModel):
 class CompareResponse(BaseModel):
     documents: List[DocumentDetailResponse]
     comparison_synthesis: ComparisonSynthesisSchema
+
+
+# ─────────────────────────────────────────
+# Chat, Translation & Checklist Schemas
+# ─────────────────────────────────────────
+
+class ChatMessageSchema(BaseModel):
+    role: str
+    content: str
+
+
+class ChatQueryRequest(BaseModel):
+    query: str
+    document_ids: Optional[List[str]] = None
+    history: Optional[List[ChatMessageSchema]] = None
+
+
+class ChatQueryResponse(BaseModel):
+    response: str
+
+
+class TranslateRequest(BaseModel):
+    text: str
+    target_language: str
+
+
+class TranslateResponse(BaseModel):
+    translated_text: str
+
+
+class ClaimsChecklistRequest(BaseModel):
+    document_id: str
+    treatment_type: str
+
+
+class ChecklistItemSchema(BaseModel):
+    document_name: str
+    importance: str
+    description: str
+
+
+class ClaimsChecklistResponse(BaseModel):
+    checklist: List[ChecklistItemSchema]
+    claim_steps: List[str]
+    estimated_approval_days: str
+
 

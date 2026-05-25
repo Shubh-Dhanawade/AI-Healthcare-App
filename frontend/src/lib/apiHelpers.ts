@@ -82,4 +82,64 @@ export const aiApi = {
     const res = await apiClient.post('/ai/risk-analysis', { document_id: documentId });
     return res.data;
   },
+
+  chat: async (query: string, documentIds?: string[], history?: { role: string; content: string }[]) => {
+    const res = await apiClient.post('/ai/chat', {
+      query,
+      document_ids: documentIds,
+      history,
+    });
+    return res.data;
+  },
+
+  translate: async (text: string, targetLanguage: string) => {
+    const res = await apiClient.post('/ai/translate', {
+      text,
+      target_language: targetLanguage,
+    });
+    return res.data;
+  },
+
+  claimsChecklist: async (documentId: string, treatmentType: string) => {
+    const res = await apiClient.post('/ai/claims-checklist', {
+      document_id: documentId,
+      treatment_type: treatmentType,
+    });
+    return res.data;
+  },
+};
+
+export const remindersApi = {
+  list: async () => {
+    const res = await apiClient.get('/documents/reminders');
+    return res.data;
+  },
+
+  schedule: async (data: {
+    document_id: string;
+    renewal_date?: string;
+    premium_due_date?: string;
+    premium_amount?: number;
+  }) => {
+    const res = await apiClient.post('/documents/reminders', data);
+    return res.data;
+  },
+
+  dismiss: async (id: string) => {
+    const res = await apiClient.patch(`/documents/reminders/${id}/dismiss`);
+    return res.data;
+  },
+};
+
+export const exportApi = {
+  emailReport: async (id: string, email: string) => {
+    const res = await apiClient.post(`/documents/${id}/email`, { email });
+    return res.data;
+  },
+  
+  getExportUrl: (id: string) => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
+    const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+    return `${baseUrl}/documents/${id}/export${token ? `?token=${token}` : ''}`;
+  }
 };

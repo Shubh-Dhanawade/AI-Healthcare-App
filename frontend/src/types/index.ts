@@ -33,6 +33,9 @@ export interface Document {
   page_count: number;
   status: DocumentStatus;
   extraction_method?: string;
+  renewal_date?: string;
+  premium_due_date?: string;
+  safety_score: number;
   created_at: string;
   updated_at: string;
 }

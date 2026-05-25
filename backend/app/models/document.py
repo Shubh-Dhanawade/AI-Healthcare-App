@@ -35,6 +35,11 @@ class Document(Base):
     extracted_text: Mapped[str] = mapped_column(Text, nullable=True)
     extraction_method: Mapped[str] = mapped_column(String(50), nullable=True)
 
+    # Dates and Scoring
+    renewal_date: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    premium_due_date: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    safety_score: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)
@@ -55,6 +60,9 @@ class Document(Base):
     )
     risk_analyses: Mapped[list["RiskAnalysis"]] = relationship(  # noqa
         "RiskAnalysis", back_populates="document", cascade="all, delete-orphan"
+    )
+    reminders: Mapped[list["PolicyReminder"]] = relationship(  # noqa
+        "PolicyReminder", back_populates="document", cascade="all, delete-orphan"
     )
 
     def __repr__(self):
