@@ -1,0 +1,27 @@
+[
+  {
+    "instruction": "Summarize the key coverages and exclusions for the following insurance policy text.",
+    "input": "Policy Name: Care Premium. Coverage: In-patient hospitalization up to 10 Lakhs. ICU charges are covered up to the sum insured. Exclusion: Room rent capped at 1% of Sum Insured per day. Pre-existing diseases covered after a 48-month waiting period.",
+    "output": "{\n  \"summary_text\": \"The Care Premium policy provides standard in-patient hospitalization up to 10 Lakhs with full ICU coverage. It features room rent restrictions and a 48-month pre-existing disease waiting period.\",\n  \"coverage_summary\": \"• In-patient hospitalization up to 10 Lakhs\\n• Full ICU coverage up to Sum Insured\",\n  \"exclusions_summary\": \"• Room rent limited to 1% of Sum Insured per day\\n• Pre-existing diseases excluded for first 48 months\"\n}"
+  },
+  {
+    "instruction": "Explain the deductible and co-payment terms from the following policy excerpt.",
+    "input": "This policy has a compulsory co-payment of 10% on all claims. A deductible of ₹10,000 applies per policy year, which means the policyholder is responsible for the first ₹10,000 of all covered medical costs before any benefits are paid by the company.",
+    "output": "The policy features a ₹10,000 annual deductible (you pay the first ₹10,000 of medical bills yourself before insurance begins) and a 10% co-payment (you pay 10% of every subsequent claim, and the insurer pays 90%)."
+  },
+  {
+    "instruction": "Identify any risky clauses or sub-limits in this room rent clause.",
+    "input": "Room rent is capped at 1% of the Sum Insured per day. If a room with a higher rent is selected, a proportionate deduction will apply to all other hospitalization expenses, including nursing fees, surgeon charges, and operating theater costs.",
+    "output": "{\n  \"risks\": [\n    {\n      \"clause_text\": \"If a room with a higher rent is selected, a proportionate deduction will apply to all other hospitalization expenses\",\n      \"risk_type\": \"coverage_limit\",\n      \"severity\": \"high\",\n      \"explanation\": \"Staying in a room that exceeds the 1% cap triggers a penalty where ALL medical payouts (doctor fees, surgeries) are reduced proportionally, not just the room rent difference.\",\n      \"recommendation\": \"Ensure you stay strictly within the 1% room rent cap during hospital admission, or opt for a policy with no room rent sub-limits.\"\n    }\n  ],\n  \"overall_risk_level\": \"high\"\n}"
+  },
+  {
+    "instruction": "What is the waiting period for maternity benefits and pre-existing diseases under this policy?",
+    "input": "Maternity benefits are subject to a waiting period of 24 months from the inception of the policy. Pre-existing diseases, as declared at the time of proposal, will be covered after 36 months of continuous coverage.",
+    "output": "Maternity benefits have a 24-month (2-year) waiting period, and pre-existing conditions have a 36-month (3-year) waiting period from the date of policy inception before coverage becomes active."
+  },
+  {
+    "instruction": "What are the rules regarding cashless claims and reimbursement claims?",
+    "input": "Cashless hospitalization must be pre-authorized at least 48 hours prior to planned admission, or within 24 hours of emergency admission at network hospitals. For reimbursement claims, all original discharge summaries, bills, and prescriptions must be submitted to the TPA within 30 days of discharge.",
+    "output": "Cashless claims require pre-authorization 48 hours before planned admission (or within 24 hours for emergencies) at network hospitals. Reimbursement claims require all original paperwork to be submitted to the Third Party Administrator (TPA) within 30 days of hospital discharge."
+  }
+]

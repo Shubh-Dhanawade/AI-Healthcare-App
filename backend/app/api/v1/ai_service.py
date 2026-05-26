@@ -17,8 +17,10 @@ from app.schemas.schemas import (
     SummarizeRequest, SummarizeResponse, SummarySchema,
     ExtractFieldsRequest, ExtractedFieldsResponse, ExtractedFieldSchema,
     RiskAnalysisRequest, RiskAnalysisResponse, RiskAnalysisSchema,
+    QueryRequest, QueryResponse,
 )
 from app.services.ai_service import generate_summary, extract_policy_fields, analyze_risks
+from app.services.rag_service import query_rag_pipeline
 
 router = APIRouter()
 
@@ -216,3 +218,32 @@ async def risk_analysis(
             risks=[RiskAnalysisSchema.model_validate(r) for r in saved_risks],
             overall_risk_level=risk_data.get("overall_risk_level", "medium"),
         )
+
+
+@router.post("/documents/{document_id}/query", response_model=QueryResponse)
+async def query_document(
+    document_id: str,
+    request: QueryRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Query a document using local RAG and calculate evaluation metrics."""
+    doc = await _get_document(document_id, current_user, db)
+    
+    logger.info(f"Querying document {doc.id} with prompt: {request.query}")
+    try:
+        result = await query_rag_pipeline(doc.extracted_text, request.query)
+    except Exception as e:
+        logger.error(f"RAG query failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"RAG pipeline failure: {e}",
+        )
+        
+    return QueryResponse(
+        document_id=doc.id,
+        answer=result["answer"],
+        context=result["context"],
+        evaluation=result["evaluation"],
+    )
+

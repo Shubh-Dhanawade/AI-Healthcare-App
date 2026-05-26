@@ -16,23 +16,24 @@ from app.core.config import settings
 # Prompt Templates
 # ─────────────────────────────────────────
 
-SUMMARIZATION_PROMPT = """You are a healthcare insurance expert. Analyze this insurance policy and provide a JSON summary.
+SUMMARIZATION_PROMPT = """You are a healthcare insurance expert. Analyze this insurance policy and provide a JSON summary that explains advanced details in simple, user-friendly plain language.
+If you encounter complex terminology (like deductibles, copays, sublimits, or waiting periods), explain briefly what they mean in practice for the user's out-of-pocket costs.
 
 DOCUMENT TEXT:
 {document_text}
 
 Return ONLY valid JSON with these exact keys:
 {{
-  "summary_text": "A brief 1-paragraph summary of the policy (maximum 100 words)",
-  "coverage_summary": "List top 3 key coverages (bullet points, max 50 words total)",
-  "exclusions_summary": "List top 3 exclusions (bullet points, max 50 words total)",
-  "waiting_period_summary": "List key waiting periods (bullet points, max 50 words total)",
-  "premium_summary": "List deductible, co-payment and premium info (bullet points, max 50 words total)"
+  "summary_text": "A comprehensive 1-paragraph summary explaining the policy's purpose, target audience, and overall value in plain language (maximum 150 words)",
+  "coverage_summary": "List top 3 key coverages. Include details of what is covered and explain any relevant sub-limits simply (bullet points, max 80 words total)",
+  "exclusions_summary": "List top 3 critical exclusions. Explain what is NOT covered so a non-expert can understand the scope (bullet points, max 80 words total)",
+  "waiting_period_summary": "List key waiting periods (initial, pre-existing diseases, specific treatments) and explain how they delay benefits (bullet points, max 80 words total)",
+  "premium_summary": "List the premium, deductible, and co-payment details, explaining how these cost-sharing terms affect the user's wallet (bullet points, max 80 words total)"
 }}"""
 
 
 FIELD_EXTRACTION_PROMPT = """Extract key insurance policy fields from this document. Return ONLY valid JSON.
-Keep every single value extremely short and concise (under 10 words per value). If a field is not mentioned, use null.
+If a field has specific conditions, limits, or sub-limits, include them in the value so the user gets complete context (keep under 15 words per value). If a field is not mentioned, use null.
 
 DOCUMENT TEXT:
 {document_text}
@@ -43,22 +44,22 @@ Return JSON:
   "insurer_name": "Name of the insurance company (e.g. 'LifeGuard Health Insurance Co.')",
   "policy_number": "Policy number (e.g. 'LG-2025-IND-00742')",
   "sum_insured": "Maximum coverage amount (e.g. '10,00,000')",
-  "premium_amount": "Total premium payable (e.g. '14,691')",
-  "deductible": "Deductible amount, use null if none",
-  "co_payment": "Co-payment percentage or amount, use null if none",
-  "waiting_period": "Initial waiting period (e.g. '30 days')",
-  "coverage_type": "Type of coverage (e.g. 'Individual')",
+  "premium_amount": "Total premium payable, including taxes if known (e.g. '14,691/year')",
+  "deductible": "Deductible amount (what you pay before insurance starts), use null if none",
+  "co_payment": "Co-payment percentage or amount (your share of every claim), use null if none",
+  "waiting_period": "Initial waiting period before illnesses are covered (e.g. '30 days except accidents')",
+  "coverage_type": "Type of coverage (e.g. 'Individual' or 'Family Floater')",
   "policy_term": "Duration of the policy (e.g. '1 year')",
-  "network_hospitals": "Network hospitals listed (brief comma-separated list)",
+  "network_hospitals": "Network hospitals listed (brief comma-separated list or count)",
   "pre_existing_coverage": "Pre-existing disease coverage waiting period (e.g. '48 months')",
-  "maternity_coverage": "Maternity benefit details (e.g. '50,000 after 2 years')",
-  "room_rent_limit": "Room rent sub-limit (e.g. '5,000 / Day')",
-  "claim_process": "How to file a claim (e.g. 'Call 1800-XXX-XXXX')"
+  "maternity_coverage": "Maternity benefit details and waiting periods, use null if none",
+  "room_rent_limit": "Room rent sub-limit (e.g. '1% of Sum Insured per day; proportionate deduction applies')",
+  "claim_process": "Brief instructions on how to file cashless or reimbursement claims"
 }}"""
 
 
-RISK_ANALYSIS_PROMPT = """Analyze this insurance policy for risky or unfavorable clauses. Identify up to 3 key risk areas. Return ONLY valid JSON.
-Keep descriptions, explanations, and recommendations under 15 words each.
+RISK_ANALYSIS_PROMPT = """Analyze this insurance policy for risky, hidden, or unfavorable clauses. Identify up to 3 key risk areas. Return ONLY valid JSON.
+For each risk, provide a clear explanation of how it affects the user's out-of-pocket costs and give a highly actionable recommendation.
 
 DOCUMENT TEXT:
 {document_text}
@@ -70,8 +71,8 @@ Return:
       "clause_text": "Exact short problematic clause text from document",
       "risk_type": "waiting_period|exclusion|deductible|co_payment|hidden_condition|coverage_limit",
       "severity": "low|medium|high",
-      "explanation": "Brief explanation of risk (max 15 words)",
-      "recommendation": "Brief recommendation (max 15 words)"
+      "explanation": "Clear explanation of why this clause is risky, explaining the exact real-world financial impact (max 40 words)",
+      "recommendation": "Actionable advice on how to mitigate this risk, negotiate terms, or plan financially (max 40 words)"
     }}
   ],
   "overall_risk_level": "low|medium|high"
@@ -104,50 +105,34 @@ Return ONLY valid JSON with these exact keys:
 
 MOCK_SUMMARY = {
     "summary_text": (
-        "This healthcare insurance policy provides comprehensive coverage for hospitalization, "
-        "medical procedures, and outpatient treatments. The policy covers a wide range of medical "
-        "conditions and includes benefits for critical illness, daycare procedures, and pre and "
-        "post-hospitalization expenses.\n\n"
-        "The policy includes a network of 5,000+ hospitals across India where cashless treatment "
-        "is available. Room rent is covered up to the sum insured limit, with ICU charges also "
-        "covered separately. Ambulance charges up to ₹2,000 per hospitalization are included.\n\n"
-        "Annual health check-up benefits are provided after completing one claim-free year. The "
-        "policy also includes a no-claim bonus of 10% increase in sum insured for each claim-free "
-        "year, up to a maximum of 50% of the original sum insured."
+        "This is the Star Health Comprehensive Plan, a premium family-floater policy designed for comprehensive "
+        "medical coverage. It covers standard hospitalization, daycare treatments, and advanced procedures up to "
+        "a ₹5,00,000 annual limit. To make it affordable, the policy incorporates cost-sharing features like a "
+        "₹5,00,000 sum insured, a ₹5,000 initial deductible (the amount you pay before insurance pays anything), "
+        "and a 20% co-payment (your share of every hospital bill). Room rent is capped at 1% of the sum insured "
+        "per day (₹5,000/day), meaning staying in a room that costs more will trigger a 'proportionate deduction' "
+        "where the insurer reduces payouts for doctor fees and surgeries as well."
     ),
     "coverage_summary": (
-        "• Hospitalization expenses including room rent, ICU, nursing charges\n"
-        "• Pre-hospitalization expenses up to 30 days before admission\n"
-        "• Post-hospitalization expenses up to 60 days after discharge\n"
-        "• Daycare procedures that don't require 24-hour hospitalization\n"
-        "• Ambulance charges up to ₹2,000 per hospitalization\n"
-        "• Domiciliary treatment when hospitalization is not possible\n"
-        "• AYUSH treatments (Ayurveda, Yoga, Unani, Siddha, Homeopathy)"
+        "• Hospitalization & ICU: Complete coverage up to the ₹5,00,000 sum insured.\n"
+        "• Daycare Procedures: All daycare treatments (requiring less than 24h stay) are fully covered.\n"
+        "• Road Ambulance: Covered up to ₹2,000 per hospitalization event to handle emergencies.\n"
+        "• No-Claim Bonus: 10% increase in sum insured for every claim-free year (up to 50% maximum) as an incentive."
     ),
     "exclusions_summary": (
-        "• Pre-existing diseases during the initial 48-month waiting period\n"
-        "• Cosmetic or aesthetic treatments\n"
-        "• Dental treatment except due to accident\n"
-        "• Spectacles, contact lenses, and hearing aids\n"
-        "• Experimental or unproven treatments\n"
-        "• Injuries from self-infliction or hazardous activities\n"
-        "• War, nuclear, or radiation-related injuries\n"
-        "• Infertility and assisted reproduction"
+        "• Cosmetic & Obesity Treatments: Surgeries for aesthetic enhancement or weight loss are excluded.\n"
+        "• Outpatient Dental & Vision: Routine dental work and spectacles are not covered unless due to an accident.\n"
+        "• Hazardous Sports: Treatment for injuries from extreme adventure sports or self-harm is completely excluded."
     ),
     "waiting_period_summary": (
-        "• Initial waiting period: 30 days for all illnesses (except accidents)\n"
-        "• Pre-existing conditions: 48 months (4 years) from policy inception\n"
-        "• Specific diseases (hernia, cataracts, joint replacement): 24 months\n"
-        "• Maternity benefits: 9 months from policy inception\n"
-        "• Waiting periods may be waived with additional premium payment"
+        "• Initial 30-Day Delay: No illness coverage for the first 30 days, except for emergency accident claims.\n"
+        "• Specific Treatments (24 Months): Common procedures (cataracts, hernia, joint replacements) require 2 years.\n"
+        "• Pre-existing Conditions (48 Months): Long-term conditions (diabetes, high blood pressure) are covered only after 4 years."
     ),
     "premium_summary": (
-        "• Annual premium varies by age, sum insured, and city of residence\n"
-        "• Co-payment: 20% of claim amount for each hospitalization\n"
-        "• Deductible: ₹5,000 per hospitalization (applicable before insurance kicks in)\n"
-        "• Premium increases by 10-15% annually based on claim history\n"
-        "• GST at 18% applicable on base premium\n"
-        "• Premium discounts available for family floater plans"
+        "• Base Premium: ₹12,500 annually for a typical family plan (plus 18% GST).\n"
+        "• Deductible: You pay the first ₹5,000 deductible per hospital admission before insurance coverage applies.\n"
+        "• Co-Payment (20%): You must pay 20% of every approved claim value, while the insurer pays the remaining 80%."
     ),
 }
 
@@ -155,18 +140,18 @@ MOCK_FIELDS = [
     {"field_name": "Policy Name", "field_value": "Star Health Comprehensive Plan", "field_category": "policy_info"},
     {"field_name": "Insurer Name", "field_value": "Star Health and Allied Insurance Co. Ltd.", "field_category": "policy_info"},
     {"field_name": "Policy Number", "field_value": "P/211111/01/2024/000001", "field_category": "policy_info"},
-    {"field_name": "Sum Insured", "field_value": "₹5,00,000", "field_category": "coverage"},
-    {"field_name": "Premium Amount", "field_value": "₹12,500 per annum", "field_category": "premium"},
-    {"field_name": "Deductible", "field_value": "₹5,000 per hospitalization", "field_category": "premium"},
-    {"field_name": "Co Payment", "field_value": "20% of eligible claim amount", "field_category": "premium"},
-    {"field_name": "Waiting Period", "field_value": "30 days initial, 48 months for pre-existing", "field_category": "restrictions"},
-    {"field_name": "Coverage Type", "field_value": "Individual / Family Floater", "field_category": "coverage"},
-    {"field_name": "Policy Term", "field_value": "1 year (renewable)", "field_category": "policy_info"},
-    {"field_name": "Network Hospitals", "field_value": "5,000+ hospitals across India", "field_category": "coverage"},
-    {"field_name": "Pre Existing Coverage", "field_value": "Covered after 48 months waiting period", "field_category": "coverage"},
-    {"field_name": "Maternity Coverage", "field_value": "Up to ₹25,000, 9-month waiting period", "field_category": "coverage"},
-    {"field_name": "Room Rent Limit", "field_value": "1% of Sum Insured per day", "field_category": "restrictions"},
-    {"field_name": "Claim Process", "field_value": "Cashless at network hospitals; Reimbursement within 30 days", "field_category": "process"},
+    {"field_name": "Sum Insured", "field_value": "₹5,00,000 (Maximum annual coverage limit)", "field_category": "coverage"},
+    {"field_name": "Premium Amount", "field_value": "₹12,500 per annum (excludes 18% GST)", "field_category": "premium"},
+    {"field_name": "Deductible", "field_value": "₹5,00,000 (The amount you pay first for each hospitalization)", "field_category": "premium"},
+    {"field_name": "Co Payment", "field_value": "20% (Your share of the total bill for every claim)", "field_category": "premium"},
+    {"field_name": "Waiting Period", "field_value": "30 days initial; 48 months for pre-existing diseases", "field_category": "restrictions"},
+    {"field_name": "Coverage Type", "field_value": "Family Floater (Covers all listed family members)", "field_category": "coverage"},
+    {"field_name": "Policy Term", "field_value": "1 year (Requires annual renewal to stay active)", "field_category": "policy_info"},
+    {"field_name": "Network Hospitals", "field_value": "5,000+ partner hospitals providing cashless claims", "field_category": "coverage"},
+    {"field_name": "Pre Existing Coverage", "field_value": "Covered only after a 48-month continuous waiting period", "field_category": "coverage"},
+    {"field_name": "Maternity Coverage", "field_value": "Up to ₹25,000 limit after a 24-month waiting period", "field_category": "coverage"},
+    {"field_name": "Room Rent Limit", "field_value": "1% of Sum Insured per day (₹5,000/day); proportionate deductions apply", "field_category": "restrictions"},
+    {"field_name": "Claim Process", "field_value": "Cashless at network hospitals; reimbursement documents must be sent within 30 days", "field_category": "process"},
 ]
 
 MOCK_RISKS = [
@@ -174,36 +159,36 @@ MOCK_RISKS = [
         "clause_text": "All pre-existing diseases shall not be covered during the first 48 months of the policy.",
         "risk_type": "waiting_period",
         "severity": "high",
-        "explanation": "A 48-month (4-year) waiting period for pre-existing conditions is extremely long. If you have diabetes, hypertension, or any chronic condition, you'll pay premiums for 4 years before receiving any benefit for those conditions.",
-        "recommendation": "Negotiate for a shorter waiting period (12-24 months) or look for insurers offering immediate coverage for pre-existing conditions with a medical underwriting.",
+        "explanation": "A 48-month (4-year) waiting period means you pay premiums for 4 full years before receiving any coverage for chronic illnesses like diabetes or hypertension. This is an exceptionally long delay.",
+        "recommendation": "If you have pre-existing illnesses, consider policies with shorter waiting periods (12 to 24 months) or look into paying a slightly higher premium for a waiver rider.",
     },
     {
         "clause_text": "Co-payment of 20% shall be applicable for each and every claim under this policy.",
         "risk_type": "co_payment",
         "severity": "high",
-        "explanation": "A 20% co-payment on every claim means you always pay 20% out of pocket. On a ₹5 lakh claim, you'd owe ₹1 lakh yourself. This can be financially devastating for large medical bills.",
-        "recommendation": "Request a zero co-payment plan or opt for a co-payment waiver rider. Compare plans without co-payment clauses as the premium difference is often worth it.",
+        "explanation": "A 20% co-pay requires you to pay 20% of every hospital bill out of pocket. For a large claim of ₹5 Lakhs, you must pay ₹1 Lakh yourself. This represents a heavy unexpected financial burden.",
+        "recommendation": "Check if you can buy a 'Co-payment Waiver Rider' to remove this clause. Compare other plans without co-payments, as the higher upfront premium is often cheaper than one hospital bill.",
     },
     {
         "clause_text": "Room rent shall be limited to 1% of the Sum Insured per day. If room rent exceeds this limit, proportionate deduction shall apply.",
         "risk_type": "coverage_limit",
         "severity": "medium",
-        "explanation": "The 1% room rent cap means only ₹5,000/day for a ₹5L policy. Most private hospitals charge ₹8,000-15,000/day for standard rooms. If you exceed this, ALL medical charges (doctor fees, procedures) are proportionately reduced — not just the room cost.",
-        "recommendation": "Opt for a plan with no room rent sub-limit or a higher cap. Alternatively, choose a shared accommodation to stay within limits during hospitalization.",
+        "explanation": "At a ₹5 Lakh sum insured, your room cap is ₹5,000/day. If you stay in a standard room costing ₹8,000/day, you don't just pay the ₹3,000 difference—all your surgeon fees, ICU, and medicine charges will be reduced by 37.5% proportionately.",
+        "recommendation": "Select a plan with no room rent sub-limit, or ensure you strictly stay in a room that costs less than ₹5,000/day during hospitalization to avoid massive out-of-pocket charges.",
     },
     {
         "clause_text": "Deductible of ₹5,000 applicable per hospitalization event.",
         "risk_type": "deductible",
         "severity": "medium",
-        "explanation": "You pay ₹5,000 from your own pocket for every hospitalization before insurance kicks in. For frequent hospitalizations, this adds up significantly.",
-        "recommendation": "Factor the deductible into your emergency fund planning. Consider plans with zero deductible if you expect frequent hospital visits.",
+        "explanation": "A ₹5,000 deductible means the insurance company will deduct ₹5,000 from your approved claim amount for every single hospital stay. You are fully responsible for this initial sum.",
+        "recommendation": "Maintain a dedicated health emergency fund of at least ₹15,000 to cover these per-incident deductibles without affecting your main savings.",
     },
     {
         "clause_text": "Cosmetic or aesthetic treatments, dental procedures (except accidental), and vision correction are excluded.",
         "risk_type": "exclusion",
         "severity": "low",
-        "explanation": "Standard exclusions that are common across most policies. Dental and vision costs can be significant over time.",
-        "recommendation": "Consider supplemental dental and vision insurance separately. Budget for these out-of-pocket expenses annually.",
+        "explanation": "Standard exclusions common to most health insurance. Cosmetic treatments, routine dental work, and vision aids are not covered.",
+        "recommendation": "These are industry-standard exclusions, so no action is needed. Just be sure to budget for dental and eye care separately outside of insurance.",
     },
 ]
 

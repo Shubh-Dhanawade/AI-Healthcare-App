@@ -128,6 +128,31 @@ class SummarizeResponse(BaseModel):
     summary: SummarySchema
 
 
+
+# ─────────────────────────────────────────
+# RAG Query Schemas
+# ─────────────────────────────────────────
+
+class QueryRequest(BaseModel):
+    query: str
+
+
+class EvaluationSchema(BaseModel):
+    faithfulness: float
+    faithfulness_reasoning: Optional[str] = None
+    answer_relevance: float
+    answer_relevance_reasoning: Optional[str] = None
+    context_relevance: float
+    latency: float
+
+
+class QueryResponse(BaseModel):
+    document_id: str
+    answer: str
+    context: List[str]
+    evaluation: EvaluationSchema
+
+
 # ─────────────────────────────────────────
 # Comparison Schemas
 # ─────────────────────────────────────────

@@ -82,4 +82,9 @@ export const aiApi = {
     const res = await apiClient.post('/ai/risk-analysis', { document_id: documentId });
     return res.data;
   },
+  
+  queryDocument: async (documentId: string, query: string) => {
+    const res = await apiClient.post(`/ai/documents/${documentId}/query`, { query });
+    return res.data;
+  },
 };

@@ -7,7 +7,8 @@ import { useParams, useRouter } from 'next/navigation';
 import toast from 'react-hot-toast';
 import {
   ArrowLeft, Brain, Shield, FileText, Search, RefreshCw,
-  AlertTriangle, CheckCircle, Info, ChevronDown, ChevronUp
+  AlertTriangle, CheckCircle, Info, ChevronDown, ChevronUp,
+  Send, MessageSquare, Clock, Activity, List
 } from 'lucide-react';
 import { useState } from 'react';
 import DocumentStatusBadge from '@/components/documents/DocumentStatusBadge';
@@ -57,12 +58,96 @@ function RiskCard({ risk }: { risk: RiskAnalysis }) {
   );
 }
 
+function MetricRing({ score, label, color, reasoning }: { score: number; label: string; color: string; reasoning?: string }) {
+  const percentage = Math.round(score * 100);
+  return (
+    <div className="flex flex-col items-center p-3 rounded-lg bg-slate-900/40 border border-white/5 relative group w-full text-center">
+      <div className="relative w-14 h-14 flex items-center justify-center">
+        <svg className="w-full h-full transform -rotate-90">
+          <circle cx="28" cy="28" r="24" className="text-slate-800" strokeWidth="3" stroke="currentColor" fill="transparent" />
+          <circle cx="28" cy="28" r="24" strokeWidth="3" stroke={color} strokeDasharray={2 * Math.PI * 24} strokeDashoffset={2 * Math.PI * 24 * (1 - score)} strokeLinecap="round" fill="transparent" />
+        </svg>
+        <span className="absolute text-xs font-bold text-white">{percentage}%</span>
+      </div>
+      <p className="text-[11px] font-semibold mt-2 text-slate-300">{label}</p>
+      
+      {reasoning && (
+        <div className="absolute bottom-full mb-2 hidden group-hover:block w-48 p-2.5 rounded bg-slate-950 border border-slate-800 text-[10px] text-slate-300 z-10 shadow-xl leading-normal text-left">
+          {reasoning}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ChatResponseCard({ msg }: { msg: any }) {
+  const [showSources, setShowSources] = useState(false);
+  
+  if (msg.isUser) {
+    return (
+      <div className="flex justify-end gap-3 fade-in mt-3">
+        <div className="bg-blue-600/30 border border-blue-500/30 text-slate-200 px-4 py-2.5 rounded-2xl rounded-tr-none max-w-lg shadow-md">
+          <p className="text-xs font-bold text-blue-400 mb-0.5">You</p>
+          <p className="text-sm">{msg.query}</p>
+        </div>
+      </div>
+    );
+  }
+
+  const { evaluation, context, answer } = msg;
+
+  return (
+    <div className="space-y-3 bg-slate-800/40 border border-white/5 p-4 rounded-2xl shadow-md fade-in mt-3">
+      <div>
+        <p className="text-xs font-bold text-emerald-400 mb-1 flex items-center gap-1.5">
+          <Brain className="w-3.5 h-3.5" /> AI Assistant (Llama 3.2 RAG)
+        </p>
+        {msg.answer ? (
+          <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">{answer}</p>
+        ) : (
+          <div className="flex items-center gap-2 p-1 text-slate-400">
+            <span className="w-4 h-4 border-2 border-slate-400/30 border-t-slate-400 rounded-full animate-spin" />
+            <p className="text-xs">Thinking...</p>
+          </div>
+        )}
+      </div>
+
+
+
+      {context && context.length > 0 && (
+        <div className="border-t border-white/5 pt-2">
+          <button 
+            onClick={() => setShowSources(!showSources)}
+            className="flex items-center gap-1 text-[11px] text-blue-400 hover:text-blue-300 font-semibold"
+          >
+            <List className="w-3 h-3" /> {showSources ? 'Hide' : 'Show'} retrieved document context ({context.length} chunks)
+          </button>
+          {showSources && (
+            <div className="mt-2 space-y-1.5 border-l-2 border-blue-500/30 pl-3">
+              {context.map((c: string, idx: number) => (
+                <div key={idx} className="p-2 rounded bg-slate-900/30 border border-white/5">
+                  <p className="text-[10px] text-slate-400 font-bold mb-0.5">Source Passage #{idx + 1}</p>
+                  <p className="text-xs text-slate-300 italic">"...{c}..."</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 export default function DocumentDetailPage() {
   const params = useParams();
   const docId = params.id as string;
   const router = useRouter();
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<'summary' | 'fields' | 'risks'>('summary');
+  const [activeTab, setActiveTab] = useState<'summary' | 'fields' | 'risks' | 'query'>('summary');
+  const [queryInput, setQueryInput] = useState('');
+  const [isQuerying, setIsQuerying] = useState(false);
+  const [chatHistory, setChatHistory] = useState<any[]>([]);
 
   const { data: doc, isLoading, refetch } = useQuery<DocumentDetail>({
     queryKey: ['document', docId],
@@ -102,6 +187,38 @@ export default function DocumentDetailPage() {
     onError: (err: any) => toast.error(err.response?.data?.detail || 'Risk analysis failed'),
   });
 
+  const handleSendQuery = async (queryText?: string) => {
+    const textToSend = queryText || queryInput;
+    if (!textToSend.trim()) return;
+
+    setIsQuerying(true);
+    // Add temporary user query to chat history
+    const userMsg = { query: textToSend, isUser: true, timestamp: new Date() };
+    setChatHistory(prev => [...prev, userMsg]);
+    
+    if (!queryText) setQueryInput('');
+
+    try {
+      const res = await aiApi.queryDocument(docId, textToSend);
+      setChatHistory(prev => [
+        ...prev.filter(m => m.query !== textToSend || !m.isUser), // keep previous messages
+        {
+          query: textToSend,
+          answer: res.answer,
+          context: res.context,
+          evaluation: res.evaluation,
+          timestamp: new Date()
+        }
+      ]);
+    } catch (err: any) {
+      toast.error(err.response?.data?.detail || 'Failed to query model');
+      // remove user message if failed
+      setChatHistory(prev => prev.filter(m => m.query !== textToSend));
+    } finally {
+      setIsQuerying(false);
+    }
+  };
+
   const isProcessing = ['uploaded', 'processing'].includes(doc?.status || '');
   const canRunAI = doc?.status !== 'uploaded' && doc?.status !== 'processing' && doc?.status !== 'failed';
 
@@ -126,6 +243,7 @@ export default function DocumentDetailPage() {
     { id: 'summary', label: 'AI Summary', icon: <Brain className="w-4 h-4" />, count: doc.summary ? 1 : 0 },
     { id: 'fields', label: 'Extracted Fields', icon: <Search className="w-4 h-4" />, count: doc.extracted_fields.length },
     { id: 'risks', label: 'Risk Analysis', icon: <Shield className="w-4 h-4" />, count: doc.risk_analyses.length },
+    { id: 'query', label: 'Chat to AI', icon: <MessageSquare className="w-4 h-4" />, count: chatHistory.length },
   ] as const;
 
   const riskCounts = {
@@ -342,6 +460,84 @@ export default function DocumentDetailPage() {
                     ))}
                 </>
               )}
+            </div>
+          )}
+
+          {/* RAG Q&A Tab */}
+          {activeTab === 'query' && (
+            <div className="space-y-4">
+              <div className="glass-card p-5">
+                <h3 className="font-semibold mb-2 text-blue-300 text-sm flex items-center gap-2">
+                  <MessageSquare className="w-4 h-4" /> Chat to AI
+                </h3>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  Ask any questions about this health insurance policy. The AI assistant will review the document and provide relevant answers, even if you make typos.
+                </p>
+              </div>
+
+              {/* Chat history */}
+              <div className="space-y-4 max-h-[450px] overflow-y-auto pr-1 border border-white/5 rounded-xl p-3 bg-slate-950/25">
+                {chatHistory.length === 0 ? (
+                  <div className="text-center py-12">
+                    <MessageSquare className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+                    <p className="text-sm text-slate-400">No questions asked yet. Choose a suggested query below or type your own!</p>
+                    
+                    {/* Suggested Questions */}
+                    <div className="mt-6 max-w-lg mx-auto flex flex-col gap-2">
+                      {[
+                        "What is the sum insured under this policy?",
+                        "What are the waiting periods for pre-existing diseases?",
+                        "What are the room rent limits or copayment terms?",
+                        "How do I submit a claim under this policy?"
+                      ].map((q, i) => (
+                        <button 
+                          key={i}
+                          onClick={() => { setQueryInput(q); handleSendQuery(q); }}
+                          disabled={isQuerying}
+                          className="text-xs text-left p-2.5 rounded-lg bg-slate-900/60 border border-white/5 hover:border-blue-500/30 hover:bg-slate-900 text-blue-300 transition-all font-medium flex items-center gap-2"
+                        >
+                          <span>🔍</span>
+                          <span>{q}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {chatHistory.map((msg, i) => (
+                      <ChatResponseCard key={i} msg={msg} />
+                    ))}
+                    {isQuerying && chatHistory[chatHistory.length - 1]?.isUser && (
+                      <ChatResponseCard msg={{ isUser: false }} />
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Query Input Box */}
+              <div className="flex gap-2 border-t border-slate-700/30 pt-3">
+                <input 
+                  type="text" 
+                  value={queryInput}
+                  onChange={(e) => setQueryInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && queryInput.trim() && !isQuerying) { handleSendQuery(); } }}
+                  placeholder="Ask a question about this document..."
+                  disabled={isQuerying}
+                  className="form-input flex-1 py-2 text-sm bg-slate-900/60"
+                />
+                <button 
+                  onClick={() => handleSendQuery()}
+                  disabled={isQuerying || !queryInput.trim()}
+                  className="btn-primary px-4 py-2 flex items-center gap-1.5"
+                >
+                  {isQuerying ? (
+                    <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  ) : (
+                    <Send className="w-4 h-4" />
+                  )}
+                  <span>Send</span>
+                </button>
+              </div>
             </div>
           )}
         </div>
