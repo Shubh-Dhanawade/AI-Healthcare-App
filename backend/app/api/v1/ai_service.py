@@ -17,10 +17,15 @@ from app.schemas.schemas import (
     SummarizeRequest, SummarizeResponse, SummarySchema,
     ExtractFieldsRequest, ExtractedFieldsResponse, ExtractedFieldSchema,
     RiskAnalysisRequest, RiskAnalysisResponse, RiskAnalysisSchema,
+    ChatQueryRequest, ChatQueryResponse, TranslateRequest, TranslateResponse,
+    ClaimsChecklistRequest, ClaimsChecklistResponse,
     QueryRequest, QueryResponse,
 )
-from app.services.ai_service import generate_summary, extract_policy_fields, analyze_risks
 from app.services.rag_service import query_rag_pipeline
+from app.services.ai_service import (
+    generate_summary, extract_policy_fields, analyze_risks,
+    query_policy_rag, translate_text, generate_claims_checklist,
+)
 
 router = APIRouter()
 
@@ -220,6 +225,84 @@ async def risk_analysis(
         )
 
 
+@router.post("/chat", response_model=ChatQueryResponse)
+async def query_chatbot(
+    request: ChatQueryRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Conversational AI chatbot query over policies using RAG."""
+    # 1. Fetch user documents (filtering by IDs if provided)
+    query_stmt = select(Document).where(Document.user_id == current_user.id)
+    if request.document_ids:
+        query_stmt = query_stmt.where(Document.id.in_(request.document_ids))
+    else:
+        # Defaults to completed/summarized policies
+        query_stmt = query_stmt.where(Document.status.in_(["completed", "summarized", "text_extracted"]))
+
+    res = await db.execute(query_stmt)
+    docs = res.scalars().all()
+    
+    if not docs:
+        return ChatQueryResponse(response="No policies found in your library. Please upload policy documents first.")
+
+    # 2. Package policy data for RAG
+    policies_data = [
+        {
+            "id": d.id,
+            "filename": d.original_filename,
+            "text": d.extracted_text or ""
+        }
+        for d in docs
+    ]
+
+    # 3. Format history for service
+    history_data = []
+    if request.history:
+        history_data = [
+            {"role": h.role, "content": h.content}
+            for h in request.history
+        ]
+
+    # 4. Generate RAG answer
+    response_text = await query_policy_rag(policies_data, request.query, history_data)
+    return ChatQueryResponse(response=response_text)
+
+
+@router.post("/translate", response_model=TranslateResponse)
+async def translate_summary(
+    request: TranslateRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Translate summary texts dynamically using Ollama."""
+    translated = await translate_text(request.text, request.target_language)
+    return TranslateResponse(translated_text=translated)
+
+
+@router.post("/claims-checklist", response_model=ClaimsChecklistResponse)
+async def generate_checklist(
+    request: ClaimsChecklistRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Generate dynamic claim checklist for a document and treatment."""
+    doc = await _get_document(request.document_id, current_user, db)
+    
+    # Format fields context
+    res_fields = await db.execute(
+        select(ExtractedField).where(ExtractedField.document_id == doc.id)
+    )
+    fields = res_fields.scalars().all()
+    fields_summary = "\n".join([f"{f.field_name}: {f.field_value}" for f in fields])
+    
+    checklist_data = await generate_claims_checklist(
+        policy_name=doc.original_filename,
+        fields_summary=fields_summary,
+        treatment_type=request.treatment_type
+    )
+    return ClaimsChecklistResponse(**checklist_data)
+
+
 @router.post("/documents/{document_id}/query", response_model=QueryResponse)
 async def query_document(
     document_id: str,
@@ -230,9 +313,9 @@ async def query_document(
     """Query a document using local RAG and calculate evaluation metrics."""
     doc = await _get_document(document_id, current_user, db)
     
-    logger.info(f"Querying document {doc.id} with prompt: {request.query}")
+    logger.info(f"Querying document {doc.id} with prompt: {request.query} (evaluate={request.evaluate})")
     try:
-        result = await query_rag_pipeline(doc.extracted_text, request.query)
+        result = await query_rag_pipeline(doc.extracted_text, request.query, evaluate=request.evaluate)
     except Exception as e:
         logger.error(f"RAG query failed: {e}")
         raise HTTPException(

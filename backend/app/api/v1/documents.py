@@ -3,7 +3,7 @@
 import os
 import uuid
 from pathlib import Path as FilePath
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,9 +16,16 @@ from app.core.config import settings
 from app.models.user import User
 from app.models.document import Document, ExtractedField
 from app.models.risk_analysis import Summary, RiskAnalysis
+from app.models.reminder import PolicyReminder
 from app.schemas.schemas import DocumentResponse, DocumentDetailResponse, CompareRequest, CompareResponse, ComparisonSynthesisSchema
 from app.services.ocr_service import extract_document_text
 from app.services.ai_service import generate_comparison_synthesis
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel, EmailStr
+from datetime import datetime, timedelta
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 router = APIRouter()
 
@@ -317,4 +324,400 @@ async def compare_documents(
             feature_winners=synthesis_report.get("feature_winners", [])
         )
     )
+
+
+# ─────────────────────────────────────────
+# Reminders and Exporter Endpoints
+# ─────────────────────────────────────────
+
+class ScheduleReminderRequest(BaseModel):
+    document_id: str
+    renewal_date: Optional[datetime] = None
+    premium_due_date: Optional[datetime] = None
+    premium_amount: Optional[str] = None
+
+
+class EmailReportRequest(BaseModel):
+    email: EmailStr
+
+
+@router.get("/reminders")
+async def get_reminders(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """List scheduled premium/renewal reminders for the user."""
+    result = await db.execute(
+        select(PolicyReminder)
+        .where(PolicyReminder.user_id == current_user.id, PolicyReminder.is_dismissed == False)
+        .order_by(PolicyReminder.reminder_date)
+    )
+    reminders = result.scalars().all()
+    
+    # Format responses dynamically
+    return [
+        {
+            "id": r.id,
+            "document_id": r.document_id,
+            "title": r.title,
+            "reminder_type": r.reminder_type,
+            "reminder_date": r.reminder_date,
+            "premium_amount": r.premium_amount,
+            "is_dismissed": r.is_dismissed
+        }
+        for r in reminders
+    ]
+
+
+@router.post("/reminders")
+async def schedule_reminder(
+    request: ScheduleReminderRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Schedule policy premium and renewal notifications."""
+    result = await db.execute(
+        select(Document).where(
+            Document.id == request.document_id,
+            Document.user_id == current_user.id
+        )
+    )
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+        
+    # Update document dates
+    if request.renewal_date:
+        doc.renewal_date = request.renewal_date
+        # Create reminder alert
+        # Trigger 7 days prior
+        trigger_date = request.renewal_date - timedelta(days=7)
+        r1 = PolicyReminder(
+            user_id=current_user.id,
+            document_id=doc.id,
+            title=f"Policy Renewal Approaching: {doc.original_filename}",
+            reminder_type="renewal",
+            reminder_date=trigger_date
+        )
+        db.add(r1)
+        
+    if request.premium_due_date:
+        doc.premium_due_date = request.premium_due_date
+        trigger_date = request.premium_due_date - timedelta(days=5)
+        r2 = PolicyReminder(
+            user_id=current_user.id,
+            document_id=doc.id,
+            title=f"Premium Payment Approaching: {doc.original_filename}",
+            reminder_type="premium",
+            reminder_date=trigger_date,
+            premium_amount=request.premium_amount
+        )
+        db.add(r2)
+        
+    await db.commit()
+    return {"message": "Policy dates and reminders successfully scheduled"}
+
+
+@router.patch("/reminders/{reminder_id}/dismiss")
+async def dismiss_reminder(
+    reminder_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Dismiss/acknowledge an active notification alert."""
+    result = await db.execute(
+        select(PolicyReminder).where(
+            PolicyReminder.id == reminder_id,
+            PolicyReminder.user_id == current_user.id
+        )
+    )
+    reminder = result.scalar_one_or_none()
+    if not reminder:
+        raise HTTPException(status_code=404, detail="Notification alert not found")
+        
+    reminder.is_dismissed = True
+    await db.commit()
+    return {"message": "Notification successfully dismissed"}
+
+
+def generate_html_report(doc: Document) -> str:
+    """Helper to generate a clean, responsive HTML print template for policy reports."""
+    fields_list = ""
+    for f in doc.extracted_fields:
+        fields_list += f"""
+        <div class="field-item">
+            <span class="field-label">{f.field_name}</span>
+            <span class="field-value">{f.field_value or "—"}</span>
+        </div>
+        """
+        
+    risks_list = ""
+    if not doc.risk_analyses:
+        risks_list = "<p style='color: #10b981; font-weight: 500;'>No critical risk clauses detected.</p>"
+    else:
+        for r in doc.risk_analyses:
+            color = "#f87171" if r.severity == "high" else ("#fbbf24" if r.severity == "medium" else "#34d399")
+            risks_list += f"""
+            <div class="risk-card" style="border-left: 4px solid {color}">
+                <div class="risk-header">
+                    <span class="risk-type">{r.risk_type.replace('_', ' ').upper()}</span>
+                    <span class="risk-severity" style="color: {color}; font-weight: bold;">{r.severity.upper()}</span>
+                </div>
+                <p class="risk-clause"><strong>Clause:</strong> <em>"{r.clause_text}"</em></p>
+                <p class="risk-explanation"><strong>Explanation:</strong> {r.explanation or "—"}</p>
+                <p class="risk-rec"><strong>Recommendation:</strong> {r.recommendation or "—"}</p>
+            </div>
+            """
+            
+    summary_text = doc.summary.summary_text if doc.summary else "No summary available."
+    coverage = doc.summary.coverage_summary if doc.summary else "—"
+    exclusions = doc.summary.exclusions_summary if doc.summary else "—"
+    
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <title>HealthAI Document Report - {doc.original_filename}</title>
+        <style>
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                color: #0f172a;
+                line-height: 1.5;
+                margin: 0;
+                padding: 40px;
+                background: #f8fafc;
+            }}
+            .container {{
+                max-width: 800px;
+                margin: 0 auto;
+                background: #ffffff;
+                padding: 40px;
+                border-radius: 16px;
+                box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+                border: 1px solid #e2e8f0;
+            }}
+            .header {{
+                border-bottom: 2px solid #3b82f6;
+                padding-bottom: 20px;
+                margin-bottom: 30px;
+            }}
+            .header h1 {{
+                margin: 0;
+                font-size: 24px;
+                color: #1e3a8a;
+            }}
+            .metadata {{
+                font-size: 12px;
+                color: #64748b;
+                margin-top: 5px;
+            }}
+            .section {{
+                margin-bottom: 35px;
+            }}
+            .section h2 {{
+                font-size: 16px;
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+                color: #475569;
+                border-bottom: 1px solid #e2e8f0;
+                padding-bottom: 8px;
+                margin-bottom: 15px;
+            }}
+            .field-grid {{
+                display: grid;
+                grid-template-columns: repeat(2, 1fr);
+                gap: 15px;
+            }}
+            .field-item {{
+                background: #f8fafc;
+                padding: 12px 15px;
+                border-radius: 8px;
+                border: 1px solid #f1f5f9;
+            }}
+            .field-label {{
+                display: block;
+                font-size: 10px;
+                text-transform: uppercase;
+                color: #64748b;
+                font-weight: bold;
+            }}
+            .field-value {{
+                font-size: 14px;
+                font-weight: 500;
+                color: #1e293b;
+                margin-top: 2px;
+            }}
+            .risk-card {{
+                background: #fff8f8;
+                padding: 15px;
+                border-radius: 8px;
+                margin-bottom: 15px;
+                box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+            }}
+            .risk-header {{
+                display: flex;
+                justify-content: space-between;
+                font-size: 12px;
+                font-weight: bold;
+            }}
+            .risk-clause {{
+                font-size: 13px;
+                color: #334155;
+            }}
+            .risk-explanation {{
+                font-size: 13px;
+                color: #475569;
+            }}
+            .risk-rec {{
+                font-size: 12px;
+                color: #2563eb;
+                font-weight: 500;
+            }}
+            @media print {{
+                body {{ background: none; padding: 0; }}
+                .container {{ box-shadow: none; border: none; padding: 0; }}
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>Healthcare Policy Analysis Report</h1>
+                <div class="metadata">
+                    <strong>Document:</strong> {doc.original_filename} &nbsp;|&nbsp;
+                    <strong>Processed:</strong> {doc.created_at.strftime('%Y-%m-%d')} &nbsp;|&nbsp;
+                    <strong>Pages:</strong> {doc.page_count}
+                </div>
+            </div>
+            
+            <div class="section">
+                <h2>AI Executive Summary</h2>
+                <p style="font-size: 14px; line-height: 1.6; color: #334155;">{summary_text}</p>
+                <div style="margin-top: 15px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                    <div>
+                        <strong style="font-size: 13px; color: #1e293b;">Top Coverages:</strong>
+                        <pre style="font-family: inherit; font-size: 12px; color: #475569; white-space: pre-wrap; margin-top: 5px;">{coverage}</pre>
+                    </div>
+                    <div>
+                        <strong style="font-size: 13px; color: #1e293b;">Top Exclusions:</strong>
+                        <pre style="font-family: inherit; font-size: 12px; color: #475569; white-space: pre-wrap; margin-top: 5px;">{exclusions}</pre>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="section">
+                <h2>Extracted Policy Parameters</h2>
+                <div class="field-grid">
+                    {fields_list}
+                </div>
+            </div>
+            
+            <div class="section">
+                <h2>Critical Risk Audit</h2>
+                {risks_list}
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    return html
+
+
+@router.get("/{id}/export", response_class=HTMLResponse)
+async def export_report(
+    id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Export policy analysis report as a formatted printable HTML/PDF attachment."""
+    result = await db.execute(
+        select(Document).where(
+            Document.id == id,
+            Document.user_id == current_user.id
+        )
+    )
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+        
+    html_content = generate_html_report(doc)
+    headers = {"Content-Disposition": f"attachment; filename=HealthAI_Report_{doc.id}.html"}
+    return HTMLResponse(content=html_content, headers=headers)
+
+
+@router.post("/{id}/email")
+async def email_report(
+    id: str,
+    request: EmailReportRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Email the formatted HTML policy audit report directly to the user."""
+    result = await db.execute(
+        select(Document).where(
+            Document.id == id,
+            Document.user_id == current_user.id
+        )
+    )
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+        
+    html_content = generate_html_report(doc)
+    
+    # 1. Setup email structure
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = f"[HealthAI] Policy Analysis Audit Report: {doc.original_filename}"
+    msg["From"] = "noreply@healthai.local"
+    msg["To"] = request.email
+    
+    # Plaintext fallback
+    text_fallback = f"Dear User,\n\nPlease find attached the HealthAI policy analysis report for {doc.original_filename}."
+    part1 = MIMEText(text_fallback, "plain")
+    part2 = MIMEText(html_content, "html")
+    msg.attach(part1)
+    msg.attach(part2)
+    
+    # 2. Try sending SMTP or write to local debug folder
+    sent_successfully = False
+    error_msg = ""
+    try:
+        # Check if email configs are set up in environment, otherwise log
+        smtp_server = os.getenv("SMTP_SERVER")
+        smtp_port = int(os.getenv("SMTP_PORT", "587"))
+        smtp_user = os.getenv("SMTP_USER")
+        smtp_password = os.getenv("SMTP_PASSWORD")
+        
+        if smtp_server and smtp_user and smtp_password:
+            with smtplib.SMTP(smtp_server, smtp_port) as server:
+                server.starttls()
+                server.login(smtp_user, smtp_password)
+                server.sendmail(msg["From"], msg["To"], msg.as_string())
+            sent_successfully = True
+            logger.info(f"📧 Email report successfully sent via SMTP to {request.email}")
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Failed to send email via SMTP: {e}")
+        
+    # Write to local debug logs folder
+    debug_dir = "./logs/sent_emails"
+    os.makedirs(debug_dir, exist_ok=True)
+    debug_filepath = f"{debug_dir}/email_{doc.id}_{uuid.uuid4().hex[:6]}.html"
+    try:
+        with open(debug_filepath, "w", encoding="utf-8") as f:
+            f.write(html_content)
+        logger.info(f"💾 Logged outgoing email report locally to: {debug_filepath}")
+    except Exception as io_err:
+        logger.error(f"Failed to write email debug log: {io_err}")
+        
+    if sent_successfully:
+        return {"status": "sent", "message": f"Report successfully emailed to {request.email}."}
+    else:
+        return {
+            "status": "logged",
+            "message": f"SMTP is not configured in local development environment. Outgoing report logged locally to: {debug_filepath}.",
+            "details": error_msg
+        }
+
 

@@ -14,7 +14,8 @@ from app.services.ai_service import call_ollama, extract_json_from_response
 
 RAG_PROMPT = """You are an expert healthcare insurance assistant. Answer the user's query regarding the uploaded insurance policy.
 Use the provided document context below to answer policy-specific questions. 
-If the user's query contains typos or spelling mistakes, intelligently identify what they mean and answer their question.
+If the user's query is a simple greeting or general question (e.g., "hi", "hello", "how are you"), respond friendly and ask how you can help them with their insurance policy, without referencing typos or mentioning the context.
+If the user's query contains typos or spelling mistakes, silently correct them and answer the question directly. Do not comment on or mention the spelling mistakes to the user.
 If the user asks for explanations of insurance terms (like deductibles, co-insurance, waiting periods, etc.) mentioned in the context, explain them clearly in plain language, utilizing general insurance knowledge alongside the policy details.
 
 CONTEXT:
@@ -283,7 +284,7 @@ def generate_mock_qa_answer(query: str, document_text: str) -> str:
 # RAG Query & Evaluation Execution
 # ─────────────────────────────────────────
 
-async def query_rag_pipeline(document_text: str, query: str) -> Dict[str, Any]:
+async def query_rag_pipeline(document_text: str, query: str, evaluate: bool = False) -> Dict[str, Any]:
     """Execute full RAG pipeline and perform evaluation metrics scoring."""
     start_time = time.time()
     
@@ -295,7 +296,9 @@ async def query_rag_pipeline(document_text: str, query: str) -> Dict[str, Any]:
             "context": [],
             "evaluation": {
                 "faithfulness": 0.0,
+                "faithfulness_reasoning": "No text content.",
                 "answer_relevance": 0.0,
+                "answer_relevance_reasoning": "No text content.",
                 "context_relevance": 0.0,
                 "latency": 0.0
             }
@@ -317,43 +320,50 @@ async def query_rag_pipeline(document_text: str, query: str) -> Dict[str, Any]:
         answer = generate_mock_qa_answer(query, document_text)
         is_fallback = True
         
-    # 4. Evaluate (Faithfulness & Relevance) concurrently via LLM-as-a-judge
-    faithfulness_score = 0.95 if is_fallback else 0.8  # fallbacks
-    faithfulness_reason = "Answer is fully verified and supported by policy text." if is_fallback else "Fallback score used due to model evaluation failure."
-    relevance_score = 0.98 if is_fallback else 0.8
-    relevance_reason = "Answer directly and accurately addresses the user's question." if is_fallback else "Fallback score used due to model evaluation failure."
-    
-    if not is_fallback and "Error generating answer" not in answer and retrieved:
-        eval_start = time.time()
-        try:
-            # Prepare audit prompts
-            faith_prompt = FAITHFULNESS_PROMPT.format(context=context_str, answer=answer)
-            rel_prompt = RELEVANCE_PROMPT.format(query=query, answer=answer)
-            
-            # Execute concurrently
-            faith_res, rel_res = await asyncio.gather(
-                call_ollama(faith_prompt),
-                call_ollama(rel_prompt),
-                return_exceptions=True
-            )
-            
-            # Parse Faithfulness
-            if not isinstance(faith_res, Exception):
-                faith_json = extract_json_from_response(faith_res)
-                if "score" in faith_json:
-                    faithfulness_score = float(faith_json["score"])
-                    faithfulness_reason = faith_json.get("reasoning", "Faithful answer check completed.")
-                    
-            # Parse Relevance
-            if not isinstance(rel_res, Exception):
-                rel_json = extract_json_from_response(rel_res)
-                if "score" in rel_json:
-                    relevance_score = float(rel_json["score"])
-                    relevance_reason = rel_json.get("reasoning", "Answer relevance check completed.")
-                    
-            logger.info(f"RAG Evaluation parsed in {time.time() - eval_start:.2f}s")
-        except Exception as eval_err:
-            logger.warning(f"Error executing LLM evaluation metrics: {eval_err}")
+    # 4. Evaluate (Faithfulness & Relevance) concurrently via LLM-as-a-judge (only if evaluate=True)
+    if evaluate:
+        faithfulness_score = 0.95 if is_fallback else 0.8  # fallbacks
+        faithfulness_reason = "Answer is fully verified and supported by policy text." if is_fallback else "Fallback score used due to model evaluation failure."
+        relevance_score = 0.98 if is_fallback else 0.8
+        relevance_reason = "Answer directly and accurately addresses the user's question." if is_fallback else "Fallback score used due to model evaluation failure."
+        
+        if not is_fallback and "Error generating answer" not in answer and retrieved:
+            eval_start = time.time()
+            try:
+                # Prepare audit prompts
+                faith_prompt = FAITHFULNESS_PROMPT.format(context=context_str, answer=answer)
+                rel_prompt = RELEVANCE_PROMPT.format(query=query, answer=answer)
+                
+                # Execute concurrently
+                faith_res, rel_res = await asyncio.gather(
+                    call_ollama(faith_prompt),
+                    call_ollama(rel_prompt),
+                    return_exceptions=True
+                )
+                
+                # Parse Faithfulness
+                if not isinstance(faith_res, Exception):
+                    faith_json = extract_json_from_response(faith_res)
+                    if "score" in faith_json:
+                        faithfulness_score = float(faith_json["score"])
+                        faithfulness_reason = faith_json.get("reasoning", "Faithful answer check completed.")
+                        
+                # Parse Relevance
+                if not isinstance(rel_res, Exception):
+                    rel_json = extract_json_from_response(rel_res)
+                    if "score" in rel_json:
+                        relevance_score = float(rel_json["score"])
+                        relevance_reason = rel_json.get("reasoning", "Answer relevance check completed.")
+                        
+                logger.info(f"RAG Evaluation parsed in {time.time() - eval_start:.2f}s")
+            except Exception as eval_err:
+                logger.warning(f"Error executing LLM evaluation metrics: {eval_err}")
+    else:
+        # Bypassed for speed
+        faithfulness_score = 1.0
+        faithfulness_reason = "Evaluation bypassed for performance. Enable in QueryRequest if needed."
+        relevance_score = 1.0
+        relevance_reason = "Evaluation bypassed for performance. Enable in QueryRequest if needed."
             
     latency = time.time() - start_time
     

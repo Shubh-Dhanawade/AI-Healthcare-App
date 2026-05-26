@@ -1,13 +1,15 @@
 'use client';
 
 import { usePathname } from 'next/navigation';
-import { Bell, Activity } from 'lucide-react';
+import { Activity } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
+import NotificationBell from '@/components/notifications/NotificationBell';
 
 const routeLabels: Record<string, string> = {
   '/dashboard': 'Dashboard',
   '/upload': 'Upload Document',
   '/documents': 'My Documents',
+  '/chat': 'Conversational AI Chat',
 };
 
 function getRouteLabel(pathname: string): string {
@@ -40,10 +42,7 @@ export default function Navbar() {
       {/* Right side */}
       <div className="flex items-center gap-3">
         {/* Notification Bell */}
-        <button className="relative w-9 h-9 rounded-xl flex items-center justify-center transition-all hover:bg-white/5"
-          style={{ border: '1px solid rgba(59,130,246,0.2)' }}>
-          <Bell className="w-4 h-4 text-slate-400" />
-        </button>
+        <NotificationBell />
 
         {/* Avatar */}
         <div className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold text-white"

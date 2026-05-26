@@ -99,6 +99,52 @@ Return ONLY valid JSON with these exact keys:
 }}"""
 
 
+RAG_PROMPT = """You are a helpful healthcare insurance assistant. Answer the user's query using the provided context from the policy documents. 
+Keep your response concise, professional, and clear. If the answer is not mentioned in the context, say "I cannot find this information in the selected policies."
+
+CONTEXT FROM INSURANCE POLICIES:
+{context}
+
+USER QUERY:
+{query}
+
+CHAT HISTORY:
+{chat_history}
+
+Please provide a structured, friendly response. If quoting policy terms, specify the source document name."""
+
+
+TRANSLATE_PROMPT = """You are an expert translator. Translate the following text into {target_language}.
+Return ONLY the translated text without any explanation, markdown wrapper, or introductory words.
+
+TEXT:
+{text}"""
+
+
+CLAIMS_CHECKLIST_PROMPT = """You are a health insurance claims auditor. Create a claim documentation checklist for:
+POLICY: {policy_name}
+TREATMENT/ILNESS: {treatment_type}
+POLICY DETAILS:
+{fields_summary}
+
+Return ONLY valid JSON. Keep explanations short.
+Return JSON format:
+{{
+  "checklist": [
+    {{
+      "document_name": "Name of required document (e.g. Original Discharge Summary)",
+      "importance": "mandatory|optional",
+      "description": "Brief description of why this is required (maximum 15 words)"
+    }}
+  ],
+  "claim_steps": [
+    "Step 1: ...",
+    "Step 2: ..."
+  ],
+  "estimated_approval_days": "e.g. 7-10 business days"
+}}"""
+
+
 # ─────────────────────────────────────────
 # Mock Data (used when Ollama is unavailable)
 # ─────────────────────────────────────────
@@ -431,4 +477,132 @@ async def generate_comparison_synthesis(policies_data: list[dict]) -> dict:
         "verdict": f"For most users, {p2} offers the best overall security if the premium is within budget, as it avoids high co-payments during major health crises. If affordability is the main concern, {p1} is a reliable starter plan.",
         "feature_winners": feature_winners
     }
+
+
+def chunk_text(text: str, chunk_size: int = 600, overlap: int = 150) -> list[str]:
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        chunks.append(text[start:end])
+        start += chunk_size - overlap
+    return chunks
+
+
+def score_chunk(chunk: str, query_words: list[str]) -> float:
+    score = 0.0
+    chunk_lower = chunk.lower()
+    for word in query_words:
+        if len(word) < 3:
+            continue
+        score += chunk_lower.count(word) * 1.5
+    return score
+
+
+async def query_policy_rag(policies: list[dict], query: str, history: list[dict] = None) -> str:
+    """Answer user questions about policies using a local RAG pipeline with Ollama."""
+    query_words = [w.lower() for w in re.findall(r"\w+", query)]
+    all_scored_chunks = []
+    
+    for p in policies:
+        doc_name = p.get("filename", "Policy")
+        doc_text = p.get("text", "")
+        if not doc_text:
+            continue
+        chunks = chunk_text(doc_text)
+        for c in chunks:
+            score = score_chunk(c, query_words)
+            if score > 0:
+                all_scored_chunks.append({
+                    "text": c,
+                    "source": doc_name,
+                    "score": score
+                })
+                
+    # Sort and take top 4 chunks
+    all_scored_chunks.sort(key=lambda x: x["score"], reverse=True)
+    top_chunks = all_scored_chunks[:4]
+    
+    # Format context
+    context_parts = []
+    for c in top_chunks:
+        context_parts.append(f"Source: {c['source']}\nContent: {c['text']}")
+    
+    context = "\n---\n".join(context_parts) if context_parts else "No specific policy text matches your query terms."
+    
+    # Format history
+    history_str = ""
+    if history:
+        for msg in history[-5:]:  # Last 5 messages
+            role = msg.get("role", "user").upper()
+            content = msg.get("content", "")
+            history_str += f"{role}: {content}\n"
+            
+    prompt = RAG_PROMPT.format(
+        context=context,
+        query=query,
+        chat_history=history_str
+    )
+    
+    try:
+        response = await call_ollama(prompt)
+        if response:
+            return response.strip()
+    except Exception as e:
+        logger.warning(f"Ollama RAG failed: {e}")
+        
+    # Offline fallback
+    if top_chunks:
+        best_match = top_chunks[0]
+        return (
+            f"[Offline Mode] Ollama is currently offline. Based on a search of your policies, "
+            f"here is the most relevant section found in **{best_match['source']}**:\n\n"
+            f"\"{best_match['text'].strip()}...\""
+        )
+    return "Ollama is currently offline and I couldn't find any matching terms in the policies to assist you."
+
+
+async def translate_text(text: str, target_language: str) -> str:
+    """Translate text using Ollama."""
+    try:
+        response = await call_ollama(TRANSLATE_PROMPT.format(text=text, target_language=target_language))
+        if response:
+            return response.strip()
+    except Exception as e:
+        logger.warning(f"Translation failed: {e}")
+    return text  # Return original if translation fails
+
+
+async def generate_claims_checklist(policy_name: str, fields_summary: str, treatment_type: str) -> dict:
+    """Generate dynamic claim checklist using Ollama."""
+    prompt = CLAIMS_CHECKLIST_PROMPT.format(
+        policy_name=policy_name,
+        fields_summary=fields_summary,
+        treatment_type=treatment_type
+    )
+    try:
+        response = await call_ollama(prompt)
+        result = extract_json_from_response(response)
+        if result.get("checklist"):
+            return result
+    except Exception as e:
+        logger.warning(f"Checklist generation failed: {e}")
+        
+    # Fallback checklist
+    return {
+        "checklist": [
+          {"document_name": "Original Discharge Summary", "importance": "mandatory", "description": "Required to confirm hospital stay details"},
+          {"document_name": "Final Consolidated Bill", "importance": "mandatory", "description": "Required for financial settlement"},
+          {"document_name": "Pharmacy Prescriptions & Receipts", "importance": "mandatory", "description": "Required to claim medical costs"},
+          {"document_name": f"Diagnostic Reports for {treatment_type}", "importance": "mandatory", "description": "Required to clinically verify diagnosis"},
+          {"document_name": "Claim Form Part A & B", "importance": "mandatory", "description": "Signed insurance forms"}
+        ],
+        "claim_steps": [
+          "Step 1: Check if the hospital is in the cashless network list.",
+          "Step 2: If cashless, submit pre-authorization request within 24 hours of admission.",
+          "Step 3: If reimbursement, notify the insurer within 48 hours of admission and submit all original documents within 15 days of discharge."
+        ],
+        "estimated_approval_days": "5-7 business days"
+    }
+
 
