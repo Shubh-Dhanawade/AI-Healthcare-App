@@ -92,7 +92,7 @@ export default function DashboardPage() {
       {/* AI Features Grid */}
       <div className="grid md:grid-cols-3 gap-4">
         {[
-          { icon: <Brain className="w-5 h-5" />, title: 'AI Summarization', desc: 'Phi-3 Mini generates plain-language summaries', color: '#8b5cf6', bg: 'rgba(139,92,246,0.12)' },
+          { icon: <Brain className="w-5 h-5" />, title: 'AI Summarization', desc: 'Llama 3.2 generates plain-language summaries', color: '#8b5cf6', bg: 'rgba(139,92,246,0.12)' },
           { icon: <Shield className="w-5 h-5" />, title: 'Risk Detection', desc: 'Identify hidden clauses and unfavorable terms', color: '#ef4444', bg: 'rgba(239,68,68,0.12)' },
           { icon: <TrendingUp className="w-5 h-5" />, title: 'Field Extraction', desc: 'Premiums, coverage limits, and exclusions extracted', color: '#14b8a6', bg: 'rgba(20,184,166,0.12)' },
         ].map((f) => (

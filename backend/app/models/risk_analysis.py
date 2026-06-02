@@ -27,7 +27,7 @@ class Summary(Base):
     exclusions_summary: Mapped[str] = mapped_column(Text, nullable=True)
     waiting_period_summary: Mapped[str] = mapped_column(Text, nullable=True)
     premium_summary: Mapped[str] = mapped_column(Text, nullable=True)
-    model_used: Mapped[str] = mapped_column(String(100), default="phi3")
+    model_used: Mapped[str] = mapped_column(String(100), default="llama3.2")
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)

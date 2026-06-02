@@ -99,7 +99,7 @@ export default function ChatPage() {
         ...prev, 
         { 
           role: 'assistant', 
-          content: "❌ Sorry, I encountered an error. Please make sure the local Ollama server is running with the 'phi3' model, or check if the backend is configured properly." 
+          content: "❌ Sorry, I encountered an error. Please make sure the local Ollama server is running with the 'llama3.2' model, or check if the backend is configured properly." 
         }
       ]);
     } finally {

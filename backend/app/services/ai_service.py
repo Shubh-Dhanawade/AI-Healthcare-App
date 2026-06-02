@@ -114,10 +114,26 @@ CHAT HISTORY:
 Please provide a structured, friendly response. If quoting policy terms, specify the source document name."""
 
 
-TRANSLATE_PROMPT = """You are an expert translator. Translate the following text into {target_language}.
-Return ONLY the translated text without any explanation, markdown wrapper, or introductory words.
+TRANSLATE_PROMPT = """You are an expert translator. Translate the English text into {target_language}.
 
-TEXT:
+Rules:
+1. Translate to {target_language} language.
+2. Use the correct script for {target_language}. For example, if target language is Marathi, use Devanagari script (like 'पॉलिसीचे नियम व अटी'). If Hindi, use Devanagari script (like 'पॉलिसी के नियम और शर्तें').
+3. Do NOT mix or use letters from other scripts like Gujarati or Bengali.
+4. Output ONLY the translation. Do NOT include any explanations, introductory text, or formatting.
+
+Examples for Marathi (मराठी):
+English: "This policy covers hospital room rent up to 1% of sum insured."
+Marathi: "या पॉलिसीमध्ये विमा रक्कमेच्या १% पर्यंत रुग्णालयाच्या खोलीच्या भाड्याचा समावेश आहे."
+
+English: "Pre-existing diseases are covered after a waiting period of 3 years."
+Marathi: "३ वर्षांच्या प्रतीक्षा कालावधीनंतर आधीपासून असलेले आजार कव्हर केले जातात."
+
+Examples for Hindi (हिंदी):
+English: "This policy covers hospital room rent up to 1% of sum insured."
+Hindi: "यह पॉलिसी बीमा राशि के १% तक अस्पताल के कमरे के किराए को कवर करती है।"
+
+TEXT TO TRANSLATE:
 {text}"""
 
 

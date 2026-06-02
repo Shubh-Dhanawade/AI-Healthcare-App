@@ -177,10 +177,10 @@ cp .env.example .env
 docker-compose up -d
 ```
 
-### 3. Pull the Phi-3 AI Model
+### 3. Pull the Llama 3.2 AI Model
 
 ```bash
-docker exec -it healthcare_ollama ollama pull phi3
+docker exec -it healthcare_ollama ollama pull llama3.2
 ```
 
 ### 4. Access the Application
@@ -214,7 +214,7 @@ cp .env.example .env
 
 # Start Ollama locally
 ollama serve
-ollama pull phi3
+ollama pull llama3.2
 
 # Run backend
 uvicorn app.main:app --reload --port 8000
@@ -248,7 +248,7 @@ Access: http://localhost:3000
 | `POSTGRES_PASSWORD` | DB password | ⚠️ Change this! |
 | `SECRET_KEY` | JWT signing key | ⚠️ Change this! |
 | `OLLAMA_BASE_URL` | Ollama API URL | `http://ollama:11434` |
-| `OLLAMA_MODEL` | AI model name | `phi3` |
+| `OLLAMA_MODEL` | AI model name | `llama3.2` |
 | `UPLOAD_DIR` | File upload directory | `/app/uploads` |
 | `MAX_FILE_SIZE_MB` | Max upload size | `50` |
 
@@ -348,7 +348,7 @@ nano .env  # Set strong passwords and SECRET_KEY
 docker-compose up -d
 
 # 5. Pull AI model (first time only, may take a while)
-docker exec healthcare_ollama ollama pull phi3
+docker exec healthcare_ollama ollama pull llama3.2
 
 # 6. Check status
 docker-compose ps
@@ -357,11 +357,11 @@ docker-compose logs -f backend
 
 ### Memory Optimization for 4GB VPS
 
-The `docker-compose.yml` limits Ollama to 3GB RAM. Phi-3 Mini (quantized) runs within this limit.
+The `docker-compose.yml` limits Ollama to 3GB RAM. Llama 3.2 runs within this limit.
 
 To use an even lighter model:
 ```bash
-docker exec healthcare_ollama ollama pull phi3:mini  # Smaller variant
+docker exec healthcare_ollama ollama pull llama3.2:1b  # Smaller 1B parameter variant
 ```
 
 ---

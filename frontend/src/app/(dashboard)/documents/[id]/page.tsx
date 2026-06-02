@@ -149,6 +149,55 @@ export default function DocumentDetailPage() {
   const [isQuerying, setIsQuerying] = useState(false);
   const [chatHistory, setChatHistory] = useState<any[]>([]);
 
+  const [selectedLanguage, setSelectedLanguage] = useState<string>('English');
+  const [translations, setTranslations] = useState<Record<string, {
+    summary_text: string;
+    coverage_summary?: string;
+    exclusions_summary?: string;
+    waiting_period_summary?: string;
+    premium_summary?: string;
+  }>>({});
+  const [isTranslating, setIsTranslating] = useState(false);
+
+  const handleLanguageChange = async (lang: string) => {
+    setSelectedLanguage(lang);
+    if (lang === 'English' || !doc?.summary) return;
+    
+    // If already translated, use cache
+    if (translations[lang]) return;
+    
+    setIsTranslating(true);
+    const toastId = toast.loading(`Translating summary to ${lang}...`);
+    try {
+      const summary = doc.summary;
+      const [tText, tCoverage, tExclusions, tWaiting, tPremium] = await Promise.all([
+        summary.summary_text ? aiApi.translate(summary.summary_text, lang) : Promise.resolve({ translated_text: '' }),
+        summary.coverage_summary ? aiApi.translate(summary.coverage_summary, lang) : Promise.resolve({ translated_text: '' }),
+        summary.exclusions_summary ? aiApi.translate(summary.exclusions_summary, lang) : Promise.resolve({ translated_text: '' }),
+        summary.waiting_period_summary ? aiApi.translate(summary.waiting_period_summary, lang) : Promise.resolve({ translated_text: '' }),
+        summary.premium_summary ? aiApi.translate(summary.premium_summary, lang) : Promise.resolve({ translated_text: '' }),
+      ]);
+      
+      setTranslations(prev => ({
+        ...prev,
+        [lang]: {
+          summary_text: tText.translated_text,
+          coverage_summary: tCoverage.translated_text || undefined,
+          exclusions_summary: tExclusions.translated_text || undefined,
+          waiting_period_summary: tWaiting.translated_text || undefined,
+          premium_summary: tPremium.translated_text || undefined,
+        }
+      }));
+      toast.success(`Translated summary to ${lang}!`, { id: toastId });
+    } catch (error) {
+      console.error(error);
+      toast.error(`Failed to translate summary. Please check if Ollama is running.`, { id: toastId });
+      setSelectedLanguage('English');
+    } finally {
+      setIsTranslating(false);
+    }
+  };
+
   const { data: doc, isLoading, refetch } = useQuery<DocumentDetail>({
     queryKey: ['document', docId],
     queryFn: () => documentsApi.getById(docId),
@@ -371,40 +420,73 @@ export default function DocumentDetailPage() {
         </div>
 
         <div className="pt-6">
-          {/* Summary Tab */}
-          {activeTab === 'summary' && (
-            <div className="space-y-4">
-              {!doc.summary ? (
+          {activeTab === 'summary' && (() => {
+            const displayedSummary = selectedLanguage === 'English' 
+              ? doc.summary 
+              : translations[selectedLanguage] || doc.summary;
+            
+            if (!doc.summary) {
+              return (
                 <div className="text-center py-12 glass-card">
                   <Brain className="w-12 h-12 text-slate-600 mx-auto mb-3" />
                   <p className="text-slate-400">No summary yet. Click "AI Summarize" to generate one.</p>
                 </div>
-              ) : (
-                <>
-                  <div className="glass-card p-6">
-                    <h3 className="font-semibold mb-3 flex items-center gap-2 text-blue-300">
+              );
+            }
+            
+            return (
+              <div className="space-y-4">
+                <div className="glass-card p-6 relative overflow-hidden">
+                  {isTranslating && (
+                    <div className="absolute inset-0 bg-[#0a0f1e]/60 backdrop-blur-sm flex items-center justify-center z-10 transition-all">
+                      <div className="flex items-center gap-2">
+                        <span className="w-5 h-5 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
+                        <span className="text-xs text-slate-400">Translating to {selectedLanguage}...</span>
+                      </div>
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                    <h3 className="font-semibold flex items-center gap-2 text-blue-300">
                       <Info className="w-4 h-4" /> Policy Summary
                     </h3>
-                    <p className="text-slate-300 leading-relaxed whitespace-pre-wrap">{doc.summary.summary_text}</p>
+                    
+                    {/* Language Dropdown */}
+                    <div className="flex items-center gap-1.5 bg-slate-900/60 border border-slate-700/40 rounded-lg px-2.5 py-1">
+                      <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Language:</span>
+                      <select
+                        value={selectedLanguage}
+                        onChange={(e) => handleLanguageChange(e.target.value)}
+                        className="bg-transparent border-none text-xs text-white focus:outline-none cursor-pointer"
+                      >
+                        <option value="English">English</option>
+                        <option value="Hindi">Hindi (हिंदी)</option>
+                        <option value="Marathi">Marathi (मराठी)</option>
+                      </select>
+                    </div>
                   </div>
-                  <div className="grid md:grid-cols-2 gap-4">
-                    {[
-                      { label: '✅ Coverage', value: doc.summary.coverage_summary, color: '#10b981' },
-                      { label: '❌ Exclusions', value: doc.summary.exclusions_summary, color: '#ef4444' },
-                      { label: '⏰ Waiting Period', value: doc.summary.waiting_period_summary, color: '#f59e0b' },
-                      { label: '💰 Premium', value: doc.summary.premium_summary, color: '#3b82f6' },
-                    ].filter(s => s.value).map((section) => (
-                      <div key={section.label} className="glass-card p-5">
-                        <h4 className="font-semibold text-sm mb-2" style={{ color: section.color }}>{section.label}</h4>
-                        <p className="text-slate-300 text-sm leading-relaxed whitespace-pre-wrap">{section.value}</p>
-                      </div>
-                    ))}
-                  </div>
-                  <p className="text-xs text-slate-500 text-right">Generated by {doc.summary.model_used} • {new Date(doc.summary.created_at).toLocaleString()}</p>
-                </>
-              )}
-            </div>
-          )}
+                  <p className="text-slate-300 leading-relaxed whitespace-pre-wrap">{displayedSummary.summary_text}</p>
+                </div>
+                
+                <div className="grid md:grid-cols-2 gap-4 relative">
+                  {isTranslating && (
+                    <div className="absolute inset-0 bg-[#0a0f1e]/30 backdrop-blur-[2px] z-10 rounded-xl" />
+                  )}
+                  {[
+                    { label: '✅ Coverage', value: displayedSummary.coverage_summary, color: '#10b981' },
+                    { label: '❌ Exclusions', value: displayedSummary.exclusions_summary, color: '#ef4444' },
+                    { label: '⏰ Waiting Period', value: displayedSummary.waiting_period_summary, color: '#f59e0b' },
+                    { label: '💰 Premium', value: displayedSummary.premium_summary, color: '#3b82f6' },
+                  ].filter(s => s.value).map((section) => (
+                    <div key={section.label} className="glass-card p-5">
+                      <h4 className="font-semibold text-sm mb-2" style={{ color: section.color }}>{section.label}</h4>
+                      <p className="text-slate-300 text-sm leading-relaxed whitespace-pre-wrap">{section.value}</p>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-slate-500 text-right">Generated by {displayedSummary.model_used || doc.summary.model_used} • {new Date(doc.summary.created_at).toLocaleString()}</p>
+              </div>
+            );
+          })()}
 
           {/* Fields Tab */}
           {activeTab === 'fields' && (
