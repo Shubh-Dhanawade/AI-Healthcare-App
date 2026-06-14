@@ -87,6 +87,7 @@ async def summarize_document(
         summary_data = await generate_summary(doc.extracted_text)
         
         # Save to database
+        from app.core.config import settings
         summary = Summary(
             document_id=doc.id,
             summary_text=summary_data["summary_text"],
@@ -94,7 +95,7 @@ async def summarize_document(
             exclusions_summary=summary_data.get("exclusions_summary"),
             waiting_period_summary=summary_data.get("waiting_period_summary"),
             premium_summary=summary_data.get("premium_summary"),
-            model_used="phi3",
+            model_used=settings.OLLAMA_MODEL,
         )
         db.add(summary)
         
