@@ -23,7 +23,7 @@ class Settings(BaseSettings):
 
     # Ollama AI
     OLLAMA_BASE_URL: str = "http://localhost:11434"
-    OLLAMA_MODEL: str = "llama3.2"
+    OLLAMA_MODEL: str = "gemma3:4b"
 
     # File Uploads
     UPLOAD_DIR: str = "./uploads"

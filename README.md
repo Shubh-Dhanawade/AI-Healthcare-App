@@ -1,10 +1,10 @@
 # 🏥 Healthcare Insurance Document Intelligence System
 
-> **AI-powered platform for analyzing healthcare insurance documents using Phi-3 Mini, PaddleOCR, and PyMuPDF.**
+> **AI-powered platform for analyzing healthcare insurance documents using Gemma 3 (4B), custom SQLite Vector RAG, PaddleOCR, and PyMuPDF.**
 
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111-green)](https://fastapi.tiangolo.com/)
 [![Next.js](https://img.shields.io/badge/Next.js-15-black)](https://nextjs.org/)
-[![Ollama](https://img.shields.io/badge/Ollama-Phi--3%20Mini-blue)](https://ollama.ai/)
+[![Ollama](https://img.shields.io/badge/Ollama-Gemma%203%20(4B)-blue)](https://ollama.ai/)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED)](https://docker.com/)
 
 ---
@@ -31,9 +31,10 @@ Upload any healthcare insurance PDF or image document and get:
 | Feature | Description |
 |---|---|
 | 🔍 **OCR Extraction** | PyMuPDF for digital PDFs, PaddleOCR for scanned docs |
-| 🤖 **AI Summary** | Plain-language policy summaries via Phi-3 Mini |
+| 🤖 **AI Summary** | Plain-language policy summaries via Gemma 3 (4B) |
 | 📋 **Field Extraction** | Premiums, coverage, deductibles, exclusions |
 | ⚠️ **Risk Detection** | Identifies risky clauses with severity levels |
+| 💬 **Conversational RAG** | Chat with your policies via a custom local vector search engine |
 
 ---
 
@@ -56,8 +57,8 @@ Upload any healthcare insurance PDF or image document and get:
              ┌──────────────┼──────────────┐
              │              │              │
     ┌────────▼───┐  ┌───────▼────┐  ┌─────▼──────┐
-    │ PostgreSQL │  │   Ollama   │  │  Uploads   │
-    │  Port 5432 │  │ Port 11434 │  │  Volume    │
+    │  SQLite DB │  │   Ollama   │  │  Uploads   │
+    │ (Local dev)│  │ Port 11434 │  │  Volume    │
     └────────────┘  └────────────┘  └────────────┘
 ```
 
@@ -82,7 +83,7 @@ Upload any healthcare insurance PDF or image document and get:
 - Auto-detection of document type
 - Text cleaning and normalization
 
-### 🤖 AI Summarization (Phi-3 Mini)
+### 🤖 AI Summarization (Gemma 3 (4B))
 - Plain-language policy summaries
 - Coverage overview
 - Exclusions and restrictions
@@ -102,6 +103,12 @@ Upload any healthcare insurance PDF or image document and get:
 - Hidden conditions
 - Co-payment traps
 - Severity: Low / Medium / High
+
+### 💬 Conversational Chat & Streaming RAG
+- **Instant Token Streaming (SSE)**: Leverages Server-Sent Events to stream response tokens in real-time, reducing latency (Time to First Token < 200ms).
+- **Custom Local Vector Store**: Zero-dependency SQLite BLOB serialization storing 768-dimensional float embeddings generated via `nomic-embed-text`.
+- **Typo-Tolerant Keyword Matcher**: Implements Levenshtein edit distance logic to silently fix user typos before RAG retrieval.
+- **Identity Grounding**: Contextually binds logged-in user names (e.g. `krushna`) directly into LLM prompts for personalized responses.
 
 ---
 
@@ -177,10 +184,11 @@ cp .env.example .env
 docker-compose up -d
 ```
 
-### 3. Pull the Phi-3 AI Model
+### 3. Pull the Gemma 3 and Embedding Models
 
 ```bash
-docker exec -it healthcare_ollama ollama pull phi3
+docker exec -it healthcare_ollama ollama pull gemma3:4b
+docker exec -it healthcare_ollama ollama pull nomic-embed-text
 ```
 
 ### 4. Access the Application
@@ -203,18 +211,19 @@ cd backend
 
 # Create virtual environment
 python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+source venv/bin/activate  # Windows: 
 
 # Install dependencies
 pip install -r requirements.txt
 
 # Setup environment
 cp .env.example .env
-# Edit .env → set DATABASE_URL to localhost
+# Edit .env → set DATABASE_URL to sqlite+aiosqlite:///./healthcare_ai.db
 
 # Start Ollama locally
 ollama serve
-ollama pull phi3
+ollama pull gemma3:4b
+ollama pull nomic-embed-text
 
 # Run backend
 uvicorn app.main:app --reload --port 8000
@@ -243,13 +252,11 @@ Access: http://localhost:3000
 
 | Variable | Description | Default |
 |---|---|---|
-| `POSTGRES_DB` | Database name | `healthcare_ai` |
-| `POSTGRES_USER` | DB username | `healthcare_user` |
-| `POSTGRES_PASSWORD` | DB password | ⚠️ Change this! |
+| `DATABASE_URL` | Database connection string | `sqlite+aiosqlite:///./healthcare_ai.db` |
 | `SECRET_KEY` | JWT signing key | ⚠️ Change this! |
-| `OLLAMA_BASE_URL` | Ollama API URL | `http://ollama:11434` |
-| `OLLAMA_MODEL` | AI model name | `phi3` |
-| `UPLOAD_DIR` | File upload directory | `/app/uploads` |
+| `OLLAMA_BASE_URL` | Ollama API URL | `http://localhost:11434` |
+| `OLLAMA_MODEL` | AI model name | `gemma3:4b` |
+| `UPLOAD_DIR` | File upload directory | `./uploads` |
 | `MAX_FILE_SIZE_MB` | Max upload size | `50` |
 
 ---
@@ -347,8 +354,9 @@ nano .env  # Set strong passwords and SECRET_KEY
 # 4. Deploy
 docker-compose up -d
 
-# 5. Pull AI model (first time only, may take a while)
-docker exec healthcare_ollama ollama pull phi3
+# 5. Pull AI models (first time only, may take a while)
+docker exec healthcare_ollama ollama pull gemma3:4b
+docker exec healthcare_ollama ollama pull nomic-embed-text
 
 # 6. Check status
 docker-compose ps

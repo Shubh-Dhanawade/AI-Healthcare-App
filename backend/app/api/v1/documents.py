@@ -65,10 +65,15 @@ async def process_document_background(doc_id: str, file_path: str, file_type: st
             doc.extracted_text = text
             doc.extraction_method = method
             doc.page_count = page_count
+            
+            # Generate semantic vector chunks in SQLite Vector DB
+            from app.services.rag_service import generate_document_chunks
+            await generate_document_chunks(doc.id, text, db)
+            
             doc.status = "text_extracted"
             await db.commit()
             
-            logger.info(f"✅ Document {doc_id} text extracted via {method}")
+            logger.info(f"✅ Document {doc_id} text extracted and vector database initialized")
             
         except Exception as e:
             logger.error(f"Background text extraction failed for {doc_id}: {e}")

@@ -52,11 +52,10 @@ from datasets import load_dataset
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
-    BitsAndBytesConfig,
-    TrainingArguments
+    BitsAndBytesConfig
 )
 from peft import LoraConfig, get_peft_model
-from trl import SFTTrainer
+from trl import SFTTrainer, SFTConfig
 
 # 1. Config
 model_id = "meta-llama/Llama-3.2-3B-Instruct"
@@ -108,7 +107,7 @@ def format_prompts(batch):
 dataset = dataset.map(format_prompts, batched=True)
 
 # 6. Setup Trainer
-training_args = TrainingArguments(
+training_args = SFTConfig(
     output_dir=output_dir,
     per_device_train_batch_size=2,
     gradient_accumulation_steps=4,
@@ -119,15 +118,15 @@ training_args = TrainingArguments(
     bf16=torch.cuda.is_bf16_supported(),
     optim="paged_adamw_8bit",
     save_strategy="steps",
-    save_steps=50
+    save_steps=50,
+    dataset_text_field="text",
+    max_length=2048
 )
 
 trainer = SFTTrainer(
     model=model,
     train_dataset=dataset,
-    dataset_text_field="text",
-    max_seq_length=2048,
-    tokenizer=tokenizer,
+    processing_class=tokenizer,
     args=training_args
 )
 

@@ -6,10 +6,12 @@ When Ollama is unavailable, returns realistic demo data for testing.
 import json
 import re
 import httpx
+import asyncio
 from loguru import logger
 from typing import Optional
 
 from app.core.config import settings
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 # ─────────────────────────────────────────
@@ -243,7 +245,7 @@ MOCK_RISKS = [
 # Ollama Client
 # ─────────────────────────────────────────
 
-async def call_ollama(prompt: str, model: Optional[str] = None) -> str:
+async def call_ollama(prompt: str, model: Optional[str] = None, num_predict: int = 1024) -> str:
     """Call Ollama API. Raises httpx.ConnectError if unavailable."""
     model = model or settings.OLLAMA_MODEL
     url = f"{settings.OLLAMA_BASE_URL}/api/generate"
@@ -254,11 +256,12 @@ async def call_ollama(prompt: str, model: Optional[str] = None) -> str:
         "stream": False,
         "options": {
             "temperature": 0.1,
-            "num_predict": 2048,
+            "num_predict": num_predict,
+            "num_ctx": 4096,
         },
     }
 
-    logger.info(f"Calling Ollama model={model}")
+    logger.info(f"Calling Ollama model={model} (num_predict={num_predict})")
     async with httpx.AsyncClient(timeout=240.0) as client:
         response = await client.post(url, json=payload)
         response.raise_for_status()
@@ -499,29 +502,67 @@ def score_chunk(chunk: str, query_words: list[str]) -> float:
     return score
 
 
-async def query_policy_rag(policies: list[dict], query: str, history: list[dict] = None) -> str:
+async def query_policy_rag(policies: list[dict], query: str, db: AsyncSession = None, history: list[dict] = None) -> str:
     """Answer user questions about policies using a local RAG pipeline with Ollama."""
-    query_words = [w.lower() for w in re.findall(r"\w+", query)]
     all_scored_chunks = []
+    top_chunks = []
+    use_vector_search = False
     
-    for p in policies:
-        doc_name = p.get("filename", "Policy")
-        doc_text = p.get("text", "")
-        if not doc_text:
-            continue
-        chunks = chunk_text(doc_text)
-        for c in chunks:
-            score = score_chunk(c, query_words)
-            if score > 0:
-                all_scored_chunks.append({
-                    "text": c,
-                    "source": doc_name,
-                    "score": score
-                })
+    if db:
+        from app.models.document import DocumentChunk
+        from app.services.rag_service import generate_embeddings, cosine_similarity
+        from sqlalchemy import select
+        
+        policy_ids = [p["id"] for p in policies if p.get("id")]
+        
+        if policy_ids:
+            res = await db.execute(select(DocumentChunk).where(DocumentChunk.document_id.in_(policy_ids)))
+            db_chunks = res.scalars().all()
+            
+            if db_chunks:
+                use_vector_search = True
+                query_emb = await generate_embeddings(query)
                 
-    # Sort and take top 4 chunks
-    all_scored_chunks.sort(key=lambda x: x["score"], reverse=True)
-    top_chunks = all_scored_chunks[:4]
+                for chunk in db_chunks:
+                    try:
+                        p_dict = next((p for p in policies if p.get("id") == chunk.document_id), {})
+                        doc_name = p_dict.get("filename", "Policy")
+                        
+                        chunk_emb = json.loads(chunk.embedding)
+                        sim = cosine_similarity(query_emb, chunk_emb)
+                        
+                        all_scored_chunks.append({
+                            "text": chunk.text_content,
+                            "source": doc_name,
+                            "score": sim
+                        })
+                    except Exception as e:
+                        logger.error(f"Failed to process chunk vector in query_policy_rag: {e}")
+                        
+                all_scored_chunks.sort(key=lambda x: x["score"], reverse=True)
+                top_chunks = all_scored_chunks[:4]
+                
+    if not use_vector_search:
+        logger.warning("No database vector chunks available for cross-document RAG. Falling back to keyword search.")
+        query_words = [w.lower() for w in re.findall(r"\w+", query)]
+        
+        for p in policies:
+            doc_name = p.get("filename", "Policy")
+            doc_text = p.get("text", "")
+            if not doc_text:
+                continue
+            chunks = chunk_text(doc_text)
+            for c in chunks:
+                score = score_chunk(c, query_words)
+                if score > 0:
+                    all_scored_chunks.append({
+                        "text": c,
+                        "source": doc_name,
+                        "score": score
+                    })
+                    
+        all_scored_chunks.sort(key=lambda x: x["score"], reverse=True)
+        top_chunks = all_scored_chunks[:4]
     
     # Format context
     context_parts = []
@@ -545,7 +586,7 @@ async def query_policy_rag(policies: list[dict], query: str, history: list[dict]
     )
     
     try:
-        response = await call_ollama(prompt)
+        response = await call_ollama(prompt, num_predict=512)
         if response:
             return response.strip()
     except Exception as e:
@@ -604,5 +645,157 @@ async def generate_claims_checklist(policy_name: str, fields_summary: str, treat
         ],
         "estimated_approval_days": "5-7 business days"
     }
+
+
+async def call_ollama_stream(prompt: str, model: Optional[str] = None, num_predict: int = 512):
+    """Generate streaming tokens from Ollama."""
+    model = model or settings.OLLAMA_MODEL
+    url = f"{settings.OLLAMA_BASE_URL}/api/generate"
+    
+    if "localhost" in url:
+        url = url.replace("localhost", "127.0.0.1")
+
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "stream": True,
+        "options": {
+            "temperature": 0.1,
+            "num_predict": num_predict,
+            "num_ctx": 4096,
+        },
+    }
+
+    logger.info(f"Calling Ollama stream model={model} (num_predict={num_predict})")
+    try:
+        async with httpx.AsyncClient(timeout=240.0) as client:
+            async with client.stream("POST", url, json=payload) as response:
+                response.raise_for_status()
+                async for chunk in response.aiter_lines():
+                    if chunk:
+                        try:
+                            data = json.loads(chunk)
+                            yield data.get("response", "")
+                            if data.get("done", False):
+                                break
+                        except Exception as e:
+                            logger.error(f"Error parsing streaming chunk: {e}")
+    except Exception as e:
+        logger.error(f"Failed to communicate with Ollama stream: {e}")
+        raise
+
+
+async def query_policy_rag_stream(policies: list[dict], query: str, db: AsyncSession = None, history: list[dict] = None, user_name: str = "krushna"):
+    """Answer user questions about policies using a local RAG pipeline with streaming Ollama."""
+    all_scored_chunks = []
+    top_chunks = []
+    use_vector_search = False
+    
+    if db:
+        from app.models.document import DocumentChunk
+        from app.services.rag_service import generate_embeddings, cosine_similarity
+        from sqlalchemy import select
+        
+        policy_ids = [p["id"] for p in policies if p.get("id")]
+        
+        if policy_ids:
+            res = await db.execute(select(DocumentChunk).where(DocumentChunk.document_id.in_(policy_ids)))
+            db_chunks = res.scalars().all()
+            
+            if db_chunks:
+                use_vector_search = True
+                query_emb = await generate_embeddings(query)
+                
+                for chunk in db_chunks:
+                    try:
+                        p_dict = next((p for p in policies if p.get("id") == chunk.document_id), {})
+                        doc_name = p_dict.get("filename", "Policy")
+                        
+                        chunk_emb = json.loads(chunk.embedding)
+                        sim = cosine_similarity(query_emb, chunk_emb)
+                        
+                        all_scored_chunks.append({
+                            "text": chunk.text_content,
+                            "source": doc_name,
+                            "score": sim
+                        })
+                    except Exception as e:
+                        logger.error(f"Failed to process chunk vector in query_policy_rag_stream: {e}")
+                        
+                all_scored_chunks.sort(key=lambda x: x["score"], reverse=True)
+                top_chunks = all_scored_chunks[:4]
+                
+    if not use_vector_search:
+        logger.warning("No database vector chunks available for cross-document RAG. Falling back to keyword search.")
+        query_words = [w.lower() for w in re.findall(r"\w+", query)]
+        
+        for p in policies:
+            doc_name = p.get("filename", "Policy")
+            doc_text = p.get("text", "")
+            if not doc_text:
+                continue
+            chunks = chunk_text(doc_text)
+            for c in chunks:
+                score = score_chunk(c, query_words)
+                if score > 0:
+                    all_scored_chunks.append({
+                        "text": c,
+                        "source": doc_name,
+                        "score": score
+                    })
+                    
+        all_scored_chunks.sort(key=lambda x: x["score"], reverse=True)
+        top_chunks = all_scored_chunks[:4]
+    
+    # Format context
+    context_parts = []
+    for c in top_chunks:
+        context_parts.append(f"Source: {c['source']}\nContent: {c['text']}")
+    
+    context = "\n---\n".join(context_parts) if context_parts else "No specific policy text matches your query terms."
+    
+    # Format history
+    history_str = ""
+    if history:
+        for msg in history[-5:]:  # Last 5 messages
+            role = msg.get("role", "user").upper()
+            content = msg.get("content", "")
+            history_str += f"{role}: {content}\n"
+            
+    # Format prompt using the updated system RAG prompt
+    prompt = f"""You are a friendly and professional healthcare insurance assistant. 
+The current user you are talking to is: {user_name}.
+
+Guidelines:
+1. Primary Source: Use the provided context from the insurance policies to answer questions about coverages, limits, exclusions, and claims. Ground your answers in these documents.
+2. Personal Info: If the user asks about themselves (e.g., their name), address them as {user_name}.
+3. General Advice / Greetings: If the user asks general questions (e.g., greetings, general health advice, general insurance definitions), answer them politely using your general knowledge, but clarify that this is general advice and not specified in their uploaded policy documents.
+4. Missing Policy Facts: If the user asks a specific question about their policy coverages that is NOT in the context, politely state: "I cannot find this information in the selected policies."
+
+CONTEXT FROM INSURANCE POLICIES:
+{context}
+
+USER QUERY:
+{query}
+
+CHAT HISTORY:
+{history_str}
+
+Please provide a structured, friendly response. If quoting policy terms, specify the source document name."""
+
+    try:
+        async for token in call_ollama_stream(prompt, num_predict=512):
+            yield token
+    except Exception as e:
+        logger.warning(f"Ollama RAG stream failed: {e}")
+        fallback_msg = "Ollama is currently offline. Based on the matches:\n"
+        if top_chunks:
+            best = top_chunks[0]
+            fallback_msg += f"Most relevant source: {best['source']}\n\"{best['text'][:300]}...\""
+        else:
+            fallback_msg += "No matching information found."
+        for word in fallback_msg.split(" "):
+            yield word + " "
+            await asyncio.sleep(0.05)
 
 

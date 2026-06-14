@@ -64,6 +64,9 @@ class Document(Base):
     reminders: Mapped[list["PolicyReminder"]] = relationship(  # noqa
         "PolicyReminder", back_populates="document", cascade="all, delete-orphan"
     )
+    chunks: Mapped[list["DocumentChunk"]] = relationship(  # noqa
+        "DocumentChunk", back_populates="document", cascade="all, delete-orphan"
+    )
 
     def __repr__(self):
         return f"<Document {self.original_filename}>"
@@ -88,3 +91,25 @@ class ExtractedField(Base):
     )
 
     document: Mapped["Document"] = relationship("Document", back_populates="extracted_fields")  # noqa
+
+
+class DocumentChunk(Base):
+    __tablename__ = "document_chunks"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4()), index=True
+    )
+    document_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    text_content: Mapped[str] = mapped_column(Text, nullable=False)
+    # Store embedding floats as serialized JSON string (e.g. "[0.021, -0.043, ...]")
+    embedding: Mapped[str] = mapped_column(Text, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+
+    document: Mapped["Document"] = relationship("Document", back_populates="chunks")  # noqa
+

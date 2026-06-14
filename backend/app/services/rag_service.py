@@ -7,6 +7,102 @@ from typing import List, Dict, Any, Tuple
 from loguru import logger
 
 from app.services.ai_service import call_ollama, extract_json_from_response
+import json
+import httpx
+from app.core.config import settings
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.models.document import DocumentChunk
+
+async def generate_embeddings(text: str) -> List[float]:
+    """Generate 768-dimensional semantic vector embedding using nomic-embed-text from Ollama."""
+    url = f"{settings.OLLAMA_BASE_URL}/api/embeddings"
+    payload = {
+        "model": "nomic-embed-text",
+        "prompt": text
+    }
+    
+    # Stable connection on Windows (localhost -> 127.0.0.1)
+    if "localhost" in url:
+        url = url.replace("localhost", "127.0.0.1")
+        
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, json=payload)
+            response.raise_for_status()
+            embedding = response.json().get("embedding")
+            if embedding:
+                return embedding
+    except Exception as e:
+        logger.warning(f"Failed to generate vector embedding via Ollama nomic-embed-text /api/embeddings: {e}. Trying /api/embed fallback...")
+        
+    # Fallback to /api/embed
+    url_embed = f"{settings.OLLAMA_BASE_URL}/api/embed"
+    if "localhost" in url_embed:
+        url_embed = url_embed.replace("localhost", "127.0.0.1")
+    payload_embed = {
+        "model": "nomic-embed-text",
+        "input": text
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url_embed, json=payload_embed)
+            response.raise_for_status()
+            embeddings = response.json().get("embeddings")
+            if embeddings and len(embeddings) > 0:
+                return embeddings[0]
+    except Exception as fallback_e:
+        logger.error(f"Fallback embeddings call also failed: {fallback_e}")
+        
+    # Return zero vector fallback
+    logger.warning("Ollama embeddings service offline. Returning zero vector fallback.")
+    return [0.0] * 768
+
+
+async def generate_document_chunks(document_id: str, text_content: str, db: AsyncSession):
+    """Chunk document text, compute semantic embeddings, and store them in SQLite."""
+    logger.info(f"Chunking and embedding document {document_id}...")
+    
+    # Chunk text
+    chunks = chunk_text(text_content)
+    if not chunks:
+        logger.warning(f"No text content to chunk for document {document_id}")
+        return
+        
+    logger.info(f"Generated {len(chunks)} chunks for document {document_id}. Generating vector embeddings...")
+    
+    # Delete any existing chunks
+    from sqlalchemy import delete
+    await db.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document_id))
+    await db.flush()
+    
+    # Generate and save chunk embeddings
+    for idx, chunk in enumerate(chunks):
+        embedding_vector = await generate_embeddings(chunk)
+        serialized_embedding = json.dumps(embedding_vector)
+        
+        db_chunk = DocumentChunk(
+            document_id=document_id,
+            chunk_index=idx,
+            text_content=chunk,
+            embedding=serialized_embedding
+        )
+        db.add(db_chunk)
+        
+    await db.flush()
+    logger.info(f"✅ Successfully saved {len(chunks)} vector chunks in SQLite for document {document_id}")
+
+
+def cosine_similarity(v1: List[float], v2: List[float]) -> float:
+    """Calculate the cosine similarity between two float vectors."""
+    if not v1 or not v2 or len(v1) != len(v2):
+        return 0.0
+    dot_product = sum(a * b for a, b in zip(v1, v2))
+    norm_a = math.sqrt(sum(a * a for a in v1))
+    norm_b = math.sqrt(sum(b * b for b in v2))
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    return dot_product / (norm_a * norm_b)
+
 
 # ─────────────────────────────────────────
 # Prompts
@@ -284,36 +380,61 @@ def generate_mock_qa_answer(query: str, document_text: str) -> str:
 # RAG Query & Evaluation Execution
 # ─────────────────────────────────────────
 
-async def query_rag_pipeline(document_text: str, query: str, evaluate: bool = False) -> Dict[str, Any]:
+async def query_rag_pipeline(document_id: str, document_text: str, query: str, db: AsyncSession, evaluate: bool = False) -> Dict[str, Any]:
     """Execute full RAG pipeline and perform evaluation metrics scoring."""
     start_time = time.time()
     
-    # 1. Chunk document
-    chunks = chunk_text(document_text)
-    if not chunks:
-        return {
-            "answer": "No readable text found in document.",
-            "context": [],
-            "evaluation": {
-                "faithfulness": 0.0,
-                "faithfulness_reasoning": "No text content.",
-                "answer_relevance": 0.0,
-                "answer_relevance_reasoning": "No text content.",
-                "context_relevance": 0.0,
-                "latency": 0.0
-            }
-        }
+    # 1. Fetch chunks and their vector embeddings from SQLite
+    from sqlalchemy import select
+    res = await db.execute(select(DocumentChunk).where(DocumentChunk.document_id == document_id))
+    db_chunks = res.scalars().all()
+    
+    retrieved = []
+    context_relevance = 0.0
+    
+    if db_chunks:
+        # Semantic search using vector embeddings
+        query_emb = await generate_embeddings(query)
         
-    # 2. Retrieve relevant context
-    retrieved = retrieve_context(query, chunks, top_k=3)
-    context_str = "\n\n".join(f"[Chunk {i+1}] {item[0]}" for i, item in enumerate(retrieved))
-    context_relevance = sum(item[1] for item in retrieved) / len(retrieved) if retrieved else 0.0
+        chunks_with_scores = []
+        for chunk in db_chunks:
+            try:
+                chunk_emb = json.loads(chunk.embedding)
+                sim = cosine_similarity(query_emb, chunk_emb)
+                chunks_with_scores.append((chunk.text_content, sim))
+            except Exception as parse_e:
+                logger.error(f"Failed to parse embedding for chunk {chunk.id}: {parse_e}")
+                
+        # Sort descending and take top 3
+        chunks_with_scores.sort(key=lambda x: x[1], reverse=True)
+        retrieved = chunks_with_scores[:3]
+        context_relevance = sum(item[1] for item in retrieved) / len(retrieved) if retrieved else 0.0
+    else:
+        # Backward compatibility fallback: chunk on-the-fly and use TF-IDF
+        logger.warning(f"No vector chunks found for document {document_id} in DB. Using TF-IDF fallback.")
+        chunks = chunk_text(document_text)
+        if not chunks:
+            return {
+                "answer": "No readable text found in document.",
+                "context": [],
+                "evaluation": {
+                    "faithfulness": 0.0,
+                    "faithfulness_reasoning": "No text content.",
+                    "answer_relevance": 0.0,
+                    "answer_relevance_reasoning": "No text content.",
+                    "context_relevance": 0.0,
+                    "latency": 0.0
+                }
+            }
+        retrieved = retrieve_context(query, chunks, top_k=3)
+        context_relevance = sum(item[1] for item in retrieved) / len(retrieved) if retrieved else 0.0
     
     # 3. Generate answer
+    context_str = "\n\n".join(f"[Chunk {i+1}] {item[0]}" for i, item in enumerate(retrieved))
     prompt = RAG_PROMPT.format(context=context_str, query=query)
     is_fallback = False
     try:
-        answer = await call_ollama(prompt)
+        answer = await call_ollama(prompt, num_predict=512)
         answer = answer.strip()
     except Exception as e:
         logger.error(f"Failed to generate RAG answer via Ollama: {e}. Falling back to mock QA engine.")
@@ -336,8 +457,8 @@ async def query_rag_pipeline(document_text: str, query: str, evaluate: bool = Fa
                 
                 # Execute concurrently
                 faith_res, rel_res = await asyncio.gather(
-                    call_ollama(faith_prompt),
-                    call_ollama(rel_prompt),
+                    call_ollama(faith_prompt, num_predict=128),
+                    call_ollama(rel_prompt, num_predict=128),
                     return_exceptions=True
                 )
                 

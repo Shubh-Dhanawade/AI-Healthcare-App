@@ -201,19 +201,19 @@ export default function DocumentDetailPage() {
     try {
       const res = await aiApi.queryDocument(docId, textToSend);
       setChatHistory(prev => [
-        ...prev.filter(m => m.query !== textToSend || !m.isUser), // keep previous messages
+        ...prev,
         {
-          query: textToSend,
           answer: res.answer,
           context: res.context,
           evaluation: res.evaluation,
+          isUser: false,
           timestamp: new Date()
         }
       ]);
     } catch (err: any) {
       toast.error(err.response?.data?.detail || 'Failed to query model');
       // remove user message if failed
-      setChatHistory(prev => prev.filter(m => m.query !== textToSend));
+      setChatHistory(prev => prev.filter(m => m.query !== textToSend || !m.isUser));
     } finally {
       setIsQuerying(false);
     }
