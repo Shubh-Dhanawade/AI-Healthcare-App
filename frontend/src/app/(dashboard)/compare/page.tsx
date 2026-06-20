@@ -781,7 +781,7 @@ export default function ComparePage() {
           </div>
           <div>
             <h2 className="font-bold text-white text-base">AI Comparison Synthesis</h2>
-            <p className="text-xs text-slate-500">Llama 3.2 generated comparative analysis</p>
+            <p className="text-xs text-slate-500">AI generated comparative analysis</p>
           </div>
         </div>
 

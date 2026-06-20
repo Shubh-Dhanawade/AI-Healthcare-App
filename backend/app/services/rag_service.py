@@ -75,17 +75,19 @@ async def generate_document_chunks(document_id: str, text_content: str, db: Asyn
     await db.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document_id))
     await db.flush()
     
-    # Generate and save chunk embeddings
-    for idx, chunk in enumerate(chunks):
+    # Generate and save chunk embeddings concurrently
+    async def process_chunk(idx, chunk):
         embedding_vector = await generate_embeddings(chunk)
         serialized_embedding = json.dumps(embedding_vector)
-        
-        db_chunk = DocumentChunk(
+        return DocumentChunk(
             document_id=document_id,
             chunk_index=idx,
             text_content=chunk,
             embedding=serialized_embedding
         )
+        
+    db_chunks = await asyncio.gather(*[process_chunk(idx, chunk) for idx, chunk in enumerate(chunks)])
+    for db_chunk in db_chunks:
         db.add(db_chunk)
         
     await db.flush()

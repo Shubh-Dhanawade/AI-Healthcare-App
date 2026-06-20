@@ -211,7 +211,8 @@ cd backend
 
 # Create virtual environment
 python -m venv venv
-source venv/bin/activate  # Windows: 
+ # Windows venv\Scripts\activate.bat
+
 
 # Install dependencies
 pip install -r requirements.txt

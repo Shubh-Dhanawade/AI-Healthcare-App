@@ -100,7 +100,7 @@ function ChatResponseCard({ msg }: { msg: any }) {
     <div className="space-y-3 bg-slate-800/40 border border-white/5 p-4 rounded-2xl shadow-md fade-in mt-3">
       <div>
         <p className="text-xs font-bold text-emerald-400 mb-1 flex items-center gap-1.5">
-          <Brain className="w-3.5 h-3.5" /> AI Assistant (Llama 3.2 RAG)
+          <Brain className="w-3.5 h-3.5" /> AI Assistant
         </p>
         {msg.answer ? (
           <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">{answer}</p>
@@ -236,6 +236,26 @@ export default function DocumentDetailPage() {
     onError: (err: any) => toast.error(err.response?.data?.detail || 'Risk analysis failed'),
   });
 
+  const extractAllMutation = useMutation({
+    mutationFn: async () => {
+      const toastId = toast.loading('Running full policy audit (extracting fields and risks)...');
+      try {
+        await Promise.all([
+          aiApi.extractFields(docId),
+          aiApi.riskAnalysis(docId)
+        ]);
+        toast.success('Policy audit complete!', { id: toastId });
+      } catch (err: any) {
+        toast.error(err.response?.data?.detail || 'Audit failed', { id: toastId });
+        throw err;
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['document', docId] });
+      setActiveTab('fields');
+    }
+  });
+
   const handleSendQuery = async (queryText?: string) => {
     const textToSend = queryText || queryInput;
     if (!textToSend.trim()) return;
@@ -247,20 +267,77 @@ export default function DocumentDetailPage() {
     
     if (!queryText) setQueryInput('');
 
+    let assistantMessageIndex = -1;
+
     try {
-      const res = await aiApi.queryDocument(docId, textToSend);
-      setChatHistory(prev => [
-        ...prev,
-        {
-          answer: res.answer,
-          context: res.context,
-          evaluation: res.evaluation,
-          isUser: false,
-          timestamp: new Date()
+      // Map history for RAG endpoint
+      const historyPayload = chatHistory.map(m => ({
+        role: m.isUser ? 'user' : 'assistant',
+        content: m.isUser ? m.query : m.answer
+      }));
+
+      const token = localStorage.getItem('access_token');
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+
+      const response = await fetch(`${API_URL}/ai/chat/stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          query: textToSend,
+          document_ids: [docId],
+          history: historyPayload
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to initialize stream: ${response.statusText}`);
+      }
+
+      // Add empty assistant message to start streaming into
+      setChatHistory(prev => {
+        assistantMessageIndex = prev.length;
+        return [
+          ...prev,
+          {
+            answer: '',
+            context: [],
+            evaluation: null,
+            isUser: false,
+            timestamp: new Date()
+          }
+        ];
+      });
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let accumulatedContent = '';
+
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunk = decoder.decode(value, { stream: true });
+          accumulatedContent += chunk;
+
+          // Update the assistant message content
+          setChatHistory(prev => {
+            const updated = [...prev];
+            if (assistantMessageIndex !== -1 && updated[assistantMessageIndex]) {
+              updated[assistantMessageIndex] = {
+                ...updated[assistantMessageIndex],
+                answer: accumulatedContent
+              };
+            }
+            return updated;
+          });
         }
-      ]);
+      }
     } catch (err: any) {
-      toast.error(err.response?.data?.detail || 'Failed to query model');
+      toast.error(err.message || 'Failed to query model');
       // remove user message if failed
       setChatHistory(prev => prev.filter(m => m.query !== textToSend || !m.isUser));
     } finally {
@@ -330,7 +407,7 @@ export default function DocumentDetailPage() {
         <div className="flex items-center gap-3 p-4 rounded-xl"
           style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)' }}>
           <div className="w-4 h-4 border-2 border-amber-400/30 border-t-amber-400 rounded-full animate-spin" />
-          <p className="text-amber-300 text-sm">Document is being processed. Text extraction in progress...</p>
+          <p className="text-amber-300 text-sm">Document is being processed. Text extraction and AI analysis are in progress...</p>
         </div>
       )}
 

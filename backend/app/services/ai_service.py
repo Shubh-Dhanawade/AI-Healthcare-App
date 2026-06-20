@@ -7,135 +7,115 @@ import json
 import re
 import httpx
 import asyncio
+import hashlib
 from loguru import logger
 from typing import Optional
 
 from app.core.config import settings
 from sqlalchemy.ext.asyncio import AsyncSession
 
+# ─────────────────────────────────────────
+# In-memory result cache (keyed by doc text hash + task)
+# Clears on server restart — keeps memory safe, avoids repeated LLM calls
+# ─────────────────────────────────────────
+_ai_cache: dict[str, dict] = {}
+_rag_cache: dict[str, str] = {}  # Cache for RAG query responses
+
+def _cache_key(task: str, text: str) -> str:
+    """Create a stable cache key from task name + first 4000 chars of text."""
+    digest = hashlib.md5(text[:4000].encode()).hexdigest()
+    return f"{task}:{digest}"
+
+def _rag_cache_key(query: str, policy_ids: list) -> str:
+    """Cache key for RAG responses — keyed by query + sorted policy IDs."""
+    id_str = ",".join(sorted(str(i) for i in policy_ids))
+    digest = hashlib.md5(f"{query}:{id_str}".encode()).hexdigest()
+    return f"rag:{digest}"
+
 
 # ─────────────────────────────────────────
 # Prompt Templates
 # ─────────────────────────────────────────
 
-SUMMARIZATION_PROMPT = """You are a healthcare insurance expert. Analyze this insurance policy and provide a JSON summary that explains advanced details in simple, user-friendly plain language.
-If you encounter complex terminology (like deductibles, copays, sublimits, or waiting periods), explain briefly what they mean in practice for the user's out-of-pocket costs.
+# ── Concise prompts — fewer input tokens = faster model processing ──
 
-DOCUMENT TEXT:
-{document_text}
+SUMMARIZATION_PROMPT = """You are a healthcare insurance expert. Analyze the following insurance document and provide a summary.
+Return ONLY a valid JSON object matching the schema below. Do not output any preamble, explanation, or conversational text.
+Keep descriptions concise.
 
-Return ONLY valid JSON with these exact keys:
+Return format JSON:
 {{
-  "summary_text": "A comprehensive 1-paragraph summary explaining the policy's purpose, target audience, and overall value in plain language (maximum 150 words)",
-  "coverage_summary": "List top 3 key coverages. Include details of what is covered and explain any relevant sub-limits simply (bullet points, max 80 words total)",
-  "exclusions_summary": "List top 3 critical exclusions. Explain what is NOT covered so a non-expert can understand the scope (bullet points, max 80 words total)",
-  "waiting_period_summary": "List key waiting periods (initial, pre-existing diseases, specific treatments) and explain how they delay benefits (bullet points, max 80 words total)",
-  "premium_summary": "List the premium, deductible, and co-payment details, explaining how these cost-sharing terms affect the user's wallet (bullet points, max 80 words total)"
-}}"""
+  "summary_text": "Executive summary of the policy (maximum 120 words)",
+  "coverage_summary": "Summary of major coverages and benefits (maximum 60 words)",
+  "exclusions_summary": "Summary of key exclusions and what is not covered (maximum 60 words)",
+  "waiting_period_summary": "Summary of waiting periods for pre-existing or standard diseases (maximum 60 words)",
+  "premium_summary": "Summary of premium, deductibles, and co-payment details (maximum 60 words)"
+}}
+
+DOCUMENT:
+{document_text}"""
 
 
-FIELD_EXTRACTION_PROMPT = """Extract key insurance policy fields from this document. Return ONLY valid JSON.
-If a field has specific conditions, limits, or sub-limits, include them in the value so the user gets complete context (keep under 15 words per value). If a field is not mentioned, use null.
+FIELD_EXTRACTION_PROMPT = """You are a healthcare insurance data entry clerk. Analyze the following health insurance document text and extract values for the requested fields.
+If a field is not explicitly mentioned or cannot be found in the text, use null or "Not specified".
+Do not create any extra keys. Return ONLY a valid JSON object matching the schema below. Do not output any markdown code blocks, preamble, or trailing text.
 
-DOCUMENT TEXT:
-{document_text}
-
-Return JSON:
+Return format JSON:
 {{
-  "policy_name": "Name of the insurance policy (e.g. 'Individual - Gold Plan')",
-  "insurer_name": "Name of the insurance company (e.g. 'LifeGuard Health Insurance Co.')",
-  "policy_number": "Policy number (e.g. 'LG-2025-IND-00742')",
-  "sum_insured": "Maximum coverage amount (e.g. '10,00,000')",
-  "premium_amount": "Total premium payable, including taxes if known (e.g. '14,691/year')",
-  "deductible": "Deductible amount (what you pay before insurance starts), use null if none",
-  "co_payment": "Co-payment percentage or amount (your share of every claim), use null if none",
-  "waiting_period": "Initial waiting period before illnesses are covered (e.g. '30 days except accidents')",
-  "coverage_type": "Type of coverage (e.g. 'Individual' or 'Family Floater')",
-  "policy_term": "Duration of the policy (e.g. '1 year')",
-  "network_hospitals": "Network hospitals listed (brief comma-separated list or count)",
-  "pre_existing_coverage": "Pre-existing disease coverage waiting period (e.g. '48 months')",
-  "maternity_coverage": "Maternity benefit details and waiting periods, use null if none",
-  "room_rent_limit": "Room rent sub-limit (e.g. '1% of Sum Insured per day; proportionate deduction applies')",
-  "claim_process": "Brief instructions on how to file cashless or reimbursement claims"
-}}"""
+  "policy_name": "the name of the policy plan",
+  "insurer_name": "the insurance provider name",
+  "policy_number": "the policy number",
+  "sum_insured": "overall coverage amount",
+  "premium_amount": "premium cost if specified",
+  "deductible": "deductible terms or amount",
+  "co_payment": "co-payment terms or percentage",
+  "waiting_period": "waiting period rules",
+  "coverage_type": "type of plan (family floater, individual, etc.)",
+  "policy_term": "policy duration",
+  "network_hospitals": "network hospital count or details",
+  "pre_existing_coverage": "waiting periods/terms for pre-existing diseases",
+  "maternity_coverage": "maternity benefit details/limits",
+  "room_rent_limit": "daily room rent limit",
+  "claim_process": "brief instructions on filing a claim"
+}}
+
+DOCUMENT:
+{document_text}"""
 
 
-RISK_ANALYSIS_PROMPT = """Analyze this insurance policy for risky, hidden, or unfavorable clauses. Identify up to 3 key risk areas. Return ONLY valid JSON.
-For each risk, provide a clear explanation of how it affects the user's out-of-pocket costs and give a highly actionable recommendation.
+RISK_ANALYSIS_PROMPT = """You are an insurance risk compliance auditor. Identify up to 3 risky clauses, exclusions, or limiting terms in the following health insurance policy document.
+For each risk, provide the exact clause text, risk type (waiting_period, exclusion, deductible, co_payment, coverage_limit), severity (low, medium, or high), a brief explanation, and a recommendation.
+Return ONLY a valid JSON object matching the schema below. Do not output any markdown code blocks, preamble, or trailing text.
 
-DOCUMENT TEXT:
-{document_text}
-
-Return:
+Return format JSON:
 {{
   "risks": [
     {{
-      "clause_text": "Exact short problematic clause text from document",
-      "risk_type": "waiting_period|exclusion|deductible|co_payment|hidden_condition|coverage_limit",
+      "clause_text": "the exact sentence or text of the clause from the document",
+      "risk_type": "waiting_period|exclusion|deductible|co_payment|coverage_limit",
       "severity": "low|medium|high",
-      "explanation": "Clear explanation of why this clause is risky, explaining the exact real-world financial impact (max 40 words)",
-      "recommendation": "Actionable advice on how to mitigate this risk, negotiate terms, or plan financially (max 40 words)"
+      "explanation": "why this clause presents a risk to the customer (maximum 35 words)",
+      "recommendation": "what action or alternative the customer should consider (maximum 35 words)"
     }}
   ],
   "overall_risk_level": "low|medium|high"
-}}"""
+}}
+
+DOCUMENT:
+{document_text}"""
 
 
-COMPARISON_PROMPT = """You are an expert insurance advisor. Compare the following healthcare insurance policies side-by-side based on their costs, coverage limits, restrictions, and risk profiles.
-
-POLICIES DATA:
+COMPARISON_PROMPT = """Compare policies. JSON:
 {policies_data}
-
-Return ONLY valid JSON with these exact keys:
-{{
-  "synthesis": "A brief 1-paragraph summary of the main differences and trade-offs between these policies (maximum 100 words)",
-  "best_for": "A bulleted or short description specifying who each policy is best suited for (maximum 50 words)",
-  "verdict": "Your expert recommendation/verdict on which policy offers the best overall value and why (maximum 50 words)",
-  "feature_winners": [
-    {{
-      "feature": "Premium Cost | Coverage Limits | Deductibles & Co-payments | Network Size | Waiting Periods",
-      "winner": "Exact Name of the winning policy (or 'Tie' if equal)",
-      "reason": "Very brief explanation of why this policy wins for this feature (maximum 15 words)"
-    }}
-  ]
-}}"""
+{{"synthesis":"<80w","best_for":"<40w","verdict":"<40w","feature_winners":[{{"feature":"","winner":"","reason":"<12w"}}]}}"""
 
 
-RAG_PROMPT = """You are a helpful healthcare insurance assistant. Answer the user's query using the provided context from the policy documents. 
-Keep your response concise, professional, and clear. If the answer is not mentioned in the context, say "I cannot find this information in the selected policies."
-
-CONTEXT FROM INSURANCE POLICIES:
-{context}
-
-USER QUERY:
-{query}
-
-CHAT HISTORY:
-{chat_history}
-
-Please provide a structured, friendly response. If quoting policy terms, specify the source document name."""
+# NOTE: RAG_PROMPT is now only used in rag_service.py (single-doc pipeline).
+# The chat RAG (query_policy_rag / query_policy_rag_stream) builds prompts
+# as plain strings to avoid Python .format() issues with policy text containing { }
 
 
-TRANSLATE_PROMPT = """You are an expert translator. Translate the English text into {target_language}.
-
-Rules:
-1. Translate to {target_language} language.
-2. Use the correct script for {target_language}. For example, if target language is Marathi, use Devanagari script (like 'पॉलिसीचे नियम व अटी'). If Hindi, use Devanagari script (like 'पॉलिसी के नियम और शर्तें').
-3. Do NOT mix or use letters from other scripts like Gujarati or Bengali.
-4. Output ONLY the translation. Do NOT include any explanations, introductory text, or formatting.
-
-Examples for Marathi (मराठी):
-English: "This policy covers hospital room rent up to 1% of sum insured."
-Marathi: "या पॉलिसीमध्ये विमा रक्कमेच्या १% पर्यंत रुग्णालयाच्या खोलीच्या भाड्याचा समावेश आहे."
-
-English: "Pre-existing diseases are covered after a waiting period of 3 years."
-Marathi: "३ वर्षांच्या प्रतीक्षा कालावधीनंतर आधीपासून असलेले आजार कव्हर केले जातात."
-
-Examples for Hindi (हिंदी):
-English: "This policy covers hospital room rent up to 1% of sum insured."
-Hindi: "यह पॉलिसी बीमा राशि के १% तक अस्पताल के कमरे के किराए को कवर करती है।"
-
-TEXT TO TRANSLATE:
+TRANSLATE_PROMPT = """Translate to {target_language}:
 {text}"""
 
 
@@ -261,27 +241,60 @@ MOCK_RISKS = [
 # Ollama Client
 # ─────────────────────────────────────────
 
-async def call_ollama(prompt: str, model: Optional[str] = None, num_predict: int = 1024) -> str:
-    """Call Ollama API. Raises httpx.ConnectError if unavailable."""
+async def warmup_model() -> None:
+    """Send a tiny keep-alive prompt to Ollama so model weights stay resident in VRAM."""
+    try:
+        model = settings.OLLAMA_MODEL
+        url = f"{settings.OLLAMA_BASE_URL}/api/chat"
+        if "localhost" in url:
+            url = url.replace("localhost", "127.0.0.1")
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": False,
+            "options": {"num_predict": 1, "num_ctx": 128, "temperature": 0},
+        }
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            await client.post(url, json=payload)
+        logger.info("Ollama model warmup complete — weights resident in memory")
+    except Exception as e:
+        logger.warning(f"Model warmup skipped: {e}")
+
+
+async def call_ollama(
+    prompt: str,
+    model: Optional[str] = None,
+    num_predict: int = 700,
+    num_ctx: int = 1024,
+) -> str:
+    """Call Ollama API with aggressive speed-optimised options."""
     model = model or settings.OLLAMA_MODEL
-    url = f"{settings.OLLAMA_BASE_URL}/api/generate"
+    url = f"{settings.OLLAMA_BASE_URL}/api/chat"
+    if "localhost" in url:
+        url = url.replace("localhost", "127.0.0.1")
 
     payload = {
         "model": model,
-        "prompt": prompt,
+        "messages": [{"role": "user", "content": prompt}],
         "stream": False,
         "options": {
-            "temperature": 0.1,
-            "num_predict": num_predict,
-            "num_ctx": 4096,
+            "temperature": 0,          # Greedy decoding — zero sampling overhead
+            "num_predict": num_predict, # Strict token limit per task
+            "num_ctx": num_ctx,        # REDUCED context for speed — 1024 base instead of 2048
+            "num_batch": 1024,         # Larger batches = faster prefill 
+            "use_mmap": True,          # Memory-map for fast reloads
+            "use_mlock": False,        # Disable model locking in RAM to avoid slow OS virtual memory allocation
+            "repeat_penalty": 1.0,     # No sampling overhead
+            "top_k": 1,                # Greedy only — fastest
+            "top_p": 1.0,              # Disable nucleus sampling
         },
     }
 
-    logger.info(f"Calling Ollama model={model} (num_predict={num_predict})")
-    async with httpx.AsyncClient(timeout=240.0) as client:
+    logger.info(f"Ollama: {model} predict={num_predict} ctx={num_ctx}")
+    async with httpx.AsyncClient(timeout=180.0) as client:  # Increased timeout from 60s to 180s to prevent early aborts
         response = await client.post(url, json=payload)
         response.raise_for_status()
-        return response.json().get("response", "")
+        return response.json().get("message", {}).get("content", "")
 
 
 def extract_json_from_response(text: str) -> dict:
@@ -314,46 +327,65 @@ def extract_json_from_response(text: str) -> dict:
 # AI Service Functions
 # ─────────────────────────────────────────
 
-async def generate_summary(document_text: str) -> dict:
-    """Generate AI summary. Falls back to demo data if Ollama unavailable."""
-    truncated = document_text[:6000] if len(document_text) > 6000 else document_text
+def _clean_field(val):
+    if val is None:
+        return None
+    if isinstance(val, list):
+        return "\n".join(str(item) for item in val)
+    return str(val)
 
+
+async def generate_summary(document_text: str) -> dict:
+    """Generate AI summary. Cached per document hash, falls back to demo data."""
+    ck = _cache_key("summary", document_text)
+    if ck in _ai_cache:
+        logger.info("Cache hit: summary")
+        return _ai_cache[ck]
+
+    # Trim to 2000 chars — enough context, MUCH faster prefill
+    truncated = document_text[:2000] if len(document_text) > 2000 else document_text
     try:
-        response = await call_ollama(SUMMARIZATION_PROMPT.format(document_text=truncated))
+        # 400 tokens max (reduced from 600) 
+        response = await call_ollama(
+            SUMMARIZATION_PROMPT.format(document_text=truncated),
+            num_predict=600,
+            num_ctx=2048,
+        )
         result = extract_json_from_response(response)
         if result.get("summary_text"):
-            logger.info("✅ Ollama summarization successful")
-            
-            def clean_field(val):
-                if val is None:
-                    return None
-                if isinstance(val, list):
-                    return "\n".join(str(item) for item in val)
-                return str(val)
-
-            return {
-                "summary_text": clean_field(result.get("summary_text", MOCK_SUMMARY["summary_text"])),
-                "coverage_summary": clean_field(result.get("coverage_summary")),
-                "exclusions_summary": clean_field(result.get("exclusions_summary")),
-                "waiting_period_summary": clean_field(result.get("waiting_period_summary")),
-                "premium_summary": clean_field(result.get("premium_summary")),
+            logger.info("Ollama summarization successful")
+            out = {
+                "summary_text": _clean_field(result.get("summary_text", MOCK_SUMMARY["summary_text"])),
+                "coverage_summary": _clean_field(result.get("coverage_summary")),
+                "exclusions_summary": _clean_field(result.get("exclusions_summary")),
+                "waiting_period_summary": _clean_field(result.get("waiting_period_summary")),
+                "premium_summary": _clean_field(result.get("premium_summary")),
             }
+            _ai_cache[ck] = out
+            return out
     except Exception as e:
         logger.warning(f"Ollama unavailable ({e}), using demo summary data")
-
-    # Return realistic mock data
     return dict(MOCK_SUMMARY)
 
 
 async def extract_policy_fields(document_text: str) -> list[dict]:
-    """Extract key fields. Falls back to demo data if Ollama unavailable."""
-    truncated = document_text[:6000] if len(document_text) > 6000 else document_text
+    """Extract key fields. Cached per document hash, falls back to demo data."""
+    ck = _cache_key("fields", document_text)
+    if ck in _ai_cache:
+        logger.info("Cache hit: fields")
+        return _ai_cache[ck]
 
+    truncated = document_text[:2000] if len(document_text) > 2000 else document_text
     try:
-        response = await call_ollama(FIELD_EXTRACTION_PROMPT.format(document_text=truncated))
+        # Fields extraction is pure JSON — 200 tokens max (reduced from 400)
+        response = await call_ollama(
+            FIELD_EXTRACTION_PROMPT.format(document_text=truncated),
+            num_predict=600,
+            num_ctx=2048,
+        )
         result = extract_json_from_response(response)
         if result:
-            logger.info("✅ Ollama field extraction successful")
+            logger.info("Ollama field extraction successful")
             field_category_map = {
                 "policy_name": "policy_info", "insurer_name": "policy_info",
                 "policy_number": "policy_info", "sum_insured": "coverage",
@@ -364,31 +396,41 @@ async def extract_policy_fields(document_text: str) -> list[dict]:
                 "maternity_coverage": "coverage", "room_rent_limit": "restrictions",
                 "claim_process": "process",
             }
-            fields = []
-            for key, value in result.items():
-                if value and value not in ("null", None):
-                    fields.append({
-                        "field_name": key.replace("_", " ").title(),
-                        "field_value": str(value),
-                        "field_category": field_category_map.get(key, "general"),
-                    })
+            fields = [
+                {
+                    "field_name": key.replace("_", " ").title(),
+                    "field_value": str(value),
+                    "field_category": field_category_map.get(key, "general"),
+                }
+                for key, value in result.items()
+                if value and value not in ("null", None)
+            ]
+            _ai_cache[ck] = fields
             return fields
     except Exception as e:
         logger.warning(f"Ollama unavailable ({e}), using demo field data")
-
     return list(MOCK_FIELDS)
 
 
 async def analyze_risks(document_text: str) -> dict:
-    """Detect risky clauses. Falls back to demo data if Ollama unavailable."""
-    truncated = document_text[:6000] if len(document_text) > 6000 else document_text
+    """Detect risky clauses. Cached per document hash, falls back to demo data."""
+    ck = _cache_key("risks", document_text)
+    if ck in _ai_cache:
+        logger.info("Cache hit: risks")
+        return _ai_cache[ck]
 
+    truncated = document_text[:2000] if len(document_text) > 2000 else document_text
     try:
-        response = await call_ollama(RISK_ANALYSIS_PROMPT.format(document_text=truncated))
+        # Risk JSON is compact — 250 tokens max (reduced from 350)
+        response = await call_ollama(
+            RISK_ANALYSIS_PROMPT.format(document_text=truncated),
+            num_predict=600,
+            num_ctx=2048,
+        )
         result = extract_json_from_response(response)
         if result.get("risks"):
-            logger.info("✅ Ollama risk analysis successful")
-            return {
+            logger.info("Ollama risk analysis successful")
+            out = {
                 "risks": [
                     {
                         "clause_text": r.get("clause_text", ""),
@@ -401,9 +443,10 @@ async def analyze_risks(document_text: str) -> dict:
                 ],
                 "overall_risk_level": result.get("overall_risk_level", "medium"),
             }
+            _ai_cache[ck] = out
+            return out
     except Exception as e:
         logger.warning(f"Ollama unavailable ({e}), using demo risk data")
-
     return {"risks": list(MOCK_RISKS), "overall_risk_level": "high"}
 
 
@@ -444,7 +487,11 @@ async def generate_comparison_synthesis(policies_data: list[dict]) -> dict:
     policies_text = "\n\n".join(formatted_policies)
     
     try:
-        response = await call_ollama(COMPARISON_PROMPT.format(policies_data=policies_text))
+        response = await call_ollama(
+            COMPARISON_PROMPT.format(policies_data=policies_text),
+            num_predict=300,  # REDUCED from 700
+            num_ctx=1024  # REDUCED from 2048
+        )
         result = extract_json_from_response(response)
         if result.get("synthesis"):
             logger.info("✅ Ollama comparison synthesis successful")
@@ -518,111 +565,230 @@ def score_chunk(chunk: str, query_words: list[str]) -> float:
     return score
 
 
-async def query_policy_rag(policies: list[dict], query: str, db: AsyncSession = None, history: list[dict] = None) -> str:
+# ─────────────────────────────────────────
+# Comparison Intent Detection
+# ─────────────────────────────────────────
+
+_COMPARE_KEYWORDS = {
+    "compare", "comparison", "vs", "versus", "better", "best",
+    "difference", "differ", "which", "recommend", "recommendation",
+    "all policies", "both", "most benefit", "more benefit", "benefits in all",
+    "which policy", "should i choose", "more coverage",
+}
+
+def _is_comparison_query(query: str) -> bool:
+    """Return True if query is asking to compare across policies."""
+    q = query.lower()
+    return any(kw in q for kw in _COMPARE_KEYWORDS)
+
+
+def _build_context_and_prompt(
+    top_chunks: list[dict],
+    policies: list[dict],
+    query: str,
+    history_str: str,
+    user_name: str,
+    is_comparison: bool,
+) -> str:
+    """
+    Build a clean prompt string without using Python .format() so that
+    curly braces inside policy PDF text never corrupt the output.
+    """
+    # Escape any stray braces in chunk text (not needed since we concat, not .format)
+    if is_comparison:
+        # For comparison: group chunks by source policy
+        by_source: dict[str, list[str]] = {}
+        for c in top_chunks:
+            src = c["source"]
+            by_source.setdefault(src, []).append(c["text"][:400])
+
+        context_lines = []
+        for src, texts in by_source.items():
+            context_lines.append(f"=== {src} ===")
+            for t in texts:
+                context_lines.append(t)
+            context_lines.append("")
+        context_block = "\n".join(context_lines) if context_lines else "No policy text found."
+
+        policy_names = [p.get("filename", "Policy") for p in policies]
+        names_str = ", ".join(policy_names)
+
+        prompt = (
+            "You are HealthAI, an expert healthcare insurance advisor helping " + user_name + ".\n"
+            "\n"
+            "The user wants to COMPARE multiple insurance policies. You have "
+            + str(len(policies)) + " policies: " + names_str + ".\n"
+            "\n"
+            "Rules:\n"
+            "1. Compare the policies directly using the POLICY CONTEXT below.\n"
+            "2. Clearly label which benefit/detail belongs to which policy by name.\n"
+            "3. Use a table or bullet list grouped by policy name.\n"
+            "4. End with a brief recommendation.\n"
+            "5. Do NOT output 'ASSISTANT:', 'USER:', or 'context:' labels.\n"
+            "\n"
+            "POLICY CONTEXT:\n"
+            + context_block + "\n"
+            "\n"
+            "PREVIOUS CONVERSATION:\n" + history_str + "\n"
+            "User asked: " + query + "\n"
+            "\n"
+            "Comparison Answer:"
+        )
+    else:
+        context_lines = []
+        for c in top_chunks:
+            context_lines.append("[" + c["source"] + "]\n" + c["text"][:450])
+        context_block = "\n---\n".join(context_lines) if context_lines else "No relevant policy text found."
+
+        prompt = (
+            "You are HealthAI, a knowledgeable healthcare insurance assistant helping " + user_name + ".\n"
+            "\n"
+            "Rules:\n"
+            "1. Answer using ONLY the POLICY CONTEXT below. Be concise and specific.\n"
+            "2. Always mention the source document name when citing a fact.\n"
+            "3. Use bullet points or numbered steps where helpful.\n"
+            "4. Do NOT output 'ASSISTANT:', 'USER:', or 'context:' labels in your reply.\n"
+            "5. If the answer is not in the context, say: 'I could not find this information in the selected policies.'\n"
+            "6. NEVER output the word 'context' or curly braces in your answer.\n"
+            "\n"
+            "POLICY CONTEXT:\n"
+            + context_block + "\n"
+            "\n"
+            "PREVIOUS CONVERSATION:\n" + history_str + "\n"
+            "User asked: " + query + "\n"
+            "\n"
+            "Answer:"
+        )
+    return prompt
+
+
+async def query_policy_rag(
+    policies: list[dict],
+    query: str,
+    db: AsyncSession = None,
+    history: list[dict] = None,
+) -> str:
     """Answer user questions about policies using a local RAG pipeline with Ollama."""
+
+    # ── Greeting short-circuit ──
+    if _is_greeting(query):
+        logger.info(f"Greeting detected: '{query}' — skipping RAG pipeline (non-stream)")
+        return (
+            "Hi! 👋 I'm HealthAI, your healthcare insurance assistant. "
+            "How can I help you today? Feel free to ask me anything about your "
+            "uploaded insurance policies — coverage, premiums, exclusions, waiting periods, and more!"
+        )
+
+    is_comparison = _is_comparison_query(query) and len(policies) > 1
     all_scored_chunks = []
     top_chunks = []
     use_vector_search = False
-    
+
     if db:
         from app.models.document import DocumentChunk
         from app.services.rag_service import generate_embeddings, cosine_similarity
         from sqlalchemy import select
-        
+
         policy_ids = [p["id"] for p in policies if p.get("id")]
-        
+
         if policy_ids:
-            res = await db.execute(select(DocumentChunk).where(DocumentChunk.document_id.in_(policy_ids)))
+            res = await db.execute(
+                select(DocumentChunk).where(DocumentChunk.document_id.in_(policy_ids))
+            )
             db_chunks = res.scalars().all()
-            
+
             if db_chunks:
                 use_vector_search = True
                 query_emb = await generate_embeddings(query)
-                
+
                 for chunk in db_chunks:
                     try:
-                        p_dict = next((p for p in policies if p.get("id") == chunk.document_id), {})
+                        p_dict = next(
+                            (p for p in policies if p.get("id") == chunk.document_id), {}
+                        )
                         doc_name = p_dict.get("filename", "Policy")
-                        
                         chunk_emb = json.loads(chunk.embedding)
                         sim = cosine_similarity(query_emb, chunk_emb)
-                        
-                        all_scored_chunks.append({
-                            "text": chunk.text_content,
-                            "source": doc_name,
-                            "score": sim
-                        })
+                        all_scored_chunks.append(
+                            {"text": chunk.text_content, "source": doc_name, "score": sim}
+                        )
                     except Exception as e:
                         logger.error(f"Failed to process chunk vector in query_policy_rag: {e}")
-                        
+
                 all_scored_chunks.sort(key=lambda x: x["score"], reverse=True)
-                top_chunks = all_scored_chunks[:4]
-                
+
+                if is_comparison:
+                    # Ensure at least 1 chunk per policy for fair comparison
+                    seen_sources: set[str] = set()
+                    top_chunks = []
+                    for ch in all_scored_chunks:
+                        if ch["source"] not in seen_sources:
+                            top_chunks.append(ch)
+                            seen_sources.add(ch["source"])
+                        if len(seen_sources) == len(policies):
+                            break
+                    # fill up to 6 chunks total
+                    for ch in all_scored_chunks:
+                        if len(top_chunks) >= 6:
+                            break
+                        if ch not in top_chunks:
+                            top_chunks.append(ch)
+                else:
+                    top_chunks = all_scored_chunks[:4]
+
     if not use_vector_search:
-        logger.warning("No database vector chunks available for cross-document RAG. Falling back to keyword search.")
+        logger.warning("No vector chunks; falling back to keyword search.")
         query_words = [w.lower() for w in re.findall(r"\w+", query)]
-        
         for p in policies:
             doc_name = p.get("filename", "Policy")
             doc_text = p.get("text", "")
             if not doc_text:
                 continue
-            chunks = chunk_text(doc_text)
-            for c in chunks:
+            for c in chunk_text(doc_text, chunk_size=400, overlap=100):
                 score = score_chunk(c, query_words)
                 if score > 0:
-                    all_scored_chunks.append({
-                        "text": c,
-                        "source": doc_name,
-                        "score": score
-                    })
-                    
+                    all_scored_chunks.append({"text": c, "source": doc_name, "score": score})
         all_scored_chunks.sort(key=lambda x: x["score"], reverse=True)
         top_chunks = all_scored_chunks[:4]
-    
-    # Format context
-    context_parts = []
-    for c in top_chunks:
-        context_parts.append(f"Source: {c['source']}\nContent: {c['text']}")
-    
-    context = "\n---\n".join(context_parts) if context_parts else "No specific policy text matches your query terms."
-    
+
     # Format history
     history_str = ""
     if history:
-        for msg in history[-5:]:  # Last 5 messages
+        for msg in history[-3:]:
             role = msg.get("role", "user").upper()
-            content = msg.get("content", "")
-            history_str += f"{role}: {content}\n"
-            
-    prompt = RAG_PROMPT.format(
-        context=context,
-        query=query,
-        chat_history=history_str
+            content = msg.get("content", "")[:150]
+            history_str += role + ": " + content + "\n"
+
+    prompt = _build_context_and_prompt(
+        top_chunks, policies, query, history_str, "there", is_comparison
     )
-    
+
     try:
-        response = await call_ollama(prompt, num_predict=512)
+        response = await call_ollama(prompt, num_predict=300, num_ctx=2048)
         if response:
             return response.strip()
     except Exception as e:
         logger.warning(f"Ollama RAG failed: {e}")
-        
+
     # Offline fallback
     if top_chunks:
-        best_match = top_chunks[0]
+        best = top_chunks[0]
         return (
-            f"[Offline Mode] Ollama is currently offline. Based on a search of your policies, "
-            f"here is the most relevant section found in **{best_match['source']}**:\n\n"
-            f"\"{best_match['text'].strip()}...\""
+            f"[Offline Mode] Based on **{best['source']}**:\n\n"
+            f"\"{best['text'].strip()[:300]}...\""
         )
-    return "Ollama is currently offline and I couldn't find any matching terms in the policies to assist you."
+    return "Ollama is offline and no matching information found."
 
 
 async def translate_text(text: str, target_language: str) -> str:
-    """Translate text using Ollama."""
+    """Translate text using Ollama — optimized for speed."""
     try:
-        response = await call_ollama(TRANSLATE_PROMPT.format(text=text, target_language=target_language))
+        # Limit translation to 300 tokens — usually enough for policy snippets
+        response = await call_ollama(
+            TRANSLATE_PROMPT.format(text=text[:1000], target_language=target_language),  # REDUCED input
+            num_predict=300,
+            num_ctx=512  # MINIMAL context for translation
+        )
         if response:
             return response.strip()
     except Exception as e:
@@ -663,35 +829,43 @@ async def generate_claims_checklist(policy_name: str, fields_summary: str, treat
     }
 
 
-async def call_ollama_stream(prompt: str, model: Optional[str] = None, num_predict: int = 512):
-    """Generate streaming tokens from Ollama."""
+async def call_ollama_stream(prompt: str, model: Optional[str] = None, num_predict: int = 200):
+    """Generate streaming tokens from Ollama — optimized for speed."""
     model = model or settings.OLLAMA_MODEL
-    url = f"{settings.OLLAMA_BASE_URL}/api/generate"
+    url = f"{settings.OLLAMA_BASE_URL}/api/chat"
     
     if "localhost" in url:
         url = url.replace("localhost", "127.0.0.1")
 
     payload = {
         "model": model,
-        "prompt": prompt,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
         "stream": True,
         "options": {
-            "temperature": 0.1,
-            "num_predict": num_predict,
-            "num_ctx": 4096,
+            "temperature": 0,  # CHANGED from 0.1 to 0 for greedy decoding
+            "num_predict": num_predict,  # REDUCED from 512
+            "num_ctx": 1024,  # REDUCED from 4096
+            "num_batch": 1024,
+            "top_k": 1,  # GREEDY only
+            "top_p": 1.0,
         },
     }
 
-    logger.info(f"Calling Ollama stream model={model} (num_predict={num_predict})")
+    logger.info(f"Ollama stream: {model} predict={num_predict}")
     try:
-        async with httpx.AsyncClient(timeout=240.0) as client:
+        async with httpx.AsyncClient(timeout=180.0) as client:
             async with client.stream("POST", url, json=payload) as response:
                 response.raise_for_status()
                 async for chunk in response.aiter_lines():
                     if chunk:
                         try:
                             data = json.loads(chunk)
-                            yield data.get("response", "")
+                            yield data.get("message", {}).get("content", "")
                             if data.get("done", False):
                                 break
                         except Exception as e:
@@ -701,110 +875,160 @@ async def call_ollama_stream(prompt: str, model: Optional[str] = None, num_predi
         raise
 
 
-async def query_policy_rag_stream(policies: list[dict], query: str, db: AsyncSession = None, history: list[dict] = None, user_name: str = "krushna"):
+# ─────────────────────────────────────────
+# Greeting / Conversational Intent Detection
+# ─────────────────────────────────────────
+
+_GREETING_PATTERNS = {
+    "hi", "hii", "hiii", "hey", "hello", "heya", "hola", "howdy",
+    "good morning", "good afternoon", "good evening", "good night",
+    "thanks", "thank you", "ty", "thx", "ok", "okay", "bye", "goodbye",
+    "how are you", "what's up", "sup", "yo", "greetings",
+}
+
+def _is_greeting(query: str) -> bool:
+    """Return True if query is a casual greeting or chitchat, not a policy question."""
+    q = query.strip().lower().rstrip("!?.")
+    # Exact match in greeting set
+    if q in _GREETING_PATTERNS:
+        return True
+    # Very short single-word queries that aren't meaningful policy terms
+    words = q.split()
+    if len(words) <= 2 and q in _GREETING_PATTERNS:
+        return True
+    return False
+
+
+async def query_policy_rag_stream(
+    policies: list[dict],
+    query: str,
+    db: AsyncSession = None,
+    history: list[dict] = None,
+    user_name: str = "there",
+):
     """Answer user questions about policies using a local RAG pipeline with streaming Ollama."""
-    all_scored_chunks = []
-    top_chunks = []
+
+    # ── Greeting short-circuit: bypass RAG entirely for casual messages ──
+    if _is_greeting(query):
+        logger.info(f"Greeting detected: '{query}' — skipping RAG pipeline")
+        greeting_reply = (
+            "Hi " + user_name + "! 👋 I'm HealthAI, your healthcare insurance assistant. "
+            "How can I help you today? Feel free to ask me anything about your uploaded "
+            "insurance policies — coverage, premiums, exclusions, waiting periods, and more!"
+        )
+        for word in greeting_reply.split(" "):
+            yield word + " "
+            await asyncio.sleep(0.015)
+        return
+
+    is_comparison = _is_comparison_query(query) and len(policies) > 1
+
+    # Fast-return cached response (word-by-word to maintain streaming UX)
+    policy_ids_for_cache = [p.get("id", p.get("filename", "")) for p in policies]
+    ck = _rag_cache_key(query, policy_ids_for_cache)
+    if ck in _rag_cache:
+        logger.info("Cache hit: RAG stream query")
+        cached = _rag_cache[ck]
+        for word in cached.split(" "):
+            yield word + " "
+        return
+
+    all_scored_chunks: list[dict] = []
+    top_chunks: list[dict] = []
     use_vector_search = False
-    
+
     if db:
         from app.models.document import DocumentChunk
         from app.services.rag_service import generate_embeddings, cosine_similarity
         from sqlalchemy import select
-        
+
         policy_ids = [p["id"] for p in policies if p.get("id")]
-        
+
         if policy_ids:
-            res = await db.execute(select(DocumentChunk).where(DocumentChunk.document_id.in_(policy_ids)))
+            res = await db.execute(
+                select(DocumentChunk).where(DocumentChunk.document_id.in_(policy_ids))
+            )
             db_chunks = res.scalars().all()
-            
+
             if db_chunks:
                 use_vector_search = True
                 query_emb = await generate_embeddings(query)
-                
+
                 for chunk in db_chunks:
                     try:
-                        p_dict = next((p for p in policies if p.get("id") == chunk.document_id), {})
+                        p_dict = next(
+                            (p for p in policies if p.get("id") == chunk.document_id), {}
+                        )
                         doc_name = p_dict.get("filename", "Policy")
-                        
                         chunk_emb = json.loads(chunk.embedding)
                         sim = cosine_similarity(query_emb, chunk_emb)
-                        
-                        all_scored_chunks.append({
-                            "text": chunk.text_content,
-                            "source": doc_name,
-                            "score": sim
-                        })
+                        all_scored_chunks.append(
+                            {"text": chunk.text_content, "source": doc_name, "score": sim}
+                        )
                     except Exception as e:
                         logger.error(f"Failed to process chunk vector in query_policy_rag_stream: {e}")
-                        
+
                 all_scored_chunks.sort(key=lambda x: x["score"], reverse=True)
-                top_chunks = all_scored_chunks[:4]
-                
+
+                if is_comparison:
+                    # Ensure at least 1 chunk per policy for a fair comparison
+                    seen_sources: set[str] = set()
+                    top_chunks = []
+                    for ch in all_scored_chunks:
+                        if ch["source"] not in seen_sources:
+                            top_chunks.append(ch)
+                            seen_sources.add(ch["source"])
+                        if len(seen_sources) == len(policies):
+                            break
+                    # fill remaining slots up to 6 chunks
+                    for ch in all_scored_chunks:
+                        if len(top_chunks) >= 6:
+                            break
+                        if ch not in top_chunks:
+                            top_chunks.append(ch)
+                else:
+                    top_chunks = all_scored_chunks[:4]
+
     if not use_vector_search:
-        logger.warning("No database vector chunks available for cross-document RAG. Falling back to keyword search.")
+        logger.warning("No vector chunks; falling back to keyword search.")
         query_words = [w.lower() for w in re.findall(r"\w+", query)]
-        
         for p in policies:
             doc_name = p.get("filename", "Policy")
             doc_text = p.get("text", "")
             if not doc_text:
                 continue
-            chunks = chunk_text(doc_text)
-            for c in chunks:
+            for c in chunk_text(doc_text):
                 score = score_chunk(c, query_words)
                 if score > 0:
-                    all_scored_chunks.append({
-                        "text": c,
-                        "source": doc_name,
-                        "score": score
-                    })
-                    
+                    all_scored_chunks.append({"text": c, "source": doc_name, "score": score})
         all_scored_chunks.sort(key=lambda x: x["score"], reverse=True)
         top_chunks = all_scored_chunks[:4]
-    
-    # Format context
-    context_parts = []
-    for c in top_chunks:
-        context_parts.append(f"Source: {c['source']}\nContent: {c['text']}")
-    
-    context = "\n---\n".join(context_parts) if context_parts else "No specific policy text matches your query terms."
-    
-    # Format history
+
+    # Format history (last 3 turns only for speed)
     history_str = ""
     if history:
-        for msg in history[-5:]:  # Last 5 messages
+        for msg in history[-3:]:
             role = msg.get("role", "user").upper()
-            content = msg.get("content", "")
-            history_str += f"{role}: {content}\n"
-            
-    # Format prompt using the updated system RAG prompt
-    prompt = f"""You are a friendly and professional healthcare insurance assistant. 
-The current user you are talking to is: {user_name}.
+            content = msg.get("content", "")[:150]
+            history_str += role + ": " + content + "\n"
 
-Guidelines:
-1. Primary Source: Use the provided context from the insurance policies to answer questions about coverages, limits, exclusions, and claims. Ground your answers in these documents.
-2. Personal Info: If the user asks about themselves (e.g., their name), address them as {user_name}.
-3. General Advice / Greetings: If the user asks general questions (e.g., greetings, general health advice, general insurance definitions), answer them politely using your general knowledge, but clarify that this is general advice and not specified in their uploaded policy documents.
-4. Missing Policy Facts: If the user asks a specific question about their policy coverages that is NOT in the context, politely state: "I cannot find this information in the selected policies."
+    # Build prompt using string concatenation — NO Python .format() to avoid brace issues
+    prompt = _build_context_and_prompt(
+        top_chunks, policies, query, history_str, user_name, is_comparison
+    )
 
-CONTEXT FROM INSURANCE POLICIES:
-{context}
-
-USER QUERY:
-{query}
-
-CHAT HISTORY:
-{history_str}
-
-Please provide a structured, friendly response. If quoting policy terms, specify the source document name."""
-
+    full_response_parts = []
     try:
-        async for token in call_ollama_stream(prompt, num_predict=512):
+        # Comparison needs more tokens; single-policy answer is shorter
+        max_tokens = 450 if is_comparison else 280
+        async for token in call_ollama_stream(prompt, num_predict=max_tokens):
+            full_response_parts.append(token)
             yield token
+        # Cache successful response
+        _rag_cache[ck] = "".join(full_response_parts)
     except Exception as e:
         logger.warning(f"Ollama RAG stream failed: {e}")
-        fallback_msg = "Ollama is currently offline. Based on the matches:\n"
+        fallback_msg = "Ollama is currently offline. Based on the retrieved content:\n"
         if top_chunks:
             best = top_chunks[0]
             fallback_msg += f"Most relevant source: {best['source']}\n\"{best['text'][:300]}...\""
@@ -812,6 +1036,7 @@ Please provide a structured, friendly response. If quoting policy terms, specify
             fallback_msg += "No matching information found."
         for word in fallback_msg.split(" "):
             yield word + " "
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.015)
+
 
 

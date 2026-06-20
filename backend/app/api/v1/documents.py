@@ -43,7 +43,7 @@ MAX_FILE_SIZE = settings.MAX_FILE_SIZE_MB * 1024 * 1024  # Convert to bytes
 
 
 async def process_document_background(doc_id: str, file_path: str, file_type: str):
-    """Background task to extract text from uploaded document."""
+    """Background task to extract text from uploaded document and perform auto-analysis."""
     from app.core.database import AsyncSessionLocal
     
     async with AsyncSessionLocal() as db:
@@ -70,10 +70,32 @@ async def process_document_background(doc_id: str, file_path: str, file_type: st
             from app.services.rag_service import generate_document_chunks
             await generate_document_chunks(doc.id, text, db)
             
-            doc.status = "text_extracted"
+            # Automatically perform AI tasks: summary only (no field extraction or risk analysis)
+            from app.services.ai_service import generate_summary
+            from app.models.risk_analysis import Summary
+            from app.core.config import settings
+            
+            # 1. Summary
+            try:
+                logger.info(f"Auto-generating AI summary for document {doc.id}")
+                summary_data = await generate_summary(text)
+                summary = Summary(
+                    document_id=doc.id,
+                    summary_text=summary_data["summary_text"],
+                    coverage_summary=summary_data.get("coverage_summary"),
+                    exclusions_summary=summary_data.get("exclusions_summary"),
+                    waiting_period_summary=summary_data.get("waiting_period_summary"),
+                    premium_summary=summary_data.get("premium_summary"),
+                    model_used=settings.OLLAMA_MODEL,
+                )
+                db.add(summary)
+            except Exception as sum_err:
+                logger.error(f"Auto-summarization failed for {doc.id}: {sum_err}")
+            
+            doc.status = "completed"
             await db.commit()
             
-            logger.info(f"✅ Document {doc_id} text extracted and vector database initialized")
+            logger.info(f"✅ Document {doc_id} text extracted, vector database initialized, and AI summary completed")
             
         except Exception as e:
             logger.error(f"Background text extraction failed for {doc_id}: {e}")
