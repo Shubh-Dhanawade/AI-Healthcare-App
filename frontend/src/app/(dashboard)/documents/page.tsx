@@ -84,7 +84,7 @@ export default function DocumentsListPage() {
           <table className="w-full">
             <thead>
               <tr className="border-b border-slate-700/50">
-                <th className="w-12 px-6 py-4"></th>
+                {/* <th className="w-12 px-6 py-4"></th> */}
                 <th className="text-left px-2 py-4 text-xs font-semibold text-slate-400 uppercase tracking-wider">Document</th>
                 <th className="text-left px-6 py-4 text-xs font-semibold text-slate-400 uppercase tracking-wider">Status</th>
                 <th className="text-left px-6 py-4 text-xs font-semibold text-slate-400 uppercase tracking-wider hidden md:table-cell">Size</th>
@@ -98,7 +98,7 @@ export default function DocumentsListPage() {
                 const isSelected = selectedIds.includes(doc.id);
                 return (
                   <tr key={doc.id} className={`hover:bg-white/3 transition-colors ${isSelected ? 'bg-blue-500/5 hover:bg-blue-500/10' : ''}`}>
-                    <td className="px-6 py-4 text-center">
+                    {/* <td className="px-6 py-4 text-center">
                       <input
                         type="checkbox"
                         className="w-4 h-4 rounded border-slate-700 bg-[#0c1322] text-blue-500 focus:ring-blue-500/20 focus:ring-offset-0 transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
@@ -116,7 +116,7 @@ export default function DocumentsListPage() {
                           }
                         }}
                       />
-                    </td>
+                    </td> */}
                     <td className="px-2 py-4">
                       <div className="flex items-center gap-3">
                         <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
@@ -166,7 +166,7 @@ export default function DocumentsListPage() {
       </div>
 
       {/* Floating Compare Bar */}
-      {selectedIds.length > 0 && (
+      {/* selectedIds.length > 0 && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center justify-between gap-6 px-6 py-4 rounded-2xl bg-slate-900/90 border border-blue-500/30 shadow-[0_0_30px_rgba(59,130,246,0.2)] backdrop-blur-xl animate-fade-in w-[90%] max-w-2xl">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-blue-500/20 flex items-center justify-center border border-blue-500/30">
@@ -194,7 +194,7 @@ export default function DocumentsListPage() {
             </Link>
           </div>
         </div>
-      )}
+      ) */}
     </div>
   );
 }

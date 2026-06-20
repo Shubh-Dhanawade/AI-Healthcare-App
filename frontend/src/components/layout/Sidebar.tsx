@@ -11,7 +11,7 @@ const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/upload', label: 'Upload', icon: Upload },
   { href: '/documents', label: 'Documents', icon: FileText },
-  { href: '/compare', label: 'Compare Policies', icon: Scale },
+  // { href: '/compare', label: 'Compare Policies', icon: Scale },
   { href: '/chat', label: 'Conversational AI', icon: MessageSquare },
 ];
 
