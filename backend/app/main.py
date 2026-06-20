@@ -12,7 +12,7 @@ from loguru import logger
 
 from app.core.config import settings
 from app.core.database import create_tables
-from app.api.v1 import auth, documents, ai_service
+from app.api.v1 import auth, documents, ai_service, claims
 from app.core.logging import setup_logging
 
 
@@ -58,10 +58,15 @@ app.add_middleware(
 if os.path.exists(settings.UPLOAD_DIR):
     app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads")
 
+# Static files for data science analysis plots
+if os.path.exists("../data_science_analysis"):
+    app.mount("/data_science_analysis", StaticFiles(directory="../data_science_analysis"), name="data_science_analysis")
+
 # API Routers
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["Authentication"])
 app.include_router(documents.router, prefix="/api/v1/documents", tags=["Documents"])
 app.include_router(ai_service.router, prefix="/api/v1/ai", tags=["AI Services"])
+app.include_router(claims.router, prefix="/api/v1/claims", tags=["Claims Analytics"])
 
 
 @app.get("/", tags=["Health"])

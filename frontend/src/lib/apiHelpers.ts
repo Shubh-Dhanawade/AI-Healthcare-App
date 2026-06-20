@@ -148,3 +148,10 @@ export const exportApi = {
     return `${baseUrl}/documents/${id}/export${token ? `?token=${token}` : ''}`;
   }
 };
+
+export const claimsApi = {
+  getStats: async () => {
+    const res = await apiClient.get('/claims/stats');
+    return res.data;
+  },
+};

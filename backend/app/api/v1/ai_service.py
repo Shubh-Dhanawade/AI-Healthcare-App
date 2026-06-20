@@ -21,10 +21,11 @@ from app.schemas.schemas import (
     ClaimsChecklistRequest, ClaimsChecklistResponse,
     QueryRequest, QueryResponse,
 )
+from fastapi.responses import StreamingResponse
 from app.services.rag_service import query_rag_pipeline
 from app.services.ai_service import (
     generate_summary, extract_policy_fields, analyze_risks,
-    query_policy_rag, translate_text, generate_claims_checklist,
+    query_policy_rag, query_policy_rag_stream, translate_text, generate_claims_checklist,
 )
 
 router = APIRouter()
@@ -265,8 +266,66 @@ async def query_chatbot(
         ]
 
     # 4. Generate RAG answer
-    response_text = await query_policy_rag(policies_data, request.query, history_data)
+    response_text = await query_policy_rag(policies_data, request.query, db, history_data)
     return ChatQueryResponse(response=response_text)
+
+
+@router.post("/chat/stream")
+async def query_chatbot_stream(
+    request: ChatQueryRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Conversational AI chatbot query over policies using RAG with token streaming."""
+    # 1. Fetch user documents (filtering by IDs if provided)
+    query_stmt = select(Document).where(Document.user_id == current_user.id)
+    if request.document_ids:
+        query_stmt = query_stmt.where(Document.id.in_(request.document_ids))
+    else:
+        query_stmt = query_stmt.where(Document.status.in_(["completed", "summarized", "text_extracted"]))
+
+    res = await db.execute(query_stmt)
+    docs = res.scalars().all()
+    
+    if not docs:
+        async def empty_generator():
+            yield "No policies found in your library. Please upload policy documents first."
+        return StreamingResponse(empty_generator(), media_type="text/plain")
+
+    # 2. Package policy data for RAG
+    policies_data = [
+        {
+            "id": d.id,
+            "filename": d.original_filename,
+            "text": d.extracted_text or ""
+        }
+        for d in docs
+    ]
+
+    # 3. Format history for service
+    history_data = []
+    if request.history:
+        history_data = [
+            {"role": h.role, "content": h.content}
+            for h in request.history
+        ]
+
+    # 4. Stream response
+    async def stream_generator():
+        try:
+            async for token in query_policy_rag_stream(
+                policies_data, 
+                request.query, 
+                db, 
+                history_data,
+                user_name=current_user.full_name or "krushna"
+            ):
+                yield token
+        except Exception as e:
+            logger.error(f"Error in stream generator: {e}")
+            yield f"\n❌ [Streaming Error]: {e}"
+
+    return StreamingResponse(stream_generator(), media_type="text/plain")
 
 
 @router.post("/translate", response_model=TranslateResponse)
@@ -315,7 +374,7 @@ async def query_document(
     
     logger.info(f"Querying document {doc.id} with prompt: {request.query} (evaluate={request.evaluate})")
     try:
-        result = await query_rag_pipeline(doc.extracted_text, request.query, evaluate=request.evaluate)
+        result = await query_rag_pipeline(doc.id, doc.extracted_text, request.query, db, evaluate=request.evaluate)
     except Exception as e:
         logger.error(f"RAG query failed: {e}")
         raise HTTPException(

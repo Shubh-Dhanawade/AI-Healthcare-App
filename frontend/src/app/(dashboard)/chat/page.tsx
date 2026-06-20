@@ -25,6 +25,7 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [isThinking, setIsThinking] = useState(false);
   const [selectedDocIds, setSelectedDocIds] = useState<string[]>([]);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   
@@ -74,6 +75,9 @@ export default function ChatPage() {
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setIsSending(true);
+    setIsThinking(true);
+
+    let assistantMessageIndex = -1;
 
     try {
       // Map history for RAG endpoint
@@ -82,28 +86,83 @@ export default function ChatPage() {
         content: m.content
       }));
 
-      // Call API
-      const response = await aiApi.chat(
-        textToSend,
-        selectedDocIds.length > 0 ? selectedDocIds : undefined,
-        historyPayload
-      );
+      const token = localStorage.getItem('access_token');
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
 
-      // Add assistant response
-      setMessages(prev => [...prev, { role: 'assistant', content: response.response }]);
+      const response = await fetch(`${API_URL}/ai/chat/stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          query: textToSend,
+          document_ids: selectedDocIds.length > 0 ? selectedDocIds : undefined,
+          history: historyPayload
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to initialize stream: ${response.statusText}`);
+      }
+
+      // Hide the "Thinking..." loader as soon as we transition to stream writing
+      setIsThinking(false);
+
+      // Add empty assistant message to start streaming into
+      setMessages(prev => {
+        assistantMessageIndex = prev.length;
+        return [...prev, { role: 'assistant', content: '' }];
+      });
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let accumulatedContent = '';
+
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunk = decoder.decode(value, { stream: true });
+          accumulatedContent += chunk;
+
+          // Update the assistant message content
+          setMessages(prev => {
+            const updated = [...prev];
+            if (assistantMessageIndex !== -1 && updated[assistantMessageIndex]) {
+              updated[assistantMessageIndex] = {
+                role: 'assistant',
+                content: accumulatedContent
+              };
+            }
+            return updated;
+          });
+        }
+      }
     } catch (error: any) {
       console.error(error);
-      const errorMsg = error.response?.data?.detail || "Failed to communicate with AI. Please check if Ollama is running.";
+      const errorMsg = error.message || "Failed to communicate with AI. Please check if Ollama is running.";
       toast.error(errorMsg);
-      setMessages(prev => [
-        ...prev, 
-        { 
-          role: 'assistant', 
-          content: "❌ Sorry, I encountered an error. Please make sure the local Ollama server is running with the 'phi3' model, or check if the backend is configured properly." 
+      setMessages(prev => {
+        const updated = [...prev];
+        const errorMessage = "❌ Sorry, I encountered an error. Please make sure the local Ollama server is running with the 'gemma3:4b' model, or check if the backend is configured properly.";
+        if (assistantMessageIndex !== -1 && updated[assistantMessageIndex]) {
+          updated[assistantMessageIndex] = {
+            role: 'assistant',
+            content: errorMessage
+          };
+        } else {
+          updated.push({
+            role: 'assistant',
+            content: errorMessage
+          });
         }
-      ]);
+        return updated;
+      });
     } finally {
       setIsSending(false);
+      setIsThinking(false);
     }
   };
 
@@ -264,7 +323,7 @@ export default function ChatPage() {
               })}
 
               {/* Loading AI response */}
-              {isSending && (
+              {isThinking && (
                 <div className="flex items-start gap-4 justify-start fade-in">
                   <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 font-semibold"
                     style={{ background: 'linear-gradient(135deg, #14b8a6, #3b82f6)' }}>
