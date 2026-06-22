@@ -32,16 +32,28 @@ def build_chat_prompt(
             context_lines.append("")
     else:
         for c in retrieved_chunks:
-            context_lines.append(f"[{c['source']} - Page {c.get('page', 1)}]\n{c['text'][:450]}")
+            context_lines.append(f"[{c['source']} - Page {c.get('page', 1)}]\n{c['text'][:600]}")
             
-    context_block = "\n---\n".join(context_lines) if context_lines else "No relevant policy details found."
+    context_block = "\n---\n".join(context_lines) if context_lines else "No relevant policy details found in indexed chunks — use the stored summaries below to answer."
     
     # 2. Format the stored summaries of the policies being queried
     summary_lines = []
     for policy in policies:
         summary_info = policy.get("summary")
-        if summary_info and summary_info.get("summary_text"):
-            summary_lines.append(f"- {policy.get('filename')}: {summary_info['summary_text'][:200]}")
+        if summary_info:
+            parts = []
+            if summary_info.get("summary_text"):
+                parts.append(f"Summary: {summary_info['summary_text'][:300]}")
+            if summary_info.get("premium_summary"):
+                parts.append(f"Premium: {summary_info['premium_summary'][:150]}")
+            if summary_info.get("coverage_summary"):
+                parts.append(f"Coverage: {summary_info['coverage_summary'][:150]}")
+            if summary_info.get("exclusions_summary"):
+                parts.append(f"Exclusions: {summary_info['exclusions_summary'][:150]}")
+            if summary_info.get("waiting_period_summary"):
+                parts.append(f"Waiting Periods: {summary_info['waiting_period_summary'][:150]}")
+            if parts:
+                summary_lines.append(f"- {policy.get('filename')}:\n  " + "\n  ".join(parts))
     summaries_block = "\n".join(summary_lines) if summary_lines else "No policy summary available."
     
     # 3. Format the recent conversation history (last 6 messages / 3 exchanges to keep context small)
@@ -81,15 +93,17 @@ def build_chat_prompt(
             f"You are HealthAI, a knowledgeable and friendly healthcare insurance assistant helping {user_name}.\n"
             "\n"
             "Instructions:\n"
-            "1. Answer the user's query clearly and concisely using the provided POLICY CONTEXT, STORED SUMMARIES, and PREVIOUS CONVERSATION.\n"
-            "2. If the user is asking for clarification, explanation of terms, or a follow-up question on previous responses, use the PREVIOUS CONVERSATION and general insurance knowledge to answer directly and politely.\n"
-            "3. When referencing specific policy facts, always mention the source document name (e.g., 'In Star_Health.pdf...').\n"
-            "4. If the query asks for specific policy details (such as coverage limits, deductibles, premium amounts, etc.) that are not in the context, and cannot be inferred from history, state: 'I could not find this specific information in the selected policies.' For general inquiries, greetings, or questions about who you are, answer them directly based on your instructions.\n"
-            "5. Do NOT output 'ASSISTANT:', 'USER:', or 'context:' labels in your response.\n"
-            "6. Never output curly braces in your answer.\n"
+            "1. Answer the user's query clearly and concisely using the POLICY CONTEXT and STORED POLICY SUMMARIES below.\n"
+            "2. ALWAYS try to extract relevant information from the context first. The context contains direct excerpts from the policy document.\n"
+            "3. If the user asks about premium, coverage, waiting periods, exclusions, or any policy term — search the context carefully and provide the answer found there.\n"
+            "4. If the user is asking for clarification or a follow-up question, also use the PREVIOUS CONVERSATION.\n"
+            "5. When referencing specific policy facts, mention the source document name (e.g., 'In Star_Health.pdf...').\n"
+            "6. Only if the information is truly absent from both the context AND summaries, say: 'I could not find that specific detail in the document.'\n"
+            "7. Do NOT output 'ASSISTANT:', 'USER:', or 'context:' labels in your response.\n"
+            "8. Never output curly braces in your answer.\n"
             "\n"
             f"STORED POLICY SUMMARIES:\n{summaries_block}\n\n"
-            f"POLICY CONTEXT:\n{context_block}\n\n"
+            f"POLICY CONTEXT (direct document excerpts):\n{context_block}\n\n"
             f"PREVIOUS CONVERSATION:\n{history_str}\n\n"
             f"User Query: {query}\n"
             "\n"

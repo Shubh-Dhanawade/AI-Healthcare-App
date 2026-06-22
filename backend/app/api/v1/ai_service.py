@@ -257,7 +257,11 @@ async def query_chatbot(
             "filename": d.original_filename,
             "text": d.extracted_text or "",
             "summary": {
-                "summary_text": d.summary.summary_text if d.summary else ""
+                "summary_text": d.summary.summary_text if d.summary else "",
+                "premium_summary": d.summary.premium_summary if d.summary else "",
+                "coverage_summary": d.summary.coverage_summary if d.summary else "",
+                "exclusions_summary": d.summary.exclusions_summary if d.summary else "",
+                "waiting_period_summary": d.summary.waiting_period_summary if d.summary else "",
             }
         }
         for d in docs
@@ -313,7 +317,11 @@ async def query_chatbot_stream(
             "filename": d.original_filename,
             "text": d.extracted_text or "",
             "summary": {
-                "summary_text": d.summary.summary_text if d.summary else ""
+                "summary_text": d.summary.summary_text if d.summary else "",
+                "premium_summary": d.summary.premium_summary if d.summary else "",
+                "coverage_summary": d.summary.coverage_summary if d.summary else "",
+                "exclusions_summary": d.summary.exclusions_summary if d.summary else "",
+                "waiting_period_summary": d.summary.waiting_period_summary if d.summary else "",
             }
         }
         for d in docs
