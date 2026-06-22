@@ -235,12 +235,14 @@ async def query_chatbot(
 ):
     """Conversational AI chatbot query over policies using RAG."""
     # 1. Fetch user documents (filtering by IDs if provided)
+    from sqlalchemy.orm import selectinload
     query_stmt = select(Document).where(Document.user_id == current_user.id)
     if request.document_ids:
         query_stmt = query_stmt.where(Document.id.in_(request.document_ids))
     else:
         # Defaults to completed/summarized policies
         query_stmt = query_stmt.where(Document.status.in_(["completed", "summarized", "text_extracted"]))
+    query_stmt = query_stmt.options(selectinload(Document.summary))
 
     res = await db.execute(query_stmt)
     docs = res.scalars().all()
@@ -253,7 +255,10 @@ async def query_chatbot(
         {
             "id": d.id,
             "filename": d.original_filename,
-            "text": d.extracted_text or ""
+            "text": d.extracted_text or "",
+            "summary": {
+                "summary_text": d.summary.summary_text if d.summary else ""
+            }
         }
         for d in docs
     ]
@@ -267,7 +272,13 @@ async def query_chatbot(
         ]
 
     # 4. Generate RAG answer
-    response_text = await query_policy_rag(policies_data, request.query, db, history_data)
+    response_text = await query_policy_rag(
+        policies_data, 
+        request.query, 
+        db, 
+        history_data, 
+        user_name=current_user.full_name or "krushna"
+    )
     return ChatQueryResponse(response=response_text)
 
 
@@ -279,11 +290,13 @@ async def query_chatbot_stream(
 ):
     """Conversational AI chatbot query over policies using RAG with token streaming."""
     # 1. Fetch user documents (filtering by IDs if provided)
+    from sqlalchemy.orm import selectinload
     query_stmt = select(Document).where(Document.user_id == current_user.id)
     if request.document_ids:
         query_stmt = query_stmt.where(Document.id.in_(request.document_ids))
     else:
         query_stmt = query_stmt.where(Document.status.in_(["completed", "summarized", "text_extracted"]))
+    query_stmt = query_stmt.options(selectinload(Document.summary))
 
     res = await db.execute(query_stmt)
     docs = res.scalars().all()
@@ -298,7 +311,10 @@ async def query_chatbot_stream(
         {
             "id": d.id,
             "filename": d.original_filename,
-            "text": d.extracted_text or ""
+            "text": d.extracted_text or "",
+            "summary": {
+                "summary_text": d.summary.summary_text if d.summary else ""
+            }
         }
         for d in docs
     ]

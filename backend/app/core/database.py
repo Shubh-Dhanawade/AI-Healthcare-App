@@ -14,7 +14,7 @@ def _get_engine_kwargs():
     url = settings.DATABASE_URL
     if url.startswith("sqlite"):
         # SQLite requires these settings for async
-        return {"connect_args": {"check_same_thread": False}}
+        return {"connect_args": {"check_same_thread": False, "timeout": 30}}
     else:
         # PostgreSQL supports connection pooling
         return {"pool_size": 5, "max_overflow": 10, "pool_pre_ping": True}
@@ -25,6 +25,23 @@ engine = create_async_engine(
     echo=settings.DEBUG,
     **_get_engine_kwargs(),
 )
+
+from sqlalchemy import event
+
+@event.listens_for(engine.sync_engine, "connect")
+def set_sqlite_pragma(dbapi_connection, connection_record):
+    """Optimize SQLite performance using pragmas."""
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA cache_size=-64000")  # 64MB cache
+        cursor.execute("PRAGMA temp_store=MEMORY")
+        cursor.execute("PRAGMA busy_timeout=5000")
+    except Exception as e:
+        logger.warning(f"Failed to set SQLite PRAGMAs: {e}")
+    finally:
+        cursor.close()
 
 AsyncSessionLocal = async_sessionmaker(
     engine,

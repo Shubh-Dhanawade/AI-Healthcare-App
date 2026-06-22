@@ -203,7 +203,8 @@ export default function DocumentDetailPage() {
     queryFn: () => documentsApi.getById(docId),
     refetchInterval: doc => {
       const d = doc.state.data;
-      return d && ['uploaded', 'processing'].includes(d.status) ? 3000 : false;
+      // Keep polling while in any non-final state
+      return d && ['uploaded', 'processing', 'text_extracted'].includes(d.status) ? 2000 : false;
     },
   });
 
@@ -345,7 +346,7 @@ export default function DocumentDetailPage() {
     }
   };
 
-  const isProcessing = ['uploaded', 'processing'].includes(doc?.status || '');
+  const isProcessing = ['uploaded', 'processing', 'text_extracted'].includes(doc?.status || '');
   const canRunAI = doc?.status !== 'uploaded' && doc?.status !== 'processing' && doc?.status !== 'failed';
 
   if (isLoading) {
@@ -407,7 +408,18 @@ export default function DocumentDetailPage() {
         <div className="flex items-center gap-3 p-4 rounded-xl"
           style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)' }}>
           <div className="w-4 h-4 border-2 border-amber-400/30 border-t-amber-400 rounded-full animate-spin" />
-          <p className="text-amber-300 text-sm">Document is being processed. Text extraction and AI analysis are in progress...</p>
+          <div>
+            <p className="text-amber-300 text-sm font-medium">
+              {doc?.status === 'text_extracted'
+                ? 'Building AI index... Generating embeddings and summary in background.'
+                : 'Document is being processed. Text extraction in progress...'}
+            </p>
+            <p className="text-amber-400/60 text-xs mt-0.5">
+              {doc?.status === 'text_extracted'
+                ? 'You can use the document now — AI features will be ready shortly.'
+                : 'This may take a few seconds...'}
+            </p>
+          </div>
         </div>
       )}
 

@@ -591,12 +591,10 @@ def _build_context_and_prompt(
     is_comparison: bool,
 ) -> str:
     """
-    Build a clean prompt string without using Python .format() so that
-    curly braces inside policy PDF text never corrupt the output.
+    Build a clean prompt string for Ollama.
     """
-    # Escape any stray braces in chunk text (not needed since we concat, not .format)
     if is_comparison:
-        # For comparison: group chunks by source policy
+        # Group chunks by source policy
         by_source: dict[str, list[str]] = {}
         for c in top_chunks:
             src = c["source"]
@@ -614,50 +612,45 @@ def _build_context_and_prompt(
         names_str = ", ".join(policy_names)
 
         prompt = (
-            "You are HealthAI, an expert healthcare insurance advisor helping " + user_name + ".\n"
+            f"You are HealthAI, an expert healthcare insurance advisor helping {user_name}.\n"
+            f"You are comparing the following insurance policies: {names_str}.\n"
             "\n"
-            "The user wants to COMPARE multiple insurance policies. You have "
-            + str(len(policies)) + " policies: " + names_str + ".\n"
+            "Instructions:\n"
+            "1. Compare the policies directly based on the provided POLICY CONTEXT and PREVIOUS CONVERSATION.\n"
+            "2. Clearly specify which details belong to which policy by name.\n"
+            "3. Use a markdown comparison table or bullet lists grouped by policy name for readability.\n"
+            "4. Highlight differences in key terms (deductibles, co-pays, waiting periods, room rent caps).\n"
+            "5. Maintain a professional tone and end with a concise recommendation.\n"
+            "6. Do NOT include any 'ASSISTANT:', 'USER:', or 'context:' labels in your response.\n"
             "\n"
-            "Rules:\n"
-            "1. Compare the policies directly using the POLICY CONTEXT below.\n"
-            "2. Clearly label which benefit/detail belongs to which policy by name.\n"
-            "3. Use a table or bullet list grouped by policy name.\n"
-            "4. End with a brief recommendation.\n"
-            "5. Do NOT output 'ASSISTANT:', 'USER:', or 'context:' labels.\n"
+            f"POLICY CONTEXT:\n{context_block}\n"
+            f"PREVIOUS CONVERSATION:\n{history_str}\n"
+            f"User Query: {query}\n"
             "\n"
-            "POLICY CONTEXT:\n"
-            + context_block + "\n"
-            "\n"
-            "PREVIOUS CONVERSATION:\n" + history_str + "\n"
-            "User asked: " + query + "\n"
-            "\n"
-            "Comparison Answer:"
+            "Comparison Response:"
         )
     else:
         context_lines = []
         for c in top_chunks:
-            context_lines.append("[" + c["source"] + "]\n" + c["text"][:450])
+            context_lines.append(f"[{c['source']}]\n{c['text'][:450]}")
         context_block = "\n---\n".join(context_lines) if context_lines else "No relevant policy text found."
 
         prompt = (
-            "You are HealthAI, a knowledgeable healthcare insurance assistant helping " + user_name + ".\n"
+            f"You are HealthAI, a knowledgeable and friendly healthcare insurance assistant helping {user_name}.\n"
             "\n"
-            "Rules:\n"
-            "1. Answer using ONLY the POLICY CONTEXT below. Be concise and specific.\n"
-            "2. Always mention the source document name when citing a fact.\n"
-            "3. Use bullet points or numbered steps where helpful.\n"
-            "4. Do NOT output 'ASSISTANT:', 'USER:', or 'context:' labels in your reply.\n"
-            "5. If the answer is not in the context, say: 'I could not find this information in the selected policies.'\n"
-            "6. NEVER output the word 'context' or curly braces in your answer.\n"
+            "Instructions:\n"
+            "1. Answer the user's query clearly and concisely using the provided POLICY CONTEXT and PREVIOUS CONVERSATION.\n"
+            "2. If the user is asking for clarification, explanation of terms, or a follow-up question on previous responses, use the PREVIOUS CONVERSATION and general insurance knowledge to answer directly and politely.\n"
+            "3. When referencing specific policy facts, always mention the source document name (e.g., 'In Star_Health.pdf...').\n"
+            "4. If the query asks for policy details that are not in the context, and cannot be inferred from history, state: 'I could not find this specific information in the selected policies.'\n"
+            "5. Do NOT output 'ASSISTANT:', 'USER:', or 'context:' labels in your response.\n"
+            "6. Never output curly braces in your answer.\n"
             "\n"
-            "POLICY CONTEXT:\n"
-            + context_block + "\n"
+            f"POLICY CONTEXT:\n{context_block}\n"
+            f"PREVIOUS CONVERSATION:\n{history_str}\n"
+            f"User Query: {query}\n"
             "\n"
-            "PREVIOUS CONVERSATION:\n" + history_str + "\n"
-            "User asked: " + query + "\n"
-            "\n"
-            "Answer:"
+            "Response:"
         )
     return prompt
 
@@ -667,117 +660,17 @@ async def query_policy_rag(
     query: str,
     db: AsyncSession = None,
     history: list[dict] = None,
+    user_name: str = "there",
 ) -> str:
     """Answer user questions about policies using a local RAG pipeline with Ollama."""
-
-    # ── Greeting short-circuit ──
-    if _is_greeting(query):
-        logger.info(f"Greeting detected: '{query}' — skipping RAG pipeline (non-stream)")
-        return (
-            "Hi! 👋 I'm HealthAI, your healthcare insurance assistant. "
-            "How can I help you today? Feel free to ask me anything about your "
-            "uploaded insurance policies — coverage, premiums, exclusions, waiting periods, and more!"
-        )
-
-    is_comparison = _is_comparison_query(query) and len(policies) > 1
-    all_scored_chunks = []
-    top_chunks = []
-    use_vector_search = False
-
-    if db:
-        from app.models.document import DocumentChunk
-        from app.services.rag_service import generate_embeddings, cosine_similarity
-        from sqlalchemy import select
-
-        policy_ids = [p["id"] for p in policies if p.get("id")]
-
-        if policy_ids:
-            res = await db.execute(
-                select(DocumentChunk).where(DocumentChunk.document_id.in_(policy_ids))
-            )
-            db_chunks = res.scalars().all()
-
-            if db_chunks:
-                use_vector_search = True
-                query_emb = await generate_embeddings(query)
-
-                for chunk in db_chunks:
-                    try:
-                        p_dict = next(
-                            (p for p in policies if p.get("id") == chunk.document_id), {}
-                        )
-                        doc_name = p_dict.get("filename", "Policy")
-                        chunk_emb = json.loads(chunk.embedding)
-                        sim = cosine_similarity(query_emb, chunk_emb)
-                        all_scored_chunks.append(
-                            {"text": chunk.text_content, "source": doc_name, "score": sim}
-                        )
-                    except Exception as e:
-                        logger.error(f"Failed to process chunk vector in query_policy_rag: {e}")
-
-                all_scored_chunks.sort(key=lambda x: x["score"], reverse=True)
-
-                if is_comparison:
-                    # Ensure at least 1 chunk per policy for fair comparison
-                    seen_sources: set[str] = set()
-                    top_chunks = []
-                    for ch in all_scored_chunks:
-                        if ch["source"] not in seen_sources:
-                            top_chunks.append(ch)
-                            seen_sources.add(ch["source"])
-                        if len(seen_sources) == len(policies):
-                            break
-                    # fill up to 6 chunks total
-                    for ch in all_scored_chunks:
-                        if len(top_chunks) >= 6:
-                            break
-                        if ch not in top_chunks:
-                            top_chunks.append(ch)
-                else:
-                    top_chunks = all_scored_chunks[:4]
-
-    if not use_vector_search:
-        logger.warning("No vector chunks; falling back to keyword search.")
-        query_words = [w.lower() for w in re.findall(r"\w+", query)]
-        for p in policies:
-            doc_name = p.get("filename", "Policy")
-            doc_text = p.get("text", "")
-            if not doc_text:
-                continue
-            for c in chunk_text(doc_text, chunk_size=400, overlap=100):
-                score = score_chunk(c, query_words)
-                if score > 0:
-                    all_scored_chunks.append({"text": c, "source": doc_name, "score": score})
-        all_scored_chunks.sort(key=lambda x: x["score"], reverse=True)
-        top_chunks = all_scored_chunks[:4]
-
-    # Format history
-    history_str = ""
-    if history:
-        for msg in history[-3:]:
-            role = msg.get("role", "user").upper()
-            content = msg.get("content", "")[:150]
-            history_str += role + ": " + content + "\n"
-
-    prompt = _build_context_and_prompt(
-        top_chunks, policies, query, history_str, "there", is_comparison
+    from app.services.chat_service import run_chat_query
+    return await run_chat_query(
+        policies=policies,
+        query=query,
+        db=db,
+        history=history,
+        user_name=user_name
     )
-
-    try:
-        response = await call_ollama(prompt, num_predict=300, num_ctx=2048)
-        if response:
-            return response.strip()
-    except Exception as e:
-        logger.warning(f"Ollama RAG failed: {e}")
-
-    # Offline fallback
-    if top_chunks:
-        best = top_chunks[0]
-        return (
-            f"[Offline Mode] Based on **{best['source']}**:\n\n"
-            f"\"{best['text'].strip()[:300]}...\""
-        )
-    return "Ollama is offline and no matching information found."
 
 
 async def translate_text(text: str, target_language: str) -> str:
@@ -882,21 +775,139 @@ async def call_ollama_stream(prompt: str, model: Optional[str] = None, num_predi
 _GREETING_PATTERNS = {
     "hi", "hii", "hiii", "hey", "hello", "heya", "hola", "howdy",
     "good morning", "good afternoon", "good evening", "good night",
-    "thanks", "thank you", "ty", "thx", "ok", "okay", "bye", "goodbye",
-    "how are you", "what's up", "sup", "yo", "greetings",
+    "yo", "greetings", "how are you", "what's up", "sup",
+}
+
+_GUIDANCE_PATTERNS = {
+    "help", "what can i do", "what can you do", "features", "how to use",
+    "how does this work", "what is this app", "what is this chatbot",
+    "capabilities", "instructions", "guidelines", "menu", "commands"
+}
+
+_THANKS_PATTERNS = {
+    "thanks", "thank you", "ty", "thx", "appreciate it", "great", "perfect",
+    "ok", "okay", "bye", "goodbye", "see ya", "talk to you later"
 }
 
 def _is_greeting(query: str) -> bool:
-    """Return True if query is a casual greeting or chitchat, not a policy question."""
+    """Fallback check for greeting or general chitchat."""
     q = query.strip().lower().rstrip("!?.")
-    # Exact match in greeting set
-    if q in _GREETING_PATTERNS:
+    if q in _GREETING_PATTERNS or q in _GUIDANCE_PATTERNS or q in _THANKS_PATTERNS:
         return True
-    # Very short single-word queries that aren't meaningful policy terms
     words = q.split()
-    if len(words) <= 2 and q in _GREETING_PATTERNS:
+    if len(words) <= 2 and (q in _GREETING_PATTERNS or q in _THANKS_PATTERNS):
         return True
     return False
+
+def _get_chitchat_response(query: str, user_name: str) -> Optional[str]:
+    """Identify if a query is a general chitchat or guidance request and return a standard response."""
+    q = query.strip().lower().rstrip("!?.")
+    
+    # Check words and phrase matches
+    is_greeting = q in _GREETING_PATTERNS or any(pat in q for pat in ["hello", "how are you", "what's up", "greetings"]) and len(q.split()) <= 3
+    
+    # Substring lists for guidance (about app features or assistant role)
+    guidance_substrings = [
+        "what can i do", "what can you do", "how to use", "how does this work", 
+        "what is this app", "what is this application", "what is this chatbot",
+        "who are you", "what do you do", "what is your purpose", "features of this",
+        "capabilities", "instructions", "guidelines", "about you"
+    ]
+    is_guidance = (
+        q in _GUIDANCE_PATTERNS or 
+        any(pat in q for pat in guidance_substrings) or 
+        (any(pat in q for pat in ["help", "info"]) and len(q.split()) <= 2)
+    )
+    
+    is_thanks = q in _THANKS_PATTERNS or any(pat in q for pat in ["thank you", "thanks", "goodbye", "bye"]) and len(q.split()) <= 3
+    
+    if is_greeting:
+        return (
+            f"Hi {user_name}! 👋 I'm **HealthAI**, your healthcare insurance assistant. "
+            "How can I help you today? You can ask me questions about your uploaded insurance policies — "
+            "such as coverage limits, premiums, exclusions, co-pays, and waiting periods!"
+        )
+        
+    if is_guidance:
+        return (
+            f"Hi {user_name}! I can help you analyze and understand your healthcare insurance policies. "
+            "Here are some things you can ask me to do:\n\n"
+            "* **Analyze Coverage**: Ask questions like *\"Is maternity covered?\"* or *\"What is my room rent limit?\"*\n"
+            "* **Check Exclusions & Waiting Periods**: Ask *\"Are pre-existing conditions covered?\"* or *\"What is excluded?\"*\n"
+            "* **Review Financial Terms**: Ask *\"What is the deductible?\"* or *\"What is the co-payment percentage?\"*\n"
+            "* **Compare Policies**: Select multiple policies and ask *\"Compare these policies\"* or *\"Which policy is better for maternity?\"*\n"
+            "* **Generate Claims Checklist**: Ask *\"What documents do I need for a heart surgery claim?\"*\n\n"
+            "To get started, please make sure you've uploaded policy documents and selected them in the dropdown above!"
+        )
+        
+    if is_thanks:
+        if any(w in q for w in ["bye", "goodbye", "see ya"]):
+            return f"Goodbye! Have a great day ahead. Let me know if you need help with your insurance policies in the future! 😊"
+        return f"You're very welcome! If you have any other questions about your policies, feel free to ask. I'm here to help! 🏥"
+        
+    return None
+
+def _needs_query_rewriting(query: str, history: list[dict]) -> bool:
+    """Return True if the query is a follow-up that likely needs context from history."""
+    if not history:
+        return False
+    
+    q = query.strip().lower()
+    
+    # Pronoun / referential indicators
+    referential_terms = {
+        "it", "they", "them", "this", "that", "these", "those", "its", "their",
+        "first", "second", "third", "former", "latter", "previous", "above",
+        "other", "another", "same", "both", "difference", "compare", "which"
+    }
+    
+    words = re.findall(r'\w+', q)
+    if any(w in referential_terms for w in words):
+        return True
+        
+    # Short question words or clarifications
+    clarification_starts = (
+        "why", "how", "explain", "elaborate", "tell me more", "what about", 
+        "is there", "does it", "can you", "any other", "what is the"
+    )
+    if q.startswith(clarification_starts) and len(words) < 6:
+        return True
+        
+    if len(words) < 4:
+        return True
+        
+    return False
+
+async def rewrite_query_with_history(query: str, history: list[dict]) -> str:
+    """Rewrite a conversational follow-up query into a standalone search query using history."""
+    if not history:
+        return query
+    
+    # We only format the last 2-3 turns of history to keep it brief and fast
+    history_context = ""
+    for msg in history[-3:]:
+        role = msg.get("role", "user").upper()
+        content = msg.get("content", "")[:150]
+        history_context += f"{role}: {content}\n"
+    
+    prompt = (
+        "You are a search query optimizer. Given the following conversation history and a follow-up query, "
+        "rewrite the follow-up query to be a standalone, self-contained search query. "
+        "The standalone query should contain all specific names, terms, or policies referred to (e.g., replace 'it' or 'the first policy' with the actual names from the history).\n"
+        "Do not answer the query. Output ONLY the rewritten search query text, without quotes, explanations, or preamble.\n\n"
+        f"CONVERSATION HISTORY:\n{history_context}\n"
+        f"FOLLOW-UP QUERY: {query}\n\n"
+        "Standalone Query:"
+    )
+    try:
+        rewritten = await call_ollama(prompt, num_predict=60, num_ctx=512)
+        rewritten_clean = rewritten.strip().strip('"\'')
+        if rewritten_clean:
+            logger.info(f"Rewrote query: '{query}' -> '{rewritten_clean}'")
+            return rewritten_clean
+    except Exception as e:
+        logger.warning(f"Failed to rewrite query: {e}")
+    return query
 
 
 async def query_policy_rag_stream(
@@ -907,136 +918,15 @@ async def query_policy_rag_stream(
     user_name: str = "there",
 ):
     """Answer user questions about policies using a local RAG pipeline with streaming Ollama."""
-
-    # ── Greeting short-circuit: bypass RAG entirely for casual messages ──
-    if _is_greeting(query):
-        logger.info(f"Greeting detected: '{query}' — skipping RAG pipeline")
-        greeting_reply = (
-            "Hi " + user_name + "! 👋 I'm HealthAI, your healthcare insurance assistant. "
-            "How can I help you today? Feel free to ask me anything about your uploaded "
-            "insurance policies — coverage, premiums, exclusions, waiting periods, and more!"
-        )
-        for word in greeting_reply.split(" "):
-            yield word + " "
-            await asyncio.sleep(0.015)
-        return
-
-    is_comparison = _is_comparison_query(query) and len(policies) > 1
-
-    # Fast-return cached response (word-by-word to maintain streaming UX)
-    policy_ids_for_cache = [p.get("id", p.get("filename", "")) for p in policies]
-    ck = _rag_cache_key(query, policy_ids_for_cache)
-    if ck in _rag_cache:
-        logger.info("Cache hit: RAG stream query")
-        cached = _rag_cache[ck]
-        for word in cached.split(" "):
-            yield word + " "
-        return
-
-    all_scored_chunks: list[dict] = []
-    top_chunks: list[dict] = []
-    use_vector_search = False
-
-    if db:
-        from app.models.document import DocumentChunk
-        from app.services.rag_service import generate_embeddings, cosine_similarity
-        from sqlalchemy import select
-
-        policy_ids = [p["id"] for p in policies if p.get("id")]
-
-        if policy_ids:
-            res = await db.execute(
-                select(DocumentChunk).where(DocumentChunk.document_id.in_(policy_ids))
-            )
-            db_chunks = res.scalars().all()
-
-            if db_chunks:
-                use_vector_search = True
-                query_emb = await generate_embeddings(query)
-
-                for chunk in db_chunks:
-                    try:
-                        p_dict = next(
-                            (p for p in policies if p.get("id") == chunk.document_id), {}
-                        )
-                        doc_name = p_dict.get("filename", "Policy")
-                        chunk_emb = json.loads(chunk.embedding)
-                        sim = cosine_similarity(query_emb, chunk_emb)
-                        all_scored_chunks.append(
-                            {"text": chunk.text_content, "source": doc_name, "score": sim}
-                        )
-                    except Exception as e:
-                        logger.error(f"Failed to process chunk vector in query_policy_rag_stream: {e}")
-
-                all_scored_chunks.sort(key=lambda x: x["score"], reverse=True)
-
-                if is_comparison:
-                    # Ensure at least 1 chunk per policy for a fair comparison
-                    seen_sources: set[str] = set()
-                    top_chunks = []
-                    for ch in all_scored_chunks:
-                        if ch["source"] not in seen_sources:
-                            top_chunks.append(ch)
-                            seen_sources.add(ch["source"])
-                        if len(seen_sources) == len(policies):
-                            break
-                    # fill remaining slots up to 6 chunks
-                    for ch in all_scored_chunks:
-                        if len(top_chunks) >= 6:
-                            break
-                        if ch not in top_chunks:
-                            top_chunks.append(ch)
-                else:
-                    top_chunks = all_scored_chunks[:4]
-
-    if not use_vector_search:
-        logger.warning("No vector chunks; falling back to keyword search.")
-        query_words = [w.lower() for w in re.findall(r"\w+", query)]
-        for p in policies:
-            doc_name = p.get("filename", "Policy")
-            doc_text = p.get("text", "")
-            if not doc_text:
-                continue
-            for c in chunk_text(doc_text):
-                score = score_chunk(c, query_words)
-                if score > 0:
-                    all_scored_chunks.append({"text": c, "source": doc_name, "score": score})
-        all_scored_chunks.sort(key=lambda x: x["score"], reverse=True)
-        top_chunks = all_scored_chunks[:4]
-
-    # Format history (last 3 turns only for speed)
-    history_str = ""
-    if history:
-        for msg in history[-3:]:
-            role = msg.get("role", "user").upper()
-            content = msg.get("content", "")[:150]
-            history_str += role + ": " + content + "\n"
-
-    # Build prompt using string concatenation — NO Python .format() to avoid brace issues
-    prompt = _build_context_and_prompt(
-        top_chunks, policies, query, history_str, user_name, is_comparison
-    )
-
-    full_response_parts = []
-    try:
-        # Comparison needs more tokens; single-policy answer is shorter
-        max_tokens = 450 if is_comparison else 280
-        async for token in call_ollama_stream(prompt, num_predict=max_tokens):
-            full_response_parts.append(token)
-            yield token
-        # Cache successful response
-        _rag_cache[ck] = "".join(full_response_parts)
-    except Exception as e:
-        logger.warning(f"Ollama RAG stream failed: {e}")
-        fallback_msg = "Ollama is currently offline. Based on the retrieved content:\n"
-        if top_chunks:
-            best = top_chunks[0]
-            fallback_msg += f"Most relevant source: {best['source']}\n\"{best['text'][:300]}...\""
-        else:
-            fallback_msg += "No matching information found."
-        for word in fallback_msg.split(" "):
-            yield word + " "
-            await asyncio.sleep(0.015)
+    from app.services.chat_service import run_chat_query_stream
+    async for token in run_chat_query_stream(
+        policies=policies,
+        query=query,
+        db=db,
+        history=history,
+        user_name=user_name
+    ):
+        yield token
 
 
 
