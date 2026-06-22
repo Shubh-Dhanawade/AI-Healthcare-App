@@ -211,7 +211,8 @@ cd backend
 
 # Create virtual environment
 python -m venv venv
-source venv/bin/activate  # Windows: 
+ # Windows venv\Scripts\activate.bat
+
 
 # Install dependencies
 pip install -r requirements.txt
@@ -365,11 +366,11 @@ docker-compose logs -f backend
 
 ### Memory Optimization for 4GB VPS
 
-The `docker-compose.yml` limits Ollama to 3GB RAM. Phi-3 Mini (quantized) runs within this limit.
+The `docker-compose.yml` limits Ollama to 3GB RAM. Llama 3.2 runs within this limit.
 
 To use an even lighter model:
 ```bash
-docker exec healthcare_ollama ollama pull phi3:mini  # Smaller variant
+docker exec healthcare_ollama ollama pull llama3.2:1b  # Smaller 1B parameter variant
 ```
 
 ---

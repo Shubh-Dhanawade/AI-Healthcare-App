@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import os
+import asyncio
 from loguru import logger
 
 from app.core.config import settings
@@ -26,12 +27,19 @@ async def lifespan(app: FastAPI):
     # Ensure upload and log directories exist
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
     os.makedirs("./logs", exist_ok=True)
+    
+    # Warm up the local model asynchronously
+    from app.services.ollama_client import warmup_model
+    asyncio.create_task(warmup_model())
+    
     logger.info(f"✅ Upload directory: {settings.UPLOAD_DIR}")
     logger.info("✅ Database tables verified")
     logger.info("🚀 Application ready!")
     yield
     # Shutdown
     logger.info("👋 Application shutting down...")
+    from app.services.ollama_client import close_httpx_client
+    await close_httpx_client()
 
 
 # Initialize FastAPI App

@@ -126,10 +126,11 @@ async def extract_document_text(file_path: str, file_type: str) -> Tuple[str, st
     logger.info(f"Extracting text from: {file_path} (type: {file_type})")
 
     if file_type == "pdf":
-        raw_text, method, page_count = extract_text_from_pdf(file_path)
+        from app.services.pdf_processor import extract_text_from_pdf as fast_extract
+        cleaned, method, page_count = fast_extract(file_path)
     else:
         raw_text, method, page_count = extract_text_from_image(file_path)
+        cleaned = clean_extracted_text(raw_text)
 
-    cleaned = clean_extracted_text(raw_text)
     logger.info(f"✅ Extraction complete: {len(cleaned)} chars via {method}")
     return cleaned, method, page_count

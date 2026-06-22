@@ -15,7 +15,7 @@ const features = [
   {
     icon: <Brain className="w-6 h-6" />,
     title: 'AI Summarization',
-    description: 'Get plain-language summaries of complex insurance policies powered by Phi-3 Mini.',
+    description: 'Get plain-language summaries of complex insurance policies powered by local AI.',
     color: 'purple',
   },
   {
@@ -77,7 +77,7 @@ export default function HomePage() {
       <section className="max-w-7xl mx-auto px-6 pt-20 pb-24 text-center">
         <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full mb-8 text-sm font-medium"
           style={{ background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.3)', color: '#60a5fa' }}>
-          <Zap className="w-4 h-4" /> Powered by Phi-3 Mini AI
+          <Zap className="w-4 h-4" /> Powered by local RAG AI
         </div>
 
         <h1 className="text-5xl md:text-6xl font-black mb-6 leading-tight">

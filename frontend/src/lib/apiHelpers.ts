@@ -112,6 +112,11 @@ export const aiApi = {
     });
     return res.data;
   },
+
+  getModelMetrics: async () => {
+    const res = await apiClient.get('/ai/model-metrics');
+    return res.data;
+  },
 };
 
 export const remindersApi = {

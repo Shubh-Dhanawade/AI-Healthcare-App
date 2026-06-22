@@ -9,6 +9,136 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
+// ── Response Cleaner ──────────────────────────────────────────────────────────
+// Strips model-echoed labels (ASSISTANT:, USER:, context: filename, etc.)
+function cleanResponse(raw: string): string {
+  return raw
+    // Remove leading ASSISTANT: / USER: role labels the model sometimes echoes
+    .replace(/^\s*(ASSISTANT|USER|SYSTEM)\s*:\s*/gim, '')
+    // Remove raw "context: filename" lines from RAG chunks
+    .replace(/^context:\s*.+$/gim, '')
+    // Remove "Source: filename" lines
+    .replace(/^(source|doc|document):\s*.+$/gim, '')
+    // Remove Arabic/Urdu stray characters sometimes prepended
+    .replace(/^[\u0600-\u06FF\s]+(?=\n|[A-Z])/g, '')
+    // Collapse 3+ blank lines into 2
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+// ── Markdown-Style Renderer ───────────────────────────────────────────────────
+// Converts **bold**, bullet lists (•/-/*) and numbered lists to JSX elements
+function FormattedMessage({ content }: { content: string }) {
+  const cleaned = cleanResponse(content);
+  if (!cleaned) return null;
+
+  const lines = cleaned.split('\n');
+
+  const renderInline = (text: string) => {
+    // Split on **bold** markers
+    const parts = text.split(/(\*\*[^*]+\*\*)/g);
+    return parts.map((part, i) => {
+      if (part.startsWith('**') && part.endsWith('**')) {
+        return <strong key={i} className="font-semibold text-white">{part.slice(2, -2)}</strong>;
+      }
+      // Also handle *italic* or single _italic_
+      const italicParts = part.split(/(\*[^*]+\*|_[^_]+_)/g);
+      return italicParts.map((p, j) => {
+        if ((p.startsWith('*') && p.endsWith('*')) || (p.startsWith('_') && p.endsWith('_'))) {
+          return <em key={`${i}-${j}`} className="italic text-slate-300">{p.slice(1, -1)}</em>;
+        }
+        return <span key={`${i}-${j}`}>{p}</span>;
+      });
+    });
+  };
+
+  const elements: JSX.Element[] = [];
+  let i = 0;
+  let bulletBuffer: string[] = [];
+  let orderedBuffer: { num: string; text: string }[] = [];
+
+  const flushBullets = () => {
+    if (bulletBuffer.length > 0) {
+      elements.push(
+        <ul key={`ul-${i}`} className="list-none space-y-1.5 my-2 pl-1">
+          {bulletBuffer.map((item, idx) => (
+            <li key={idx} className="flex items-start gap-2 text-slate-200">
+              <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+              <span>{renderInline(item)}</span>
+            </li>
+          ))}
+        </ul>
+      );
+      bulletBuffer = [];
+    }
+  };
+
+  const flushOrdered = () => {
+    if (orderedBuffer.length > 0) {
+      elements.push(
+        <ol key={`ol-${i}`} className="space-y-1.5 my-2 pl-1">
+          {orderedBuffer.map((item, idx) => (
+            <li key={idx} className="flex items-start gap-2 text-slate-200">
+              <span className="font-semibold text-teal-400 flex-shrink-0 text-xs mt-0.5">{item.num}.</span>
+              <span>{renderInline(item.text)}</span>
+            </li>
+          ))}
+        </ol>
+      );
+      orderedBuffer = [];
+    }
+  };
+
+  for (; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    // Bullet point: • - * at line start
+    const bulletMatch = trimmed.match(/^([•\-\*])\s+(.+)/);
+    if (bulletMatch) {
+      flushOrdered();
+      bulletBuffer.push(bulletMatch[2]);
+      continue;
+    }
+
+    // Numbered list: 1. 2. Step 1: etc.
+    const orderedMatch = trimmed.match(/^(Step\s*)?(\d+)[.:)]\s+(.+)/i);
+    if (orderedMatch) {
+      flushBullets();
+      orderedBuffer.push({ num: orderedMatch[2], text: orderedMatch[3] });
+      continue;
+    }
+
+    // Heading: ### or ## lines
+    const h3Match = trimmed.match(/^###\s+(.+)/);
+    if (h3Match) { flushBullets(); flushOrdered(); elements.push(<p key={i} className="font-semibold text-teal-300 mt-3 mb-1 text-sm">{h3Match[1]}</p>); continue; }
+    const h2Match = trimmed.match(/^##\s+(.+)/);
+    if (h2Match) { flushBullets(); flushOrdered(); elements.push(<p key={i} className="font-bold text-white mt-3 mb-1">{h2Match[1]}</p>); continue; }
+
+    // Empty line = paragraph break
+    if (trimmed === '') {
+      flushBullets();
+      flushOrdered();
+      if (elements.length > 0) elements.push(<div key={`gap-${i}`} className="h-2" />);
+      continue;
+    }
+
+    // Regular paragraph line
+    flushBullets();
+    flushOrdered();
+    elements.push(
+      <p key={i} className="text-slate-200 leading-relaxed">
+        {renderInline(trimmed)}
+      </p>
+    );
+  }
+
+  flushBullets();
+  flushOrdered();
+
+  return <div className="space-y-1">{elements}</div>;
+}
+
 interface Message {
   role: 'user' | 'assistant';
   content: string;
@@ -302,13 +432,16 @@ export default function ChatPage() {
 
                     {/* Chat Bubble */}
                     <div 
-                      className={`max-w-[75%] rounded-2xl px-5 py-3.5 text-sm leading-relaxed border ${
+                      className={`max-w-[78%] rounded-2xl px-5 py-3.5 text-sm leading-relaxed border ${
                         isUser 
                           ? 'bg-blue-600 border-blue-500/30 text-white rounded-tr-none' 
                           : 'bg-slate-900/60 border-slate-800 text-slate-200 rounded-tl-none backdrop-blur-md'
                       }`}
                     >
-                      <div className="whitespace-pre-wrap">{message.content}</div>
+                      {isUser
+                        ? <p className="whitespace-pre-wrap">{message.content}</p>
+                        : <FormattedMessage content={message.content} />
+                      }
                     </div>
 
                     {/* User Avatar */}

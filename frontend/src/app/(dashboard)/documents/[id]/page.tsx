@@ -100,7 +100,7 @@ function ChatResponseCard({ msg }: { msg: any }) {
     <div className="space-y-3 bg-slate-800/40 border border-white/5 p-4 rounded-2xl shadow-md fade-in mt-3">
       <div>
         <p className="text-xs font-bold text-emerald-400 mb-1 flex items-center gap-1.5">
-          <Brain className="w-3.5 h-3.5" /> AI Assistant (Llama 3.2 RAG)
+          <Brain className="w-3.5 h-3.5" /> AI Assistant
         </p>
         {msg.answer ? (
           <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">{answer}</p>
@@ -149,12 +149,62 @@ export default function DocumentDetailPage() {
   const [isQuerying, setIsQuerying] = useState(false);
   const [chatHistory, setChatHistory] = useState<any[]>([]);
 
+  const [selectedLanguage, setSelectedLanguage] = useState<string>('English');
+  const [translations, setTranslations] = useState<Record<string, {
+    summary_text: string;
+    coverage_summary?: string;
+    exclusions_summary?: string;
+    waiting_period_summary?: string;
+    premium_summary?: string;
+  }>>({});
+  const [isTranslating, setIsTranslating] = useState(false);
+
+  const handleLanguageChange = async (lang: string) => {
+    setSelectedLanguage(lang);
+    if (lang === 'English' || !doc?.summary) return;
+    
+    // If already translated, use cache
+    if (translations[lang]) return;
+    
+    setIsTranslating(true);
+    const toastId = toast.loading(`Translating summary to ${lang}...`);
+    try {
+      const summary = doc.summary;
+      const [tText, tCoverage, tExclusions, tWaiting, tPremium] = await Promise.all([
+        summary.summary_text ? aiApi.translate(summary.summary_text, lang) : Promise.resolve({ translated_text: '' }),
+        summary.coverage_summary ? aiApi.translate(summary.coverage_summary, lang) : Promise.resolve({ translated_text: '' }),
+        summary.exclusions_summary ? aiApi.translate(summary.exclusions_summary, lang) : Promise.resolve({ translated_text: '' }),
+        summary.waiting_period_summary ? aiApi.translate(summary.waiting_period_summary, lang) : Promise.resolve({ translated_text: '' }),
+        summary.premium_summary ? aiApi.translate(summary.premium_summary, lang) : Promise.resolve({ translated_text: '' }),
+      ]);
+      
+      setTranslations(prev => ({
+        ...prev,
+        [lang]: {
+          summary_text: tText.translated_text,
+          coverage_summary: tCoverage.translated_text || undefined,
+          exclusions_summary: tExclusions.translated_text || undefined,
+          waiting_period_summary: tWaiting.translated_text || undefined,
+          premium_summary: tPremium.translated_text || undefined,
+        }
+      }));
+      toast.success(`Translated summary to ${lang}!`, { id: toastId });
+    } catch (error) {
+      console.error(error);
+      toast.error(`Failed to translate summary. Please check if Ollama is running.`, { id: toastId });
+      setSelectedLanguage('English');
+    } finally {
+      setIsTranslating(false);
+    }
+  };
+
   const { data: doc, isLoading, refetch } = useQuery<DocumentDetail>({
     queryKey: ['document', docId],
     queryFn: () => documentsApi.getById(docId),
     refetchInterval: doc => {
       const d = doc.state.data;
-      return d && ['uploaded', 'processing'].includes(d.status) ? 3000 : false;
+      // Keep polling while in any non-final state
+      return d && ['uploaded', 'processing', 'text_extracted'].includes(d.status) ? 2000 : false;
     },
   });
 
@@ -187,6 +237,26 @@ export default function DocumentDetailPage() {
     onError: (err: any) => toast.error(err.response?.data?.detail || 'Risk analysis failed'),
   });
 
+  const extractAllMutation = useMutation({
+    mutationFn: async () => {
+      const toastId = toast.loading('Running full policy audit (extracting fields and risks)...');
+      try {
+        await Promise.all([
+          aiApi.extractFields(docId),
+          aiApi.riskAnalysis(docId)
+        ]);
+        toast.success('Policy audit complete!', { id: toastId });
+      } catch (err: any) {
+        toast.error(err.response?.data?.detail || 'Audit failed', { id: toastId });
+        throw err;
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['document', docId] });
+      setActiveTab('fields');
+    }
+  });
+
   const handleSendQuery = async (queryText?: string) => {
     const textToSend = queryText || queryInput;
     if (!textToSend.trim()) return;
@@ -198,20 +268,77 @@ export default function DocumentDetailPage() {
     
     if (!queryText) setQueryInput('');
 
+    let assistantMessageIndex = -1;
+
     try {
-      const res = await aiApi.queryDocument(docId, textToSend);
-      setChatHistory(prev => [
-        ...prev,
-        {
-          answer: res.answer,
-          context: res.context,
-          evaluation: res.evaluation,
-          isUser: false,
-          timestamp: new Date()
+      // Map history for RAG endpoint
+      const historyPayload = chatHistory.map(m => ({
+        role: m.isUser ? 'user' : 'assistant',
+        content: m.isUser ? m.query : m.answer
+      }));
+
+      const token = localStorage.getItem('access_token');
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+
+      const response = await fetch(`${API_URL}/ai/chat/stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          query: textToSend,
+          document_ids: [docId],
+          history: historyPayload
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to initialize stream: ${response.statusText}`);
+      }
+
+      // Add empty assistant message to start streaming into
+      setChatHistory(prev => {
+        assistantMessageIndex = prev.length;
+        return [
+          ...prev,
+          {
+            answer: '',
+            context: [],
+            evaluation: null,
+            isUser: false,
+            timestamp: new Date()
+          }
+        ];
+      });
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let accumulatedContent = '';
+
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunk = decoder.decode(value, { stream: true });
+          accumulatedContent += chunk;
+
+          // Update the assistant message content
+          setChatHistory(prev => {
+            const updated = [...prev];
+            if (assistantMessageIndex !== -1 && updated[assistantMessageIndex]) {
+              updated[assistantMessageIndex] = {
+                ...updated[assistantMessageIndex],
+                answer: accumulatedContent
+              };
+            }
+            return updated;
+          });
         }
-      ]);
+      }
     } catch (err: any) {
-      toast.error(err.response?.data?.detail || 'Failed to query model');
+      toast.error(err.message || 'Failed to query model');
       // remove user message if failed
       setChatHistory(prev => prev.filter(m => m.query !== textToSend || !m.isUser));
     } finally {
@@ -219,7 +346,7 @@ export default function DocumentDetailPage() {
     }
   };
 
-  const isProcessing = ['uploaded', 'processing'].includes(doc?.status || '');
+  const isProcessing = ['uploaded', 'processing', 'text_extracted'].includes(doc?.status || '');
   const canRunAI = doc?.status !== 'uploaded' && doc?.status !== 'processing' && doc?.status !== 'failed';
 
   if (isLoading) {
@@ -281,7 +408,18 @@ export default function DocumentDetailPage() {
         <div className="flex items-center gap-3 p-4 rounded-xl"
           style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)' }}>
           <div className="w-4 h-4 border-2 border-amber-400/30 border-t-amber-400 rounded-full animate-spin" />
-          <p className="text-amber-300 text-sm">Document is being processed. Text extraction in progress...</p>
+          <div>
+            <p className="text-amber-300 text-sm font-medium">
+              {doc?.status === 'text_extracted'
+                ? 'Building AI index... Generating embeddings and summary in background.'
+                : 'Document is being processed. Text extraction in progress...'}
+            </p>
+            <p className="text-amber-400/60 text-xs mt-0.5">
+              {doc?.status === 'text_extracted'
+                ? 'You can use the document now — AI features will be ready shortly.'
+                : 'This may take a few seconds...'}
+            </p>
+          </div>
         </div>
       )}
 
@@ -371,40 +509,73 @@ export default function DocumentDetailPage() {
         </div>
 
         <div className="pt-6">
-          {/* Summary Tab */}
-          {activeTab === 'summary' && (
-            <div className="space-y-4">
-              {!doc.summary ? (
+          {activeTab === 'summary' && (() => {
+            const displayedSummary = selectedLanguage === 'English' 
+              ? doc.summary 
+              : translations[selectedLanguage] || doc.summary;
+            
+            if (!doc.summary) {
+              return (
                 <div className="text-center py-12 glass-card">
                   <Brain className="w-12 h-12 text-slate-600 mx-auto mb-3" />
                   <p className="text-slate-400">No summary yet. Click "AI Summarize" to generate one.</p>
                 </div>
-              ) : (
-                <>
-                  <div className="glass-card p-6">
-                    <h3 className="font-semibold mb-3 flex items-center gap-2 text-blue-300">
+              );
+            }
+            
+            return (
+              <div className="space-y-4">
+                <div className="glass-card p-6 relative overflow-hidden">
+                  {isTranslating && (
+                    <div className="absolute inset-0 bg-[#0a0f1e]/60 backdrop-blur-sm flex items-center justify-center z-10 transition-all">
+                      <div className="flex items-center gap-2">
+                        <span className="w-5 h-5 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
+                        <span className="text-xs text-slate-400">Translating to {selectedLanguage}...</span>
+                      </div>
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                    <h3 className="font-semibold flex items-center gap-2 text-blue-300">
                       <Info className="w-4 h-4" /> Policy Summary
                     </h3>
-                    <p className="text-slate-300 leading-relaxed whitespace-pre-wrap">{doc.summary.summary_text}</p>
+                    
+                    {/* Language Dropdown */}
+                    <div className="flex items-center gap-1.5 bg-slate-900/60 border border-slate-700/40 rounded-lg px-2.5 py-1">
+                      <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Language:</span>
+                      <select
+                        value={selectedLanguage}
+                        onChange={(e) => handleLanguageChange(e.target.value)}
+                        className="bg-transparent border-none text-xs text-white focus:outline-none cursor-pointer"
+                      >
+                        <option value="English">English</option>
+                        <option value="Hindi">Hindi (हिंदी)</option>
+                        <option value="Marathi">Marathi (मराठी)</option>
+                      </select>
+                    </div>
                   </div>
-                  <div className="grid md:grid-cols-2 gap-4">
-                    {[
-                      { label: '✅ Coverage', value: doc.summary.coverage_summary, color: '#10b981' },
-                      { label: '❌ Exclusions', value: doc.summary.exclusions_summary, color: '#ef4444' },
-                      { label: '⏰ Waiting Period', value: doc.summary.waiting_period_summary, color: '#f59e0b' },
-                      { label: '💰 Premium', value: doc.summary.premium_summary, color: '#3b82f6' },
-                    ].filter(s => s.value).map((section) => (
-                      <div key={section.label} className="glass-card p-5">
-                        <h4 className="font-semibold text-sm mb-2" style={{ color: section.color }}>{section.label}</h4>
-                        <p className="text-slate-300 text-sm leading-relaxed whitespace-pre-wrap">{section.value}</p>
-                      </div>
-                    ))}
-                  </div>
-                  <p className="text-xs text-slate-500 text-right">Generated by {doc.summary.model_used} • {new Date(doc.summary.created_at).toLocaleString()}</p>
-                </>
-              )}
-            </div>
-          )}
+                  <p className="text-slate-300 leading-relaxed whitespace-pre-wrap">{displayedSummary.summary_text}</p>
+                </div>
+                
+                <div className="grid md:grid-cols-2 gap-4 relative">
+                  {isTranslating && (
+                    <div className="absolute inset-0 bg-[#0a0f1e]/30 backdrop-blur-[2px] z-10 rounded-xl" />
+                  )}
+                  {[
+                    { label: '✅ Coverage', value: displayedSummary.coverage_summary, color: '#10b981' },
+                    { label: '❌ Exclusions', value: displayedSummary.exclusions_summary, color: '#ef4444' },
+                    { label: '⏰ Waiting Period', value: displayedSummary.waiting_period_summary, color: '#f59e0b' },
+                    { label: '💰 Premium', value: displayedSummary.premium_summary, color: '#3b82f6' },
+                  ].filter(s => s.value).map((section) => (
+                    <div key={section.label} className="glass-card p-5">
+                      <h4 className="font-semibold text-sm mb-2" style={{ color: section.color }}>{section.label}</h4>
+                      <p className="text-slate-300 text-sm leading-relaxed whitespace-pre-wrap">{section.value}</p>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-slate-500 text-right">Generated by {displayedSummary.model_used || doc.summary.model_used} • {new Date(doc.summary.created_at).toLocaleString()}</p>
+              </div>
+            );
+          })()}
 
           {/* Fields Tab */}
           {activeTab === 'fields' && (

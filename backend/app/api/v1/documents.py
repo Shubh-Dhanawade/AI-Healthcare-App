@@ -43,46 +43,79 @@ MAX_FILE_SIZE = settings.MAX_FILE_SIZE_MB * 1024 * 1024  # Convert to bytes
 
 
 async def process_document_background(doc_id: str, file_path: str, file_type: str):
-    """Background task to extract text from uploaded document."""
+    """Background task to extract text from uploaded document and perform auto-analysis.
+    
+    Phase 1 (FAST): Extract text → commit to DB → mark as 'text_extracted' so UI unblocks immediately.
+    Phase 2 (BACKGROUND): Run chunking+embedding and AI summary CONCURRENTLY, then mark 'completed'.
+    """
     from app.core.database import AsyncSessionLocal
+    import asyncio
     
     async with AsyncSessionLocal() as db:
         try:
-            # Get document
             result = await db.execute(select(Document).where(Document.id == doc_id))
             doc = result.scalar_one_or_none()
             if not doc:
                 return
             
-            # Update status
+            # ── PHASE 1: Fast text extraction (unblocks UI quickly) ──
             doc.status = "processing"
             await db.commit()
             
-            # Extract text
             text, method, page_count = await extract_document_text(file_path, file_type)
             
-            # Save results
             doc.extracted_text = text
             doc.extraction_method = method
             doc.page_count = page_count
-            
-            # Generate semantic vector chunks in SQLite Vector DB
-            from app.services.rag_service import generate_document_chunks
-            await generate_document_chunks(doc.id, text, db)
-            
-            doc.status = "text_extracted"
+            doc.status = "text_extracted"  # ← UI can now display the document
             await db.commit()
-            
-            logger.info(f"✅ Document {doc_id} text extracted and vector database initialized")
-            
+            logger.info(f"Phase 1 done for {doc_id}: text extracted ({len(text)} chars), status=text_extracted")
+
         except Exception as e:
-            logger.error(f"Background text extraction failed for {doc_id}: {e}")
+            logger.error(f"Phase 1 text extraction failed for {doc_id}: {e}")
             async with AsyncSessionLocal() as err_db:
                 result = await err_db.execute(select(Document).where(Document.id == doc_id))
                 doc = result.scalar_one_or_none()
                 if doc:
                     doc.status = "failed"
                     await err_db.commit()
+            return
+
+    # ── PHASE 2: Concurrent embedding + summary (background, non-blocking for user) ──
+    async def _run_embeddings():
+        async with AsyncSessionLocal() as db2:
+            try:
+                from app.services.rag_service import generate_document_chunks
+                await generate_document_chunks(doc_id, text, db2)
+                await db2.commit()
+                logger.info(f"Chunking & FAISS indexing complete for {doc_id}")
+            except Exception as e:
+                logger.error(f"Chunking/embedding failed for {doc_id}: {e}")
+
+    async def _run_summary():
+        async with AsyncSessionLocal() as db3:
+            try:
+                from app.services.summary_service import generate_and_store_summary
+                await generate_and_store_summary(db3, doc_id, text)
+                await db3.commit()
+                logger.info(f"AI summary complete for {doc_id}")
+            except Exception as e:
+                logger.error(f"Auto-summarization failed for {doc_id}: {e}")
+
+    # Run both concurrently
+    await asyncio.gather(_run_embeddings(), _run_summary())
+
+    # Final status update
+    async with AsyncSessionLocal() as db_final:
+        try:
+            result = await db_final.execute(select(Document).where(Document.id == doc_id))
+            doc = result.scalar_one_or_none()
+            if doc:
+                doc.status = "completed"
+                await db_final.commit()
+            logger.info(f"Document {doc_id} fully processed (status=completed)")
+        except Exception as e:
+            logger.error(f"Failed to update final status for {doc_id}: {e}")
 
 
 @router.post("/upload", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)
