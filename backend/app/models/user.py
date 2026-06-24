@@ -35,6 +35,9 @@ class User(Base):
     reminders: Mapped[list["PolicyReminder"]] = relationship(  # noqa
         "PolicyReminder", back_populates="user", cascade="all, delete-orphan"
     )
+    chat_sessions: Mapped[list["ChatSession"]] = relationship(  # noqa
+        "ChatSession", back_populates="user", cascade="all, delete-orphan"
+    )
 
     def __repr__(self):
         return f"<User {self.email}>"

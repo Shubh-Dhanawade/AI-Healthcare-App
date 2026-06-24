@@ -65,6 +65,18 @@ export const documentsApi = {
     const res = await apiClient.post('/documents/compare', { document_ids: documentIds });
     return res.data;
   },
+
+  /** Fire-and-forget: launches Extract Fields on the server (202 immediately). */
+  runFields: async (id: string) => {
+    const res = await apiClient.post(`/documents/${id}/run-fields`);
+    return res.data;
+  },
+
+  /** Fire-and-forget: launches Risk Analysis on the server (202 immediately). */
+  runRisks: async (id: string) => {
+    const res = await apiClient.post(`/documents/${id}/run-risks`);
+    return res.data;
+  },
 };
 
 export const aiApi = {
@@ -88,12 +100,33 @@ export const aiApi = {
     return res.data;
   },
 
-  chat: async (query: string, documentIds?: string[], history?: { role: string; content: string }[]) => {
+  chat: async (query: string, documentIds?: string[], history?: { role: string; content: string }[], sessionId?: string) => {
     const res = await apiClient.post('/ai/chat', {
       query,
       document_ids: documentIds,
       history,
+      session_id: sessionId,
     });
+    return res.data;
+  },
+
+  getSessions: async () => {
+    const res = await apiClient.get('/ai/chat/sessions');
+    return res.data;
+  },
+
+  createSession: async (title?: string) => {
+    const res = await apiClient.post('/ai/chat/sessions', { title });
+    return res.data;
+  },
+
+  getSessionMessages: async (sessionId: string) => {
+    const res = await apiClient.get(`/ai/chat/sessions/${sessionId}/messages`);
+    return res.data;
+  },
+
+  deleteSession: async (sessionId: string) => {
+    const res = await apiClient.delete(`/ai/chat/sessions/${sessionId}`);
     return res.data;
   },
 
@@ -115,6 +148,12 @@ export const aiApi = {
 
   getModelMetrics: async () => {
     const res = await apiClient.get('/ai/model-metrics');
+    return res.data;
+  },
+
+  /** Fetch persistent chat history for a specific document (creates session if none exists). */
+  getDocumentChatHistory: async (documentId: string): Promise<{ session_id: string; messages: Array<{ id: string; session_id: string; role: string; content: string; sources: string[] | null; created_at: string }> }> => {
+    const res = await apiClient.get(`/ai/chat/history/${documentId}`);
     return res.data;
   },
 };

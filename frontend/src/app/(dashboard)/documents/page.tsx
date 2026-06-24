@@ -55,12 +55,48 @@ export default function DocumentsListPage() {
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
         <input
           type="text"
-          className="form-input pl-10"
+          className="form-input pl-10 "
           placeholder="Search documents..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
       </div>
+
+      {/* Inline Compare Bar — shown when documents are selected */}
+      {selectedIds.length > 0 && (
+        <div className="glass-card p-5 border border-blue-500/20 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-blue-500/15 text-blue-400 flex items-center justify-center border border-blue-500/30">
+              <Scale className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="font-semibold text-white text-sm">Policy Comparison</p>
+              <p className="text-slate-400 text-xs">
+                Selected <span className="text-blue-400 font-bold">{selectedIds.length}</span> of{' '}
+                <span className="text-slate-200">3</span> policies.
+                {selectedIds.length < 2 && ' Select at least 2 to compare.'}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 w-full sm:w-auto">
+            <button
+              onClick={() => setSelectedIds([])}
+              className="px-4 py-2 text-sm text-slate-400 hover:text-white transition-colors w-full sm:w-auto text-center"
+            >
+              Clear
+            </button>
+            <Link
+              href={`/compare?ids=${selectedIds.join(',')}`}
+              className={`w-full sm:w-auto px-6 py-2.5 rounded-xl font-semibold text-sm transition-all flex items-center justify-center gap-2 shadow-lg ${selectedIds.length >= 2
+                ? 'bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white shadow-blue-500/25 hover:scale-[1.02] active:scale-[0.98]'
+                : 'bg-slate-800 text-slate-500 border border-slate-700/50 cursor-not-allowed pointer-events-none'
+                }`}
+            >
+              <Scale className="w-4 h-4" /> Compare Selected
+            </Link>
+          </div>
+        </div>
+      )}
 
       {/* Documents Table */}
       <div className="glass-card overflow-hidden">
@@ -165,36 +201,7 @@ export default function DocumentsListPage() {
         )}
       </div>
 
-      {/* Floating Compare Bar */}
-      {selectedIds.length > 0 && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center justify-between gap-6 px-6 py-4 rounded-2xl bg-slate-900/90 border border-blue-500/30 shadow-[0_0_30px_rgba(59,130,246,0.2)] backdrop-blur-xl animate-fade-in w-[90%] max-w-2xl">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-blue-500/20 flex items-center justify-center border border-blue-500/30">
-              <Scale className="w-5 h-5 text-blue-400" />
-            </div>
-            <div>
-              <p className="font-semibold text-white text-sm">Policy Comparison</p>
-              <p className="text-slate-400 text-xs">{selectedIds.length} of 3 selected</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setSelectedIds([])}
-              className="px-4 py-2 text-sm text-slate-400 hover:text-white transition-colors"
-            >
-              Clear
-            </button>
-            <Link
-              href={`/compare?ids=${selectedIds.join(',')}`}
-              className={`px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white font-semibold text-sm shadow-lg shadow-blue-500/20 hover:shadow-blue-500/30 hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center gap-2 ${
-                selectedIds.length < 2 ? 'opacity-50 pointer-events-none' : ''
-              }`}
-            >
-              Compare Selected
-            </Link>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
+

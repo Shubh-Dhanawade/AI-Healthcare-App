@@ -7,10 +7,10 @@ import { useParams, useRouter } from 'next/navigation';
 import toast from 'react-hot-toast';
 import {
   ArrowLeft, Brain, Shield, FileText, Search, RefreshCw,
-  AlertTriangle, CheckCircle, Info, ChevronDown, ChevronUp,
-  Send, MessageSquare, Clock, Activity, List
+  AlertTriangle, Info, ChevronDown, ChevronUp,
+  Send, MessageSquare, List, Loader2
 } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import DocumentStatusBadge from '@/components/documents/DocumentStatusBadge';
 import Link from 'next/link';
 
@@ -70,7 +70,7 @@ function MetricRing({ score, label, color, reasoning }: { score: number; label: 
         <span className="absolute text-xs font-bold text-white">{percentage}%</span>
       </div>
       <p className="text-[11px] font-semibold mt-2 text-slate-300">{label}</p>
-      
+
       {reasoning && (
         <div className="absolute bottom-full mb-2 hidden group-hover:block w-48 p-2.5 rounded bg-slate-950 border border-slate-800 text-[10px] text-slate-300 z-10 shadow-xl leading-normal text-left">
           {reasoning}
@@ -80,9 +80,18 @@ function MetricRing({ score, label, color, reasoning }: { score: number; label: 
   );
 }
 
+function cleanResponse(raw: string): string {
+  if (!raw) return '';
+  return raw
+    .replace(/\[SOURCES:[^\]]*\]/g, '')           // strip the sources tag
+    .replace(/\s*\bIn\s+[a-zA-Z0-9_\-\.]+\.(?:pdf|docx)\s*-\s*Page\s*\d+(?:\s*context)?\.?/gi, '') // strip any inline citations
+    .replace(/\n*\b(?:Reference|Source)s?:[\s\S]*$/gi, '') // strip any trailing inline references/sources
+    .trim();
+}
+
 function ChatResponseCard({ msg }: { msg: any }) {
   const [showSources, setShowSources] = useState(false);
-  
+
   if (msg.isUser) {
     return (
       <div className="flex justify-end gap-3 fade-in mt-3">
@@ -103,7 +112,7 @@ function ChatResponseCard({ msg }: { msg: any }) {
           <Brain className="w-3.5 h-3.5" /> AI Assistant
         </p>
         {msg.answer ? (
-          <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">{answer}</p>
+          <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">{cleanResponse(answer)}</p>
         ) : (
           <div className="flex items-center gap-2 p-1 text-slate-400">
             <span className="w-4 h-4 border-2 border-slate-400/30 border-t-slate-400 rounded-full animate-spin" />
@@ -116,7 +125,7 @@ function ChatResponseCard({ msg }: { msg: any }) {
 
       {context && context.length > 0 && (
         <div className="border-t border-white/5 pt-2">
-          <button 
+          <button
             onClick={() => setShowSources(!showSources)}
             className="flex items-center gap-1 text-[11px] text-blue-400 hover:text-blue-300 font-semibold"
           >
@@ -138,7 +147,6 @@ function ChatResponseCard({ msg }: { msg: any }) {
   );
 }
 
-
 export default function DocumentDetailPage() {
   const params = useParams();
   const docId = params.id as string;
@@ -148,6 +156,8 @@ export default function DocumentDetailPage() {
   const [queryInput, setQueryInput] = useState('');
   const [isQuerying, setIsQuerying] = useState(false);
   const [chatHistory, setChatHistory] = useState<any[]>([]);
+  const [chatLoading, setChatLoading] = useState(false);
+  const sessionIdRef = useRef<string | null>(null);
 
   const [selectedLanguage, setSelectedLanguage] = useState<string>('English');
   const [translations, setTranslations] = useState<Record<string, {
@@ -162,10 +172,7 @@ export default function DocumentDetailPage() {
   const handleLanguageChange = async (lang: string) => {
     setSelectedLanguage(lang);
     if (lang === 'English' || !doc?.summary) return;
-    
-    // If already translated, use cache
     if (translations[lang]) return;
-    
     setIsTranslating(true);
     const toastId = toast.loading(`Translating summary to ${lang}...`);
     try {
@@ -177,7 +184,6 @@ export default function DocumentDetailPage() {
         summary.waiting_period_summary ? aiApi.translate(summary.waiting_period_summary, lang) : Promise.resolve({ translated_text: '' }),
         summary.premium_summary ? aiApi.translate(summary.premium_summary, lang) : Promise.resolve({ translated_text: '' }),
       ]);
-      
       setTranslations(prev => ({
         ...prev,
         [lang]: {
@@ -198,13 +204,18 @@ export default function DocumentDetailPage() {
     }
   };
 
+  // Poll while document is processing OR while AI analysis results are still being generated
   const { data: doc, isLoading, refetch } = useQuery<DocumentDetail>({
     queryKey: ['document', docId],
     queryFn: () => documentsApi.getById(docId),
-    refetchInterval: doc => {
-      const d = doc.state.data;
-      // Keep polling while in any non-final state
-      return d && ['uploaded', 'processing', 'text_extracted'].includes(d.status) ? 2000 : false;
+    refetchInterval: (query) => {
+      const d = query.state.data;
+      if (!d) return false;
+      if (['uploaded', 'processing', 'text_extracted'].includes(d.status)) return 2000;
+      // Keep polling until ALL auto-generated results are present
+      const anyMissing = !d.summary || d.extracted_fields.length === 0 || d.risk_analyses.length === 0;
+      if (anyMissing && d.status === 'completed') return 3000;
+      return false;
     },
   });
 
@@ -217,45 +228,24 @@ export default function DocumentDetailPage() {
     onError: (err: any) => toast.error(err.response?.data?.detail || 'Summarization failed'),
   });
 
-  const extractFieldsMutation = useMutation({
-    mutationFn: () => aiApi.extractFields(docId),
+  const runFieldsMutation = useMutation({
+    mutationFn: () => documentsApi.runFields(docId),
     onSuccess: () => {
-      toast.success('Fields extracted!');
+      toast.success('Fields extraction started in background!');
       queryClient.invalidateQueries({ queryKey: ['document', docId] });
-      setActiveTab('fields');
     },
-    onError: (err: any) => toast.error(err.response?.data?.detail || 'Extraction failed'),
+    onError: (err: any) => toast.error(err.response?.data?.detail || 'Failed to start fields extraction'),
   });
 
-  const riskMutation = useMutation({
-    mutationFn: () => aiApi.riskAnalysis(docId),
+  const runRisksMutation = useMutation({
+    mutationFn: () => documentsApi.runRisks(docId),
     onSuccess: () => {
-      toast.success('Risk analysis complete!');
+      toast.success('Risk analysis started in background!');
       queryClient.invalidateQueries({ queryKey: ['document', docId] });
-      setActiveTab('risks');
     },
-    onError: (err: any) => toast.error(err.response?.data?.detail || 'Risk analysis failed'),
+    onError: (err: any) => toast.error(err.response?.data?.detail || 'Failed to start risk analysis'),
   });
 
-  const extractAllMutation = useMutation({
-    mutationFn: async () => {
-      const toastId = toast.loading('Running full policy audit (extracting fields and risks)...');
-      try {
-        await Promise.all([
-          aiApi.extractFields(docId),
-          aiApi.riskAnalysis(docId)
-        ]);
-        toast.success('Policy audit complete!', { id: toastId });
-      } catch (err: any) {
-        toast.error(err.response?.data?.detail || 'Audit failed', { id: toastId });
-        throw err;
-      }
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['document', docId] });
-      setActiveTab('fields');
-    }
-  });
 
   const handleSendQuery = async (queryText?: string) => {
     const textToSend = queryText || queryInput;
@@ -265,7 +255,7 @@ export default function DocumentDetailPage() {
     // Add temporary user query to chat history
     const userMsg = { query: textToSend, isUser: true, timestamp: new Date() };
     setChatHistory(prev => [...prev, userMsg]);
-    
+
     if (!queryText) setQueryInput('');
 
     let assistantMessageIndex = -1;
@@ -289,12 +279,20 @@ export default function DocumentDetailPage() {
         body: JSON.stringify({
           query: textToSend,
           document_ids: [docId],
+          document_id: docId,
+          session_id: sessionIdRef.current,
           history: historyPayload
         })
       });
 
       if (!response.ok) {
         throw new Error(`Failed to initialize stream: ${response.statusText}`);
+      }
+
+      // Capture the session_id from the response header (for subsequent messages)
+      const returnedSessionId = response.headers.get('X-Chat-Session-Id');
+      if (returnedSessionId && !sessionIdRef.current) {
+        sessionIdRef.current = returnedSessionId;
       }
 
       // Add empty assistant message to start streaming into
@@ -345,6 +343,66 @@ export default function DocumentDetailPage() {
       setIsQuerying(false);
     }
   };
+
+  // AUTO-TRIGGER analyses when document text extraction completes
+  const autoTriggerAnalyses = async () => {
+    if (!doc || doc.status !== 'text_extracted') return;
+    if (summarizeMutation.isPending || runFieldsMutation.isPending || runRisksMutation.isPending) return;
+
+    console.log(`[AUTO-TRIGGER] Starting auto-analyses for ${docId}`);
+    
+    try {
+      // Auto-trigger summary
+      if (!doc.summary && !summarizeMutation.isPending) {
+        summarizeMutation.mutate();
+      }
+      
+      // Auto-trigger field extraction
+      if (doc.extracted_fields.length === 0 && !runFieldsMutation.isPending) {
+        runFieldsMutation.mutate();
+      }
+      
+      // Auto-trigger risk analysis
+      if (doc.risk_analyses.length === 0 && !runRisksMutation.isPending) {
+        runRisksMutation.mutate();
+      }
+    } catch (err) {
+      console.error('Auto-trigger error:', err);
+    }
+  };
+
+  // Load persistent chat history from the database when Chat tab is opened
+  useEffect(() => {
+    if (activeTab !== 'query' || !docId) return;
+    if (chatHistory.length > 0 || sessionIdRef.current) return; // already loaded
+    setChatLoading(true);
+    aiApi.getDocumentChatHistory(docId)
+      .then(({ session_id, messages }) => {
+        sessionIdRef.current = session_id;
+        if (messages.length > 0) {
+          const hydrated = messages.map((m) =>
+            m.role === 'user'
+              ? { query: m.content, isUser: true, timestamp: new Date(m.created_at) }
+              : { answer: m.content, context: m.sources || [], evaluation: null, isUser: false, timestamp: new Date(m.created_at) }
+          );
+          setChatHistory(hydrated);
+        }
+      })
+      .catch((err) => {
+        console.warn('Could not load chat history:', err);
+      })
+      .finally(() => setChatLoading(false));
+  }, [activeTab, docId]);
+
+  // Trigger auto-analysis when document reaches text_extracted status
+  useEffect(() => {
+    if (doc?.status === 'text_extracted' && !summarizeMutation.isPending && !runFieldsMutation.isPending && !runRisksMutation.isPending) {
+      const timer = setTimeout(autoTriggerAnalyses, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [doc?.status, summarizeMutation.isPending, runFieldsMutation.isPending, runRisksMutation.isPending]);
+
+
 
   const isProcessing = ['uploaded', 'processing', 'text_extracted'].includes(doc?.status || '');
   const canRunAI = doc?.status !== 'uploaded' && doc?.status !== 'processing' && doc?.status !== 'failed';
@@ -423,49 +481,140 @@ export default function DocumentDetailPage() {
         </div>
       )}
 
-      {/* AI Actions */}
+      {/* AI Actions — Auto-triggered, manual buttons hidden during auto-processing */}
       {canRunAI && (
         <div className="glass-card p-5">
-          <h2 className="font-semibold text-sm text-slate-300 mb-4 flex items-center gap-2">
-            <Brain className="w-4 h-4 text-blue-400" /> AI Analysis Tools
+          <h2 className="font-semibold text-sm text-slate-300 mb-3 flex items-center gap-2">
+            <Brain className="w-4 h-4 text-blue-400" /> AI Analysis Progress
           </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <button
-              id="summarize-btn"
-              onClick={() => { summarizeMutation.mutate(); setActiveTab('summary'); }}
-              disabled={summarizeMutation.isPending || !canRunAI}
-              className="btn-primary justify-center py-2.5"
+
+          {/* AUTO-PROCESSING indicator during text extraction phase */}
+          {doc.status === 'text_extracted' && (
+            <div className="mb-4 flex items-center gap-3 px-4 py-3 rounded-xl"
+              style={{ background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.3)' }}>
+              <div className="w-4 h-4 border-2 border-blue-400/30 border-t-blue-400 rounded-full animate-spin flex-shrink-0" />
+              <div className="flex-1">
+                <p className="text-blue-300 font-medium text-xs">Auto-launching AI analyses...</p>
+                <p className="text-slate-500 text-[10px] mt-0.5">Summary, field extraction, and risk analysis will start automatically.</p>
+              </div>
+            </div>
+          )}
+
+          {/* Summary auto-processing banner */}
+          {(summarizeMutation.isPending || (!doc.summary && doc.status === 'completed')) && (
+            <div className="mb-3 flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm"
+              style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.25)' }}>
+              <Loader2 className="w-4 h-4 text-blue-400 animate-spin flex-shrink-0" />
+              <div>
+                <p className="text-blue-300 font-medium text-xs">Generating summary in background…</p>
+                <p className="text-slate-500 text-[10px] mt-0.5">This will be brief and to the point.</p>
+              </div>
+            </div>
+          )}
+
+          {/* Fields background banner — shown while queuing (isPending) */}
+          {runFieldsMutation.isPending && (
+            <div
+              className="mb-3 flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm"
+              style={{ background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.3)' }}
             >
-              {summarizeMutation.isPending
-                ? <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Summarizing...</>
-                : <><Brain className="w-4 h-4" /> {doc.summary ? 'Re-summarize' : 'AI Summarize'}</>
-              }
-            </button>
-            <button
-              id="extract-fields-btn"
-              onClick={() => extractFieldsMutation.mutate()}
-              disabled={extractFieldsMutation.isPending || !canRunAI}
-              className="btn-secondary justify-center py-2.5"
-              style={{ color: '#a78bfa', borderColor: 'rgba(139,92,246,0.4)' }}
+              <Loader2 className="w-4 h-4 text-violet-400 animate-spin flex-shrink-0" />
+              <div>
+                <p className="text-violet-300 font-medium text-xs">Extracting fields in background…</p>
+                <p className="text-slate-500 text-[10px] mt-0.5">Key policy details will be extracted automatically.</p>
+              </div>
+            </div>
+          )}
+
+          {/* Fields polling banner — after 202, while results are missing */}
+          {!runFieldsMutation.isPending && doc.status === 'completed' && doc.extracted_fields.length === 0 && (
+            <div
+              className="mb-3 flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm"
+              style={{ background: 'rgba(139,92,246,0.07)', border: '1px solid rgba(139,92,246,0.2)' }}
             >
-              {extractFieldsMutation.isPending
-                ? <><span className="w-4 h-4 border-2 border-purple-400/30 border-t-purple-400 rounded-full animate-spin" /> Extracting...</>
-                : <><Search className="w-4 h-4" /> Extract Fields</>
-              }
-            </button>
-            <button
-              id="risk-analysis-btn"
-              onClick={() => riskMutation.mutate()}
-              disabled={riskMutation.isPending || !canRunAI}
-              className="btn-secondary justify-center py-2.5"
-              style={{ color: '#f87171', borderColor: 'rgba(239,68,68,0.4)' }}
+              <Loader2 className="w-4 h-4 text-violet-300 animate-spin flex-shrink-0" />
+              <div>
+                <p className="text-violet-300 font-medium text-xs">Extracting fields in background…</p>
+                <p className="text-slate-500 text-[10px] mt-0.5">Results will populate here automatically.</p>
+              </div>
+            </div>
+          )}
+
+          {/* Risks background banner — shown while queuing (isPending) */}
+          {runRisksMutation.isPending && (
+            <div
+              className="mb-3 flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm"
+              style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)' }}
             >
-              {riskMutation.isPending
-                ? <><span className="w-4 h-4 border-2 border-red-400/30 border-t-red-400 rounded-full animate-spin" /> Analyzing...</>
-                : <><Shield className="w-4 h-4" /> Risk Analysis</>
-              }
-            </button>
-          </div>
+              <Loader2 className="w-4 h-4 text-red-400 animate-spin flex-shrink-0" />
+              <div>
+                <p className="text-red-300 font-medium text-xs">Running risk analysis in background…</p>
+                <p className="text-slate-500 text-[10px] mt-0.5">Identifying potential risks and exclusions.</p>
+              </div>
+            </div>
+          )}
+
+          {/* Risks polling banner — after 202, while results are missing */}
+          {!runRisksMutation.isPending && doc.status === 'completed' && doc.risk_analyses.length === 0 && (
+            <div
+              className="mb-3 flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm"
+              style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.18)' }}
+            >
+              <Loader2 className="w-4 h-4 text-red-300 animate-spin flex-shrink-0" />
+              <div>
+                <p className="text-red-300 font-medium text-xs">Risk analysis running in background…</p>
+                <p className="text-slate-500 text-[10px] mt-0.5">Results will populate here automatically.</p>
+              </div>
+            </div>
+          )}
+
+          {/* Manual re-trigger buttons (hidden during initial auto-processing) */}
+          {doc.status === 'completed' && (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-3 border-t border-white/5">
+              <p className="col-span-full text-xs text-slate-500 mb-2">Re-run analyses manually if needed:</p>
+              
+              {/* Re-summarize */}
+              <button
+                id="summarize-btn"
+                onClick={() => { summarizeMutation.mutate(); setActiveTab('summary'); }}
+                disabled={summarizeMutation.isPending || !canRunAI}
+                className="btn-secondary justify-center py-2.5"
+              >
+                {summarizeMutation.isPending
+                  ? <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Summarizing...</>
+                  : <><Brain className="w-4 h-4" /> Re-summarize</>
+                }
+              </button>
+
+              {/* Extract Fields — separate background button */}
+              <button
+                id="extract-fields-btn"
+                onClick={() => runFieldsMutation.mutate()}
+                disabled={runFieldsMutation.isPending || !canRunAI}
+                className="btn-secondary justify-center py-2.5"
+                style={{ color: '#a78bfa', borderColor: 'rgba(139,92,246,0.4)' }}
+              >
+                {runFieldsMutation.isPending
+                  ? <><Loader2 className="w-4 h-4 animate-spin" /> Starting...</>
+                  : <><Search className="w-4 h-4" /> Re-extract Fields</>
+                }
+              </button>
+
+              {/* Risk Analysis — separate background button */}
+              <button
+                id="risk-analysis-btn"
+                onClick={() => { runRisksMutation.mutate(); }}
+                disabled={runRisksMutation.isPending || !canRunAI}
+                className="btn-secondary justify-center py-2.5"
+                style={{ color: '#f87171', borderColor: 'rgba(239,68,68,0.4)' }}
+              >
+                {runRisksMutation.isPending
+                  ? <><Loader2 className="w-4 h-4 animate-spin" /> Starting...</>
+                  : <><Shield className="w-4 h-4" /> Re-run Risk Analysis</>
+                }
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -493,11 +642,10 @@ export default function DocumentDetailPage() {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center gap-2 px-5 py-3 text-sm font-medium transition-all border-b-2 -mb-px ${
-                activeTab === tab.id
-                  ? 'border-blue-500 text-blue-400'
-                  : 'border-transparent text-slate-400 hover:text-slate-200'
-              }`}
+              className={`flex items-center gap-2 px-5 py-3 text-sm font-medium transition-all border-b-2 -mb-px ${activeTab === tab.id
+                ? 'border-blue-500 text-blue-400'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+                }`}
             >
               {tab.icon}
               {tab.label}
@@ -510,10 +658,10 @@ export default function DocumentDetailPage() {
 
         <div className="pt-6">
           {activeTab === 'summary' && (() => {
-            const displayedSummary = selectedLanguage === 'English' 
-              ? doc.summary 
+            const displayedSummary = selectedLanguage === 'English'
+              ? doc.summary
               : translations[selectedLanguage] || doc.summary;
-            
+
             if (!doc.summary) {
               return (
                 <div className="text-center py-12 glass-card">
@@ -522,7 +670,7 @@ export default function DocumentDetailPage() {
                 </div>
               );
             }
-            
+
             return (
               <div className="space-y-4">
                 <div className="glass-card p-6 relative overflow-hidden">
@@ -538,7 +686,7 @@ export default function DocumentDetailPage() {
                     <h3 className="font-semibold flex items-center gap-2 text-blue-300">
                       <Info className="w-4 h-4" /> Policy Summary
                     </h3>
-                    
+
                     {/* Language Dropdown */}
                     <div className="flex items-center gap-1.5 bg-slate-900/60 border border-slate-700/40 rounded-lg px-2.5 py-1">
                       <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Language:</span>
@@ -555,7 +703,7 @@ export default function DocumentDetailPage() {
                   </div>
                   <p className="text-slate-300 leading-relaxed whitespace-pre-wrap">{displayedSummary.summary_text}</p>
                 </div>
-                
+
                 <div className="grid md:grid-cols-2 gap-4 relative">
                   {isTranslating && (
                     <div className="absolute inset-0 bg-[#0a0f1e]/30 backdrop-blur-[2px] z-10 rounded-xl" />
@@ -648,11 +796,16 @@ export default function DocumentDetailPage() {
 
               {/* Chat history */}
               <div className="space-y-4 max-h-[450px] overflow-y-auto pr-1 border border-white/5 rounded-xl p-3 bg-slate-950/25">
-                {chatHistory.length === 0 ? (
+                {chatLoading ? (
+                  <div className="flex items-center justify-center py-12 gap-3">
+                    <span className="w-5 h-5 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
+                    <p className="text-sm text-slate-400">Loading chat history...</p>
+                  </div>
+                ) : chatHistory.length === 0 ? (
                   <div className="text-center py-12">
                     <MessageSquare className="w-12 h-12 text-slate-600 mx-auto mb-3" />
                     <p className="text-sm text-slate-400">No questions asked yet. Choose a suggested query below or type your own!</p>
-                    
+
                     {/* Suggested Questions */}
                     <div className="mt-6 max-w-lg mx-auto flex flex-col gap-2">
                       {[
@@ -661,7 +814,7 @@ export default function DocumentDetailPage() {
                         "What are the room rent limits or copayment terms?",
                         "How do I submit a claim under this policy?"
                       ].map((q, i) => (
-                        <button 
+                        <button
                           key={i}
                           onClick={() => { setQueryInput(q); handleSendQuery(q); }}
                           disabled={isQuerying}
@@ -687,8 +840,8 @@ export default function DocumentDetailPage() {
 
               {/* Query Input Box */}
               <div className="flex gap-2 border-t border-slate-700/30 pt-3">
-                <input 
-                  type="text" 
+                <input
+                  type="text"
                   value={queryInput}
                   onChange={(e) => setQueryInput(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter' && queryInput.trim() && !isQuerying) { handleSendQuery(); } }}
@@ -696,7 +849,7 @@ export default function DocumentDetailPage() {
                   disabled={isQuerying}
                   className="form-input flex-1 py-2 text-sm bg-slate-900/60"
                 />
-                <button 
+                <button
                   onClick={() => handleSendQuery()}
                   disabled={isQuerying || !queryInput.trim()}
                   className="btn-primary px-4 py-2 flex items-center gap-1.5"

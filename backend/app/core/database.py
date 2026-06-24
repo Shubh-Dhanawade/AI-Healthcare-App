@@ -57,7 +57,7 @@ class Base(DeclarativeBase):
 
 async def create_tables():
     """Create all database tables on startup."""
-    from app.models import user, document, summary, risk_analysis  # noqa
+    from app.models import user, document, summary, risk_analysis, rag_query_log, chat  # noqa
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("✅ Database tables created/verified")

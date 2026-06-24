@@ -121,15 +121,26 @@ def clean_extracted_text(text: str) -> str:
 async def extract_document_text(file_path: str, file_type: str) -> Tuple[str, str, int]:
     """
     Main entry point for text extraction.
+    Runs synchronous extractors in a thread pool so they don't block the async event loop.
     Returns: (cleaned_text, method, page_count)
     """
+    import asyncio
+    from functools import partial
+
     logger.info(f"Extracting text from: {file_path} (type: {file_type})")
+
+    loop = asyncio.get_event_loop()
 
     if file_type == "pdf":
         from app.services.pdf_processor import extract_text_from_pdf as fast_extract
-        cleaned, method, page_count = fast_extract(file_path)
+        # Run blocking I/O in thread pool — avoids stalling the event loop
+        cleaned, method, page_count = await loop.run_in_executor(
+            None, fast_extract, file_path
+        )
     else:
-        raw_text, method, page_count = extract_text_from_image(file_path)
+        raw_text, method, page_count = await loop.run_in_executor(
+            None, extract_text_from_image, file_path
+        )
         cleaned = clean_extracted_text(raw_text)
 
     logger.info(f"✅ Extraction complete: {len(cleaned)} chars via {method}")

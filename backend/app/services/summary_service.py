@@ -42,21 +42,21 @@ async def generate_and_store_summary(
     doc_id: str,
     text: str
 ) -> Dict[str, Any]:
-    """Generate summary using Ollama, save it to SQLite and cache it."""
+    """Generate BRIEF summary using Ollama, save to SQLite and cache. Optimized for speed."""
     # Check if already exists in DB (safety check)
     existing = await get_document_summary(db, doc_id)
     if existing:
         logger.info(f"Summary already exists for document {doc_id}, skipping generation.")
         return existing
         
-    # Generate new summary
+    # Generate new summary from document excerpt
     truncated = text[:2000] if len(text) > 2000 else text
     summary_data = {}
     
     try:
         response = await call_ollama(
             SUMMARIZATION_PROMPT.format(document_text=truncated),
-            num_predict=600,
+            num_predict=400,  # Reduced from 600 for faster generation of brief summaries
             num_ctx=2048,
         )
         result = extract_json_from_response(response)

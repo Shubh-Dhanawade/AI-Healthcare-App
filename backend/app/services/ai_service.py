@@ -39,63 +39,59 @@ def _rag_cache_key(query: str, policy_ids: list) -> str:
 
 # ── Concise prompts — fewer input tokens = faster model processing ──
 
-SUMMARIZATION_PROMPT = """You are a healthcare insurance expert. Analyze the following insurance document and provide a summary.
+SUMMARIZATION_PROMPT = """You are a healthcare insurance expert. Analyze the following insurance document and provide a BRIEF summary.
 Return ONLY a valid JSON object matching the schema below. Do not output any preamble, explanation, or conversational text.
-Keep descriptions concise.
+Be concise and direct.
 
 Return format JSON:
 {{
-  "summary_text": "Executive summary of the policy (maximum 120 words)",
-  "coverage_summary": "Summary of major coverages and benefits (maximum 60 words)",
-  "exclusions_summary": "Summary of key exclusions and what is not covered (maximum 60 words)",
-  "waiting_period_summary": "Summary of waiting periods for pre-existing or standard diseases (maximum 60 words)",
-  "premium_summary": "Summary of premium, deductibles, and co-payment details (maximum 60 words)"
+  "summary_text": "Executive summary of the policy (maximum 80 words)",
+  "coverage_summary": "Summary of major coverages and benefits (maximum 50 words)",
+  "exclusions_summary": "Summary of key exclusions and what is not covered (maximum 50 words)",
+  "waiting_period_summary": "Summary of waiting periods for pre-existing or standard diseases (maximum 50 words)",
+  "premium_summary": "Summary of premium, deductibles, and co-payment details (maximum 50 words)"
 }}
 
 DOCUMENT:
 {document_text}"""
 
 
-FIELD_EXTRACTION_PROMPT = """You are a healthcare insurance data entry clerk. Analyze the following health insurance document text and extract values for the requested fields.
-If a field is not explicitly mentioned or cannot be found in the text, use null or "Not specified".
-Do not create any extra keys. Return ONLY a valid JSON object matching the schema below. Do not output any markdown code blocks, preamble, or trailing text.
+FIELD_EXTRACTION_PROMPT = """Extract key fields from this health insurance document. Return ONLY valid JSON, no preamble. Use null if field is not found.
 
 Return format JSON:
 {{
-  "policy_name": "the name of the policy plan",
-  "insurer_name": "the insurance provider name",
-  "policy_number": "the policy number",
-  "sum_insured": "overall coverage amount",
-  "premium_amount": "premium cost if specified",
-  "deductible": "deductible terms or amount",
-  "co_payment": "co-payment terms or percentage",
-  "waiting_period": "waiting period rules",
-  "coverage_type": "type of plan (family floater, individual, etc.)",
-  "policy_term": "policy duration",
-  "network_hospitals": "network hospital count or details",
-  "pre_existing_coverage": "waiting periods/terms for pre-existing diseases",
-  "maternity_coverage": "maternity benefit details/limits",
-  "room_rent_limit": "daily room rent limit",
-  "claim_process": "brief instructions on filing a claim"
+  "policy_name": "policy plan name",
+  "insurer_name": "insurance provider",
+  "policy_number": "policy ID",
+  "sum_insured": "coverage amount",
+  "premium_amount": "premium cost",
+  "deductible": "deductible",
+  "co_payment": "co-payment",
+  "waiting_period": "waiting period",
+  "coverage_type": "plan type",
+  "policy_term": "duration",
+  "network_hospitals": "hospitals count",
+  "pre_existing_coverage": "pre-existing terms",
+  "maternity_coverage": "maternity benefits",
+  "room_rent_limit": "room rent limit",
+  "claim_process": "claim filing steps"
 }}
 
 DOCUMENT:
 {document_text}"""
 
 
-RISK_ANALYSIS_PROMPT = """You are an insurance risk compliance auditor. Identify up to 3 risky clauses, exclusions, or limiting terms in the following health insurance policy document.
-For each risk, provide the exact clause text, risk type (waiting_period, exclusion, deductible, co_payment, coverage_limit), severity (low, medium, or high), a brief explanation, and a recommendation.
-Return ONLY a valid JSON object matching the schema below. Do not output any markdown code blocks, preamble, or trailing text.
+RISK_ANALYSIS_PROMPT = """Identify up to 3 risky clauses in this health insurance policy. Return ONLY valid JSON, no preamble.
 
 Return format JSON:
 {{
   "risks": [
     {{
-      "clause_text": "the exact sentence or text of the clause from the document",
+      "clause_text": "exact clause from document",
       "risk_type": "waiting_period|exclusion|deductible|co_payment|coverage_limit",
       "severity": "low|medium|high",
-      "explanation": "why this clause presents a risk to the customer (maximum 35 words)",
-      "recommendation": "what action or alternative the customer should consider (maximum 35 words)"
+      "explanation": "why it's risky (max 30 words)",
+      "recommendation": "recommended action (max 30 words)"
     }}
   ],
   "overall_risk_level": "low|medium|high"
@@ -661,6 +657,7 @@ async def query_policy_rag(
     db: AsyncSession = None,
     history: list[dict] = None,
     user_name: str = "there",
+    user_id: str = None,
 ) -> str:
     """Answer user questions about policies using a local RAG pipeline with Ollama."""
     from app.services.chat_service import run_chat_query
@@ -669,7 +666,8 @@ async def query_policy_rag(
         query=query,
         db=db,
         history=history,
-        user_name=user_name
+        user_name=user_name,
+        user_id=user_id
     )
 
 
@@ -916,6 +914,7 @@ async def query_policy_rag_stream(
     db: AsyncSession = None,
     history: list[dict] = None,
     user_name: str = "there",
+    user_id: str = None,
 ):
     """Answer user questions about policies using a local RAG pipeline with streaming Ollama."""
     from app.services.chat_service import run_chat_query_stream
@@ -924,7 +923,8 @@ async def query_policy_rag_stream(
         query=query,
         db=db,
         history=history,
-        user_name=user_name
+        user_name=user_name,
+        user_id=user_id
     ):
         yield token
 
