@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/contexts/AuthContext";
+import { ChatHistoryProvider } from "@/contexts/ChatHistoryContext";
 import QueryProvider from "@/components/providers/QueryProvider";
 import { Toaster } from "react-hot-toast";
 
@@ -24,19 +25,21 @@ export default function RootLayout({
       <body className={`${inter.variable} font-sans antialiased bg-[#0a0f1e] text-white`}>
         <QueryProvider>
           <AuthProvider>
-            {children}
-            <Toaster
-              position="top-right"
-              toastOptions={{
-                style: {
-                  background: "#1e2a3a",
-                  color: "#e2e8f0",
-                  border: "1px solid #2d3748",
-                },
-                success: { iconTheme: { primary: "#10b981", secondary: "#0a0f1e" } },
-                error: { iconTheme: { primary: "#ef4444", secondary: "#0a0f1e" } },
-              }}
-            />
+            <ChatHistoryProvider>
+              {children}
+              <Toaster
+                position="top-right"
+                toastOptions={{
+                  style: {
+                    background: "#1e2a3a",
+                    color: "#e2e8f0",
+                    border: "1px solid #2d3748",
+                  },
+                  success: { iconTheme: { primary: "#10b981", secondary: "#0a0f1e" } },
+                  error: { iconTheme: { primary: "#ef4444", secondary: "#0a0f1e" } },
+                }}
+              />
+            </ChatHistoryProvider>
           </AuthProvider>
         </QueryProvider>
       </body>

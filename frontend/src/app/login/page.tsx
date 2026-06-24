@@ -37,23 +37,26 @@ export default function LoginPage() {
 
   return (
     <div className="hero-bg min-h-screen flex items-center justify-center px-4">
-      {/* Background orbs */}
-      <div className="fixed inset-0 overflow-hidden pointer-events-none">
+      {/* Background orbs — z-0 so they stay behind all content */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none" style={{ zIndex: 0 }}>
         <div className="absolute top-1/4 left-1/4 w-96 h-96 rounded-full opacity-10 blur-3xl"
           style={{ background: 'radial-gradient(circle, #3b82f6, transparent)' }} />
         <div className="absolute bottom-1/4 right-1/4 w-96 h-96 rounded-full opacity-10 blur-3xl"
           style={{ background: 'radial-gradient(circle, #8b5cf6, transparent)' }} />
       </div>
 
-      <div className="relative w-full max-w-md fade-in">
+      {/* Content — z-10 so it always renders above the background */}
+      <div className="relative w-full max-w-md fade-in" style={{ zIndex: 10 }}>
         {/* Logo */}
         <div className="text-center mb-8">
-          <div className="inline-flex w-16 h-16 rounded-2xl items-center justify-center mb-4"
-            style={{ background: 'linear-gradient(135deg, #3b82f6, #8b5cf6)' }}>
+          <div
+            className="inline-flex w-16 h-16 rounded-2xl items-center justify-center mb-4"
+            style={{ background: 'linear-gradient(135deg, #3b82f6, #8b5cf6)' }}
+          >
             <Activity className="w-8 h-8 text-white" />
           </div>
           <h1 className="text-3xl font-black gradient-text">HealthAI</h1>
-          <p className="text-slate-400 mt-1">Sign in to your account</p>
+          <p className="text-slate-400 mt-2">Sign in to your account</p>
         </div>
 
         {/* Form Card */}

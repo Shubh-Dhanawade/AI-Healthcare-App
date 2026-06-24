@@ -197,10 +197,40 @@ class ChatQueryRequest(BaseModel):
     query: str
     document_ids: Optional[List[str]] = None
     history: Optional[List[ChatMessageSchema]] = None
+    session_id: Optional[str] = None
+    document_id: Optional[str] = None  # primary document this chat is scoped to
 
 
 class ChatQueryResponse(BaseModel):
     response: str
+    session_id: Optional[str] = None
+
+
+class ChatMessageResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    session_id: str
+    role: str
+    content: str
+    sources: Optional[List[str]] = None
+    created_at: datetime
+
+
+class ChatSessionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    user_id: str
+    title: str
+    document_id: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ChatSessionCreate(BaseModel):
+    title: Optional[str] = "New Chat"
+    document_id: Optional[str] = None
 
 
 class TranslateRequest(BaseModel):

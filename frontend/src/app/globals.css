@@ -285,3 +285,25 @@ body {
               radial-gradient(ellipse at bottom right, rgba(139, 92, 246, 0.1) 0%, transparent 60%),
               var(--color-bg-primary);
 }
+
+/* ─── Form Input Overlaps with Icons Overrides ─── */
+.form-input.pl-10 {
+  padding-left: 2.5rem !important;
+}
+
+.form-input.pl-8 {
+  padding-left: 2rem !important;
+}
+
+.form-input.pr-10 {
+  padding-right: 2.5rem !important;
+}
+
+.relative > input.form-input {
+  padding-left: 2.5rem !important;
+}
+
+.relative > input.form-input[type="password"],
+.relative > input.form-input[id="password"] {
+  padding-right: 2.5rem !important;
+}

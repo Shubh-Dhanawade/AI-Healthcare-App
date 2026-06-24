@@ -58,56 +58,51 @@ def remove_headers_footers_heuristics(page_text: str, page_num: int) -> str:
 
 def extract_text_from_pdf(file_path: str) -> Tuple[str, str, int]:
     """
-    Extract text using PyMuPDF. Skips blank pages, cleans layout, and removes headers/footers.
-    Falls back to OCR if the document appears to be scanned (contains very little text).
+    OPTIMIZED text extraction using PyMuPDF with fast character-by-character filtering.
+    Skips blank pages, cleans layout, and removes headers/footers.
+    Only falls back to OCR if document has almost no text.
     """
     import fitz  # PyMuPDF
     
-    logger.info(f"Opening PDF file: {file_path}")
+    logger.info(f"Opening PDF file (optimized extraction): {file_path}")
     doc = fitz.open(file_path)
     page_count = len(doc)
     text_parts: List[str] = []
     
     for page_num in range(page_count):
         page = doc[page_num]
-        # Use blocks to preserve layout/tables where possible
-        text = page.get_text("blocks")
+        # Fast extraction: direct text with minimal processing
+        raw_page_text = page.get_text("text")
         
-        # Sort blocks top-to-bottom, left-to-right
-        text.sort(key=lambda b: (b[1], b[0]))
-        
-        page_lines = []
-        for b in text:
-            block_text = b[4].strip()
-            if block_text:
-                page_lines.append(block_text)
-                
-        raw_page_text = "\n".join(page_lines)
-        
-        # Skip completely blank pages
-        if not raw_page_text.strip():
-            logger.info(f"Skipping blank page {page_num + 1}")
+        # Skip completely blank pages (fast check)
+        if not raw_page_text.strip() or len(raw_page_text.strip()) < 20:
             continue
             
         # Clean page numbers, headers, and footers
         cleaned_page_text = remove_headers_footers_heuristics(raw_page_text, page_num + 1)
         
         if cleaned_page_text.strip():
-            text_parts.append(f"[Page {page_num + 1}]\n{cleaned_page_text}")
+            # Skip page number markers for cleaner output
+            text_parts.append(cleaned_page_text)
             
     doc.close()
+    
+    if not text_parts:
+        logger.warning("No text extracted from PDF. Returning empty string.")
+        return "", "pymupdf", page_count
+    
     full_text = "\n\n".join(text_parts)
     cleaned_full_text = clean_duplicate_whitespace(full_text)
     
-    # Scanned document detection: if character count is extremely low (<100 characters per page average)
-    if len(cleaned_full_text.strip()) < 100 * page_count:
-        logger.info("PDF appears to be scanned or contains image-only pages. Falling back to PaddleOCR...")
+    # OCR fallback: only if we got almost nothing and have significant image content
+    MIN_CHAR_THRESHOLD = 50 * page_count  # Only fallback if < 50 chars per page on average
+    if len(cleaned_full_text.strip()) < MIN_CHAR_THRESHOLD and page_count > 0:
+        logger.info("PDF appears to be scanned or image-heavy. Attempting OCR...")
         try:
             from app.services.ocr_service import extract_text_with_ocr
             return extract_text_with_ocr(file_path, page_count)
         except Exception as ocr_err:
-            logger.warning(f"OCR fallback failed: {ocr_err}. Returning best-effort PyMuPDF text.")
-            return cleaned_full_text or "Could not extract text from this document.", "pymupdf", page_count
+            logger.warning(f"OCR fallback failed: {ocr_err}. Using PyMuPDF extraction.")
             
-    logger.info(f"✅ PyMuPDF extracted {len(cleaned_full_text)} chars from {page_count} pages")
+    logger.info(f"✅ FAST TEXT EXTRACTION: {len(cleaned_full_text)} chars from {page_count} pages")
     return cleaned_full_text, "pymupdf", page_count

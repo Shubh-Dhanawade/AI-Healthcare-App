@@ -29,6 +29,104 @@ from email.mime.multipart import MIMEMultipart
 
 router = APIRouter()
 
+# ─────────────────────────────────────────────────────────────────────────────
+# In-progress tracker — prevents duplicate background analysis jobs
+# ─────────────────────────────────────────────────────────────────────────────
+_analysis_in_progress: set = set()
+
+
+async def _run_fields_background(doc_id: str) -> None:
+    """Server-side asyncio task: Extract Fields only. Launched via create_task()."""
+    from app.core.database import AsyncSessionLocal
+    from app.services.ai_service import extract_policy_fields
+
+    tracker_key = f"fields:{doc_id}"
+    logger.info(f"[BG-FIELDS] Starting field extraction for {doc_id}")
+
+    async with AsyncSessionLocal() as db:
+        try:
+            result = await db.execute(select(Document).where(Document.id == doc_id))
+            doc = result.scalar_one_or_none()
+            if not doc or not doc.extracted_text:
+                logger.warning(f"[BG-FIELDS] Document {doc_id} not found or has no text. Aborting.")
+                return
+
+            # Clear old fields first
+            existing = await db.execute(select(ExtractedField).where(ExtractedField.document_id == doc_id))
+            for f in existing.scalars().all():
+                await db.delete(f)
+            await db.flush()
+
+            fields_data = await extract_policy_fields(doc.extracted_text)
+
+            for field in fields_data:
+                db.add(ExtractedField(
+                    document_id=doc_id,
+                    field_name=field["field_name"],
+                    field_value=field["field_value"],
+                    field_category=field.get("field_category"),
+                ))
+
+            if doc.status not in ("completed",):
+                doc.status = "completed"
+
+            await db.commit()
+            logger.info(f"[BG-FIELDS] Done for {doc_id} — {len(fields_data)} fields saved")
+        except Exception as e:
+            logger.error(f"[BG-FIELDS] Failed for {doc_id}: {e}")
+
+    _analysis_in_progress.discard(tracker_key)
+
+
+async def _run_risks_background(doc_id: str) -> None:
+    """Server-side asyncio task: Risk Analysis only. Launched via create_task()."""
+    from app.core.database import AsyncSessionLocal
+    from app.services.ai_service import analyze_risks
+
+    tracker_key = f"risks:{doc_id}"
+    logger.info(f"[BG-RISKS] Starting risk analysis for {doc_id}")
+
+    async with AsyncSessionLocal() as db:
+        try:
+            result = await db.execute(select(Document).where(Document.id == doc_id))
+            doc = result.scalar_one_or_none()
+            if not doc or not doc.extracted_text:
+                logger.warning(f"[BG-RISKS] Document {doc_id} not found or has no text. Aborting.")
+                return
+
+            # Clear old risks first
+            existing = await db.execute(select(RiskAnalysis).where(RiskAnalysis.document_id == doc_id))
+            for r in existing.scalars().all():
+                await db.delete(r)
+            await db.flush()
+
+            risk_data = await analyze_risks(doc.extracted_text)
+
+            for risk in risk_data.get("risks", []):
+                db.add(RiskAnalysis(
+                    document_id=doc_id,
+                    clause_text=risk["clause_text"],
+                    risk_type=risk["risk_type"],
+                    severity=risk.get("severity", "medium"),
+                    explanation=risk.get("explanation"),
+                    recommendation=risk.get("recommendation"),
+                ))
+
+            await db.commit()
+            logger.info(f"[BG-RISKS] Done for {doc_id} — {len(risk_data.get('risks', []))} risks saved")
+        except Exception as e:
+            logger.error(f"[BG-RISKS] Failed for {doc_id}: {e}")
+
+    _analysis_in_progress.discard(tracker_key)
+
+
+async def run_full_analysis_background(doc_id: str) -> None:
+    """Combined wrapper: runs fields then risks sequentially (used by upload pipeline)."""
+    await _run_fields_background(doc_id)
+    await _run_risks_background(doc_id)
+
+
+
 # Allowed MIME types
 ALLOWED_MIME_TYPES = {
     "application/pdf": "pdf",
@@ -102,10 +200,19 @@ async def process_document_background(doc_id: str, file_path: str, file_type: st
             except Exception as e:
                 logger.error(f"Auto-summarization failed for {doc_id}: {e}")
 
-    # Run both concurrently
+    # Run embeddings + summary concurrently
     await asyncio.gather(_run_embeddings(), _run_summary())
 
-    # Final status update
+    # ── PHASE 3: Auto-launch field extraction + risk analysis ──────────────────
+    # Register tracker keys so manual re-triggers don't create duplicates
+    _analysis_in_progress.add(f"fields:{doc_id}")
+    _analysis_in_progress.add(f"risks:{doc_id}")
+    # Run both concurrently as detached tasks (won't block Phase 3 status update)
+    asyncio.create_task(_run_fields_background(doc_id))
+    asyncio.create_task(_run_risks_background(doc_id))
+    logger.info(f"[AUTO] Field extraction + risk analysis tasks launched for {doc_id}")
+
+    # Final status update — mark as completed (fields/risks will update DB when done)
     async with AsyncSessionLocal() as db_final:
         try:
             result = await db_final.execute(select(Document).where(Document.id == doc_id))
@@ -198,6 +305,121 @@ async def list_documents(
     return [DocumentResponse.model_validate(d) for d in docs]
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# IMPORTANT: All static sub-path routes (e.g. /reminders, /compare) MUST be
+# registered BEFORE the /{document_id} wildcard to avoid being caught by it.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ScheduleReminderRequest(BaseModel):
+    document_id: str
+    renewal_date: Optional[datetime] = None
+    premium_due_date: Optional[datetime] = None
+    premium_amount: Optional[str] = None
+
+
+class EmailReportRequest(BaseModel):
+    email: EmailStr
+
+
+@router.get("/reminders")
+async def get_reminders(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """List scheduled premium/renewal reminders for the user."""
+    result = await db.execute(
+        select(PolicyReminder)
+        .where(PolicyReminder.user_id == current_user.id, PolicyReminder.is_dismissed == False)
+        .order_by(PolicyReminder.reminder_date)
+    )
+    reminders = result.scalars().all()
+    
+    # Format responses dynamically
+    return [
+        {
+            "id": r.id,
+            "document_id": r.document_id,
+            "title": r.title,
+            "reminder_type": r.reminder_type,
+            "reminder_date": r.reminder_date,
+            "premium_amount": r.premium_amount,
+            "is_dismissed": r.is_dismissed
+        }
+        for r in reminders
+    ]
+
+
+@router.post("/reminders")
+async def schedule_reminder(
+    request: ScheduleReminderRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Schedule policy premium and renewal notifications."""
+    result = await db.execute(
+        select(Document).where(
+            Document.id == request.document_id,
+            Document.user_id == current_user.id
+        )
+    )
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+        
+    # Update document dates
+    if request.renewal_date:
+        doc.renewal_date = request.renewal_date
+        # Create reminder alert
+        # Trigger 7 days prior
+        trigger_date = request.renewal_date - timedelta(days=7)
+        r1 = PolicyReminder(
+            user_id=current_user.id,
+            document_id=doc.id,
+            title=f"Policy Renewal Approaching: {doc.original_filename}",
+            reminder_type="renewal",
+            reminder_date=trigger_date
+        )
+        db.add(r1)
+        
+    if request.premium_due_date:
+        doc.premium_due_date = request.premium_due_date
+        trigger_date = request.premium_due_date - timedelta(days=5)
+        r2 = PolicyReminder(
+            user_id=current_user.id,
+            document_id=doc.id,
+            title=f"Premium Payment Approaching: {doc.original_filename}",
+            reminder_type="premium",
+            reminder_date=trigger_date,
+            premium_amount=request.premium_amount
+        )
+        db.add(r2)
+        
+    await db.commit()
+    return {"message": "Policy dates and reminders successfully scheduled"}
+
+
+@router.patch("/reminders/{reminder_id}/dismiss")
+async def dismiss_reminder(
+    reminder_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Dismiss/acknowledge an active notification alert."""
+    result = await db.execute(
+        select(PolicyReminder).where(
+            PolicyReminder.id == reminder_id,
+            PolicyReminder.user_id == current_user.id
+        )
+    )
+    reminder = result.scalar_one_or_none()
+    if not reminder:
+        raise HTTPException(status_code=404, detail="Notification alert not found")
+        
+    reminder.is_dismissed = True
+    await db.commit()
+    return {"message": "Notification successfully dismissed"}
+
+
 @router.get("/{document_id}", response_model=DocumentDetailResponse)
 async def get_document(
     document_id: str,
@@ -225,6 +447,90 @@ async def get_document(
         )
     
     return DocumentDetailResponse.model_validate(doc)
+
+
+@router.post("/{document_id}/run-fields", status_code=status.HTTP_202_ACCEPTED)
+async def trigger_background_fields(
+    document_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Kick off Extract Fields as a server-side asyncio background task.
+    Returns 202 immediately. Poll GET /documents/{id} for results.
+    """
+    result = await db.execute(
+        select(Document).where(
+            Document.id == document_id,
+            Document.user_id == current_user.id,
+        )
+    )
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+    if not doc.extracted_text:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Document text not yet extracted. Please wait for processing.",
+        )
+
+    tracker_key = f"fields:{document_id}"
+    if tracker_key in _analysis_in_progress:
+        return {"status": "already_running", "message": "Field extraction is already running for this document."}
+
+    _analysis_in_progress.add(tracker_key)
+    import asyncio
+    asyncio.create_task(_run_fields_background(document_id))
+
+    logger.info(f"[API] Background field extraction launched for {document_id}")
+    return {
+        "status": "started",
+        "message": "Field extraction queued on server. Results will appear automatically — safe to navigate away.",
+        "document_id": document_id,
+        "job": "fields",
+    }
+
+
+@router.post("/{document_id}/run-risks", status_code=status.HTTP_202_ACCEPTED)
+async def trigger_background_risks(
+    document_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Kick off Risk Analysis as a server-side asyncio background task.
+    Returns 202 immediately. Poll GET /documents/{id} for results.
+    """
+    result = await db.execute(
+        select(Document).where(
+            Document.id == document_id,
+            Document.user_id == current_user.id,
+        )
+    )
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+    if not doc.extracted_text:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Document text not yet extracted. Please wait for processing.",
+        )
+
+    tracker_key = f"risks:{document_id}"
+    if tracker_key in _analysis_in_progress:
+        return {"status": "already_running", "message": "Risk analysis is already running for this document."}
+
+    _analysis_in_progress.add(tracker_key)
+    import asyncio
+    asyncio.create_task(_run_risks_background(document_id))
+
+    logger.info(f"[API] Background risk analysis launched for {document_id}")
+    return {
+        "status": "started",
+        "message": "Risk analysis queued on server. Results will appear automatically — safe to navigate away.",
+        "document_id": document_id,
+        "job": "risks",
+    }
 
 
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
