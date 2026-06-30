@@ -1,18 +1,38 @@
 'use client';
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { documentsApi, aiApi } from '@/lib/apiHelpers';
+import { documentsApi, aiApi, exportApi } from '@/lib/apiHelpers';
 import { DocumentDetail, RiskAnalysis } from '@/types';
 import { useParams, useRouter } from 'next/navigation';
 import toast from 'react-hot-toast';
 import {
   ArrowLeft, Brain, Shield, FileText, Search, RefreshCw,
   AlertTriangle, Info, ChevronDown, ChevronUp,
-  Send, MessageSquare, List, Loader2
+  Send, MessageSquare, List, Loader2, Download, Mail
 } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import DocumentStatusBadge from '@/components/documents/DocumentStatusBadge';
 import Link from 'next/link';
+
+const loadScript = (src: string) => {
+  return new Promise((resolve, reject) => {
+    if (typeof window === 'undefined') {
+      resolve(false);
+      return;
+    }
+    if (document.querySelector(`script[src="${src}"]`)) {
+      resolve(true);
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = src;
+    script.onload = () => resolve(true);
+    script.onerror = () => reject(new Error(`Failed to load script ${src}`));
+    document.head.appendChild(script);
+  });
+};
+
+
 
 function RiskCard({ risk }: { risk: RiskAnalysis }) {
   const [expanded, setExpanded] = useState(false);
@@ -147,6 +167,181 @@ function ChatResponseCard({ msg }: { msg: any }) {
   );
 }
 
+const generateSimplePrintHTML = (doc: DocumentDetail, selectedLanguage: string) => {
+  // Build fields list
+  let fieldsRows = '';
+  if (doc.extracted_fields && doc.extracted_fields.length > 0) {
+    doc.extracted_fields.forEach(f => {
+      fieldsRows += `
+        <div style="padding: 10px 0; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; font-size: 13px;">
+          <span style="font-weight: bold; color: #000000; width: 40%;">${f.field_name}:</span>
+          <span style="color: #000000; width: 55%; text-align: left;">${f.field_value || '—'}</span>
+        </div>
+      `;
+    });
+  } else {
+    fieldsRows = '<div style="padding: 10px 0; text-align: center; color: #000000;">No extracted fields available.</div>';
+  }
+
+  // Build risk cards
+  let risksContent = '';
+  if (doc.risk_analyses && doc.risk_analyses.length > 0) {
+    doc.risk_analyses.forEach(r => {
+      const severityColor = r.severity === 'high' ? '#dc2626' : (r.severity === 'medium' ? '#d97706' : '#059669');
+      risksContent += `
+        <div style="border: 1px solid #e2e8f0; border-left: 5px solid ${severityColor}; padding: 15px; border-radius: 6px; margin-bottom: 15px; background-color: #ffffff;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <span style="font-weight: bold; font-size: 13px; color: #000000;">${r.risk_type.replace(/_/g, ' ').toUpperCase()}</span>
+            <span style="font-size: 11px; font-weight: bold; color: ${severityColor}; border: 1px solid ${severityColor}; padding: 2px 8px; border-radius: 4px;">${r.severity.toUpperCase()}</span>
+          </div>
+          <p style="margin: 0 0 6px 0; font-size: 12.5px; color: #000000; font-style: italic;">"${r.clause_text}"</p>
+          ${r.explanation ? `<p style="margin: 0 0 4px 0; font-size: 12px; color: #000000;"><strong>Analysis:</strong> ${r.explanation}</p>` : ''}
+          ${r.recommendation ? `<p style="margin: 0; font-size: 12px; color: #dc2626; font-weight: bold;"><strong>Recommendation:</strong> ${r.recommendation}</p>` : ''}
+        </div>
+      `;
+    });
+  } else {
+    risksContent = '<p style="color: #059669; font-weight: bold; font-size: 13px;">No critical risks identified.</p>';
+  }
+
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <style>
+        body {
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+          color: #000000;
+          line-height: 1.6;
+          margin: 0;
+          padding: 30px;
+          background: #ffffff;
+        }
+        .container {
+          max-width: 800px;
+          margin: 0 auto;
+          background-color: white;
+        }
+        .header {
+          border-bottom: 3px solid #000000;
+          padding-bottom: 12px;
+          margin-bottom: 30px;
+        }
+        .header h1 {
+          margin: 0;
+          font-size: 26px;
+          font-weight: bold;
+          color: #000000;
+        }
+        .meta-line {
+          font-size: 12px;
+          color: #000000;
+          margin-top: 5px;
+          opacity: 0.8;
+        }
+        .section {
+          margin-bottom: 35px;
+        }
+        .section-title {
+          font-size: 15px;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          color: #000000;
+          background: #f1f5f9;
+          padding: 8px 12px;
+          border-left: 5px solid #000000;
+          font-weight: bold;
+          margin-bottom: 15px;
+        }
+        .summary-text {
+          font-size: 13.5px;
+          color: #000000;
+          text-align: justify;
+          margin-bottom: 20px;
+        }
+        .info-card {
+          border: 1px solid #e2e8f0;
+          padding: 15px;
+          border-radius: 6px;
+          margin-bottom: 15px;
+          background: #ffffff;
+        }
+        .info-card-title {
+          font-weight: bold;
+          font-size: 13px;
+          color: #000000;
+          margin-bottom: 5px;
+        }
+        .info-card-content {
+          font-size: 12.5px;
+          color: #000000;
+          margin: 0;
+          white-space: pre-wrap;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <h1>Healthcare Policy Analysis Report</h1>
+          <div class="meta-line">
+            Document: ${doc.original_filename} &bull; Processed: ${new Date(doc.created_at).toLocaleDateString()} &bull; Safety Score: ${doc.safety_score}/100
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-title">AI Executive Summary (${selectedLanguage})</div>
+          <div class="summary-text">${doc.summary?.summary_text || 'No summary available.'}</div>
+          
+          ${doc.summary?.coverage_summary ? `
+            <div class="info-card">
+              <div class="info-card-title">✅ Covered Items</div>
+              <pre class="info-card-content">${doc.summary.coverage_summary}</pre>
+            </div>
+          ` : ''}
+          
+          ${doc.summary?.exclusions_summary ? `
+            <div class="info-card">
+              <div class="info-card-title">❌ Excluded Items</div>
+              <pre class="info-card-content">${doc.summary.exclusions_summary}</pre>
+            </div>
+          ` : ''}
+          
+          ${doc.summary?.waiting_period_summary ? `
+            <div class="info-card">
+              <div class="info-card-title">⏰ Waiting Periods</div>
+              <pre class="info-card-content">${doc.summary.waiting_period_summary}</pre>
+            </div>
+          ` : ''}
+          
+          ${doc.summary?.premium_summary ? `
+            <div class="info-card">
+              <div class="info-card-title">💰 Premium Details</div>
+              <pre class="info-card-content">${doc.summary.premium_summary}</pre>
+            </div>
+          ` : ''}
+        </div>
+
+        <div class="section">
+          <div class="section-title">Extracted Policy Parameters</div>
+          <div style="border: 1px solid #e2e8f0; padding: 15px; border-radius: 6px; background-color: #ffffff;">
+            ${fieldsRows}
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-title">Critical Risk Audit</div>
+          <div>
+            ${risksContent}
+          </div>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+};
+
 export default function DocumentDetailPage() {
   const params = useParams();
   const docId = params.id as string;
@@ -158,6 +353,145 @@ export default function DocumentDetailPage() {
   const [chatHistory, setChatHistory] = useState<any[]>([]);
   const [chatLoading, setChatLoading] = useState(false);
   const sessionIdRef = useRef<string | null>(null);
+
+  // Export / Sharing states
+  const [showEmailForm, setShowEmailForm] = useState(false);
+  const [emailInput, setEmailInput] = useState('');
+  const [sendingEmail, setSendingEmail] = useState(false);
+  const [showExportDropdown, setShowExportDropdown] = useState(false);
+
+  const handleDownload = async () => {
+    if (!doc) return;
+    const toastId = toast.loading('Generating and downloading PDF report...');
+
+    try {
+      // 1. Load html2pdf from CDN
+      await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js');
+
+      // 2. Generate the simple print HTML report template
+      const printHTML = generateSimplePrintHTML(doc, selectedLanguage);
+
+      // 3. Create a temporary hidden iframe container
+      const iframe = document.createElement('iframe');
+      iframe.style.position = 'fixed';
+      iframe.style.left = '-9999px';
+      iframe.style.top = '-9999px';
+      iframe.style.width = '800px';
+      iframe.style.height = '1100px';
+      document.body.appendChild(iframe);
+
+      const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
+      if (!iframeDoc) {
+        throw new Error('Failed to access iframe context');
+      }
+
+      iframeDoc.write(printHTML);
+      iframeDoc.close();
+
+      // Wait for the stylesheet rules inside the iframe to mount and paint
+      setTimeout(async () => {
+        try {
+          const opt = {
+            margin: 10,
+            filename: `HealthAI_Report_${doc.original_filename.replace(/\.[^/.]+$/, "") || docId}.pdf`,
+            image: { type: 'jpeg', quality: 0.98 },
+            html2canvas: {
+              scale: 2,
+              useCORS: true,
+              backgroundColor: '#ffffff' // Clear white background
+            },
+            jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+          };
+
+          // @ts-ignore
+          await html2pdf().from(iframeDoc.body).set(opt).save();
+
+          toast.success('PDF report downloaded successfully!', { id: toastId });
+        } catch (pdfError) {
+          console.error('PDF generation inside iframe failed, falling back to window print:', pdfError);
+          const printWindow = window.open('', '_blank');
+          if (printWindow) {
+            printWindow.document.write(printHTML);
+            printWindow.document.close();
+            printWindow.focus();
+            setTimeout(() => {
+              printWindow.print();
+            }, 800);
+            toast.success('Print to PDF dialog opened successfully!', { id: toastId });
+          } else {
+            toast.error('Pop-up blocked. Please allow pop-ups to print the PDF report.', { id: toastId });
+          }
+        } finally {
+          // Cleanup iframe
+          if (document.body.contains(iframe)) {
+            document.body.removeChild(iframe);
+          }
+        }
+      }, 500);
+
+    } catch (error) {
+      console.error('Download error:', error);
+      toast.error('Failed to generate PDF report', { id: toastId });
+    }
+  };
+
+  const handleWhatsAppShare = () => {
+    if (!doc) return;
+
+    let text = `🏥 *HealthAI Policy Audit Report*\n`;
+    text += `*Policy Name:* ${doc.original_filename}\n\n`;
+
+    if (doc.summary) {
+      text += `*Summary in Brief:*\n${doc.summary.summary_text}\n\n`;
+    }
+
+    if (doc.extracted_fields && doc.extracted_fields.length > 0) {
+      text += `*Key Policy Details:*\n`;
+      const keyFields = ['policy_name', 'insurer_name', 'sum_insured', 'premium_amount', 'deductible', 'co_payment'];
+      const fieldsToPrint = doc.extracted_fields.filter(f =>
+        keyFields.includes(f.field_name.toLowerCase().replace(/\s/g, '_')) ||
+        keyFields.includes(f.field_name.toLowerCase())
+      );
+
+      const printedFields = fieldsToPrint.length > 0 ? fieldsToPrint : doc.extracted_fields;
+      printedFields.slice(0, 6).forEach(f => {
+        text += `• ${f.field_name}: ${f.field_value || '—'}\n`;
+      });
+      text += `\n`;
+    }
+
+    if (doc.risk_analyses && doc.risk_analyses.length > 0) {
+      const highRisks = doc.risk_analyses.filter(r => r.severity === 'high');
+      if (highRisks.length > 0) {
+        text += `*⚠️ Critical Risks Detected:*\n`;
+        highRisks.slice(0, 3).forEach(r => {
+          text += `• ${r.risk_type.replace(/_/g, ' ').toUpperCase()} (${r.severity.toUpperCase()}): ${r.clause_text}\n`;
+        });
+        text += `\n`;
+      }
+    }
+
+    text += `Generated by HealthAI.`;
+    const whatsappUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
+    window.open(whatsappUrl, '_blank');
+  };
+
+  const handleSendEmail = async () => {
+    if (!emailInput.trim()) return;
+    setSendingEmail(true);
+    const toastId = toast.loading(`Sending email to ${emailInput}...`);
+    try {
+      const res = await exportApi.emailReport(docId, emailInput);
+      toast.success(res.message || 'Email sent successfully!', { id: toastId });
+      setShowEmailForm(false);
+      setEmailInput('');
+    } catch (error: any) {
+      console.error('Email error:', error);
+      toast.error(error.response?.data?.detail || 'Failed to send email', { id: toastId });
+    } finally {
+      setSendingEmail(false);
+    }
+  };
 
   const [selectedLanguage, setSelectedLanguage] = useState<string>('English');
   const [translations, setTranslations] = useState<Record<string, {
@@ -214,15 +548,15 @@ export default function DocumentDetailPage() {
       if (['uploaded', 'processing', 'text_extracted'].includes(d.status)) return 2000;
       // Keep polling until ALL auto-generated results are present
       const anyMissing = !d.summary || d.extracted_fields.length === 0 || d.risk_analyses.length === 0;
-      if (anyMissing && d.status === 'completed') return 3000;
+      if (anyMissing && ['completed', 'summarized'].includes(d.status)) return 3000;
       return false;
     },
   });
 
   const summarizeMutation = useMutation({
-    mutationFn: () => aiApi.summarize(docId),
+    mutationFn: () => documentsApi.runSummary(docId),
     onSuccess: () => {
-      toast.success('Summary generated!');
+      toast.success('Summary regeneration started! Results will update automatically.');
       queryClient.invalidateQueries({ queryKey: ['document', docId] });
     },
     onError: (err: any) => toast.error(err.response?.data?.detail || 'Summarization failed'),
@@ -344,32 +678,7 @@ export default function DocumentDetailPage() {
     }
   };
 
-  // AUTO-TRIGGER analyses when document text extraction completes
-  const autoTriggerAnalyses = async () => {
-    if (!doc || doc.status !== 'text_extracted') return;
-    if (summarizeMutation.isPending || runFieldsMutation.isPending || runRisksMutation.isPending) return;
 
-    console.log(`[AUTO-TRIGGER] Starting auto-analyses for ${docId}`);
-    
-    try {
-      // Auto-trigger summary
-      if (!doc.summary && !summarizeMutation.isPending) {
-        summarizeMutation.mutate();
-      }
-      
-      // Auto-trigger field extraction
-      if (doc.extracted_fields.length === 0 && !runFieldsMutation.isPending) {
-        runFieldsMutation.mutate();
-      }
-      
-      // Auto-trigger risk analysis
-      if (doc.risk_analyses.length === 0 && !runRisksMutation.isPending) {
-        runRisksMutation.mutate();
-      }
-    } catch (err) {
-      console.error('Auto-trigger error:', err);
-    }
-  };
 
   // Load persistent chat history from the database when Chat tab is opened
   useEffect(() => {
@@ -394,13 +703,7 @@ export default function DocumentDetailPage() {
       .finally(() => setChatLoading(false));
   }, [activeTab, docId]);
 
-  // Trigger auto-analysis when document reaches text_extracted status
-  useEffect(() => {
-    if (doc?.status === 'text_extracted' && !summarizeMutation.isPending && !runFieldsMutation.isPending && !runRisksMutation.isPending) {
-      const timer = setTimeout(autoTriggerAnalyses, 500);
-      return () => clearTimeout(timer);
-    }
-  }, [doc?.status, summarizeMutation.isPending, runFieldsMutation.isPending, runRisksMutation.isPending]);
+
 
 
 
@@ -423,6 +726,12 @@ export default function DocumentDetailPage() {
       <Link href="/documents" className="btn-primary mt-4 inline-flex">Back to Documents</Link>
     </div>
   );
+
+  const displayedSummary = doc.summary
+    ? (selectedLanguage === 'English'
+      ? doc.summary
+      : translations[selectedLanguage] || doc.summary) as any
+    : null;
 
   const tabs = [
     { id: 'summary', label: 'AI Summary', icon: <Brain className="w-4 h-4" />, count: doc.summary ? 1 : 0 },
@@ -501,7 +810,7 @@ export default function DocumentDetailPage() {
           )}
 
           {/* Summary auto-processing banner */}
-          {(summarizeMutation.isPending || (!doc.summary && doc.status === 'completed')) && (
+          {(summarizeMutation.isPending || (!doc.summary && ['completed', 'summarized'].includes(doc.status))) && (
             <div className="mb-3 flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm"
               style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.25)' }}>
               <Loader2 className="w-4 h-4 text-blue-400 animate-spin flex-shrink-0" />
@@ -527,7 +836,7 @@ export default function DocumentDetailPage() {
           )}
 
           {/* Fields polling banner — after 202, while results are missing */}
-          {!runFieldsMutation.isPending && doc.status === 'completed' && doc.extracted_fields.length === 0 && (
+          {!runFieldsMutation.isPending && ['completed', 'summarized'].includes(doc.status) && doc.extracted_fields.length === 0 && (
             <div
               className="mb-3 flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm"
               style={{ background: 'rgba(139,92,246,0.07)', border: '1px solid rgba(139,92,246,0.2)' }}
@@ -555,7 +864,7 @@ export default function DocumentDetailPage() {
           )}
 
           {/* Risks polling banner — after 202, while results are missing */}
-          {!runRisksMutation.isPending && doc.status === 'completed' && doc.risk_analyses.length === 0 && (
+          {!runRisksMutation.isPending && ['completed', 'summarized'].includes(doc.status) && doc.risk_analyses.length === 0 && (
             <div
               className="mb-3 flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm"
               style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.18)' }}
@@ -569,10 +878,10 @@ export default function DocumentDetailPage() {
           )}
 
           {/* Manual re-trigger buttons (hidden during initial auto-processing) */}
-          {doc.status === 'completed' && (
+          {['completed', 'summarized'].includes(doc.status) && (
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-3 border-t border-white/5">
               <p className="col-span-full text-xs text-slate-500 mb-2">Re-run analyses manually if needed:</p>
-              
+
               {/* Re-summarize */}
               <button
                 id="summarize-btn"
@@ -635,6 +944,8 @@ export default function DocumentDetailPage() {
         </div>
       )}
 
+
+
       {/* Tabs */}
       <div>
         <div className="flex border-b border-slate-700/50 gap-1">
@@ -658,11 +969,7 @@ export default function DocumentDetailPage() {
 
         <div className="pt-6">
           {activeTab === 'summary' && (() => {
-            const displayedSummary = selectedLanguage === 'English'
-              ? doc.summary
-              : translations[selectedLanguage] || doc.summary;
-
-            if (!doc.summary) {
+            if (!displayedSummary) {
               return (
                 <div className="text-center py-12 glass-card">
                   <Brain className="w-12 h-12 text-slate-600 mx-auto mb-3" />
@@ -672,41 +979,147 @@ export default function DocumentDetailPage() {
             }
 
             return (
-              <div className="space-y-4">
-                <div className="glass-card p-6 relative overflow-hidden">
-                  {isTranslating && (
-                    <div className="absolute inset-0 bg-[#0a0f1e]/60 backdrop-blur-sm flex items-center justify-center z-10 transition-all">
-                      <div className="flex items-center gap-2">
-                        <span className="w-5 h-5 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
-                        <span className="text-xs text-slate-400">Translating to {selectedLanguage}...</span>
+              <div className="space-y-4" id="summary-report-pdf">
+                {/* Summary in Brief & Export/Share Panel */}
+                <div className="glass-card p-6 border border-white/5 space-y-4">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div>
+                      <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                        <Brain className="w-5 h-5 text-blue-400 animate-pulse" /> Summary
+                      </h2>
+                      <p className="text-slate-400 text-xs mt-0.5">
+                        Executive summary of the policy (comprehensive review)
+                      </p>
+                    </div>
+                    {/* Export, Share and Language Actions */}
+                    <div className="flex items-center gap-2 relative" data-html2canvas-ignore="true">
+                      {/* Language Selector */}
+                      <div className="flex items-center gap-1.5 bg-slate-950/60 border border-slate-700/40 rounded-xl px-2.5 py-1.5 mr-2">
+                        <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Language:</span>
+                        <select
+                          value={selectedLanguage}
+                          onChange={(e) => handleLanguageChange(e.target.value)}
+                          className="bg-transparent border-none text-xs text-white focus:outline-none cursor-pointer"
+                        >
+                          <option value="English">English</option>
+                          <option value="Hindi">Hindi (हिंदी)</option>
+                          <option value="Marathi">Marathi (मराठी)</option>
+                        </select>
+                      </div>
+
+                      {/* Dropdown Container */}
+                      <div className="relative">
+                        <button
+                          onClick={() => setShowExportDropdown(!showExportDropdown)}
+                          className="btn-secondary text-xs py-2 px-3.5 flex items-center gap-1.5 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer border border-blue-500/30 text-blue-400"
+                          title="Export options"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>Export</span>
+                          <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${showExportDropdown ? 'rotate-180' : ''}`} />
+                        </button>
+
+                        {/* Export Dropdown Menu */}
+                        {showExportDropdown && (
+                          <div className="absolute right-0 mt-2 w-48 rounded-xl bg-[#0b0f19] border border-white/10 shadow-2xl p-1.5 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
+                            {/* Download PDF Option */}
+                            <button
+                              onClick={() => {
+                                handleDownload();
+                                setShowExportDropdown(false);
+                              }}
+                              className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-left rounded-lg text-slate-200 hover:bg-white/5 hover:text-white transition-all cursor-pointer"
+                            >
+                              <FileText className="w-3.5 h-3.5 text-blue-400" />
+                              <span>Download PDF</span>
+                            </button>
+
+                            {/* WhatsApp Option */}
+                            <button
+                              onClick={() => {
+                                handleWhatsAppShare();
+                                setShowExportDropdown(false);
+                              }}
+                              className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-left rounded-lg text-slate-200 hover:bg-emerald-500/10 hover:text-emerald-400 transition-all cursor-pointer"
+                            >
+                              <svg className="w-3.5 h-3.5 fill-current text-emerald-400" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946C.06 5.348 5.397.01 12.008.01c3.202.001 6.212 1.246 8.477 3.514 2.266 2.268 3.507 5.28 3.505 8.484-.004 6.657-5.34 11.997-11.953 11.997-2.005-.001-3.973-.502-5.717-1.458zm6.575-3.466l.393.233c1.524.905 3.284 1.382 5.083 1.382 5.861 0 10.629-4.767 10.631-10.631.001-2.84-1.093-5.509-3.079-7.502-1.986-1.992-4.63-3.089-7.555-3.09-5.886 0-10.655 4.767-10.658 10.632-.001 1.956.513 3.864 1.489 5.586l.248.441-1.03 3.763zm14.195-7.616c-.3-.15-1.77-.874-2.048-.975-.278-.102-.48-.153-.681.15-.202.302-.78.975-.957 1.177-.177.203-.355.228-.655.078-3.002-1.5-4.225-2.655-5.632-5.07-.375-.644.375-.598 1.074-1.997.12-.24.06-.454-.03-.604-.09-.15-.681-1.643-.933-2.247-.245-.588-.493-.509-.681-.519-.177-.009-.38-.01-.582-.01-.202 0-.531.076-.81.381-.278.305-1.062 1.037-1.062 2.53 0 1.493 1.088 2.936 1.239 3.138.152.203 2.14 3.267 5.185 4.578 2.457 1.058 3.093 1.012 3.655.96.67-.063 1.77-.723 2.022-1.396.253-.673.253-1.25.177-1.397-.076-.146-.278-.223-.578-.374z" />
+                              </svg>
+                              <span>Share via WhatsApp</span>
+                            </button>
+
+                            {/* Email Option */}
+                            <button
+                              onClick={() => {
+                                setShowEmailForm(!showEmailForm);
+                                setShowExportDropdown(false);
+                              }}
+                              className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-left rounded-lg text-slate-200 hover:bg-blue-600/20 hover:text-blue-400 transition-all cursor-pointer"
+                            >
+                              <Mail className="w-3.5 h-3.5 text-blue-400" />
+                              <span>Send via Email</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-950/40 border border-white/5 rounded-xl p-4 relative overflow-hidden">
+                    {isTranslating && (
+                      <div className="absolute inset-0 bg-[#0a0f1e]/60 backdrop-blur-sm flex items-center justify-center z-10 transition-all">
+                        <div className="flex items-center gap-2">
+                          <span className="w-5 h-5 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
+                          <span className="text-xs text-slate-400">Translating summary to {selectedLanguage}...</span>
+                        </div>
+                      </div>
+                    )}
+                    <p className="text-slate-200 text-sm leading-relaxed whitespace-pre-wrap">
+                      {displayedSummary?.summary_text}
+                    </p>
+                  </div>
+
+                  {/* Email Inline Form */}
+                  {showEmailForm && (
+                    <div className="border border-white/5 bg-slate-950/30 rounded-xl p-4 flex flex-col sm:flex-row items-center gap-3 max-w-md">
+                      <input
+                        type="email"
+                        placeholder="Enter recipient email..."
+                        value={emailInput}
+                        onChange={(e) => setEmailInput(e.target.value)}
+                        className="form-input text-xs py-2 px-3 flex-1 bg-slate-950/50"
+                      />
+                      <div className="flex gap-2 w-full sm:w-auto">
+                        <button
+                          onClick={handleSendEmail}
+                          disabled={sendingEmail || !emailInput.trim()}
+                          className="btn-primary text-xs py-2 px-4 flex-1 sm:flex-initial justify-center cursor-pointer"
+                        >
+                          {sendingEmail ? (
+                            <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          ) : (
+                            'Send'
+                          )}
+                        </button>
+                        <button
+                          onClick={() => { setShowEmailForm(false); setEmailInput(''); }}
+                          className="btn-secondary text-xs py-2 px-3 flex-1 sm:flex-initial justify-center cursor-pointer border-transparent"
+                        >
+                          Cancel
+                        </button>
                       </div>
                     </div>
                   )}
-                  <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-                    <h3 className="font-semibold flex items-center gap-2 text-blue-300">
-                      <Info className="w-4 h-4" /> Policy Summary
-                    </h3>
-
-                    {/* Language Dropdown */}
-                    <div className="flex items-center gap-1.5 bg-slate-900/60 border border-slate-700/40 rounded-lg px-2.5 py-1">
-                      <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Language:</span>
-                      <select
-                        value={selectedLanguage}
-                        onChange={(e) => handleLanguageChange(e.target.value)}
-                        className="bg-transparent border-none text-xs text-white focus:outline-none cursor-pointer"
-                      >
-                        <option value="English">English</option>
-                        <option value="Hindi">Hindi (हिंदी)</option>
-                        <option value="Marathi">Marathi (मराठी)</option>
-                      </select>
-                    </div>
-                  </div>
-                  <p className="text-slate-300 leading-relaxed whitespace-pre-wrap">{displayedSummary.summary_text}</p>
                 </div>
 
                 <div className="grid md:grid-cols-2 gap-4 relative">
                   {isTranslating && (
-                    <div className="absolute inset-0 bg-[#0a0f1e]/30 backdrop-blur-[2px] z-10 rounded-xl" />
+                    <div className="absolute inset-0 bg-[#0a0f1e]/30 backdrop-blur-[2px] z-10 rounded-xl flex items-center justify-center">
+                      <div className="flex items-center gap-2 bg-[#0a0f1e]/80 px-4 py-2 rounded-xl border border-white/5">
+                        <span className="w-4 h-4 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
+                        <span className="text-xs text-slate-400">Translating details...</span>
+                      </div>
+                    </div>
                   )}
                   {[
                     { label: '✅ Coverage', value: displayedSummary.coverage_summary, color: '#10b981' },
@@ -720,7 +1133,7 @@ export default function DocumentDetailPage() {
                     </div>
                   ))}
                 </div>
-                <p className="text-xs text-slate-500 text-right">Generated by {displayedSummary.model_used || doc.summary.model_used} • {new Date(doc.summary.created_at).toLocaleString()}</p>
+                <p className="text-xs text-slate-500 text-right">Generated by {displayedSummary.model_used || doc.summary?.model_used || 'AI model'} • {doc.summary?.created_at ? new Date(doc.summary.created_at).toLocaleString() : ''}</p>
               </div>
             );
           })()}

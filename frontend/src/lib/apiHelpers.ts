@@ -77,6 +77,12 @@ export const documentsApi = {
     const res = await apiClient.post(`/documents/${id}/run-risks`);
     return res.data;
   },
+
+  /** Fire-and-forget: force-regenerates Summary from actual document text (202 immediately). */
+  runSummary: async (id: string) => {
+    const res = await apiClient.post(`/documents/${id}/run-summary`);
+    return res.data;
+  },
 };
 
 export const aiApi = {
@@ -183,6 +189,11 @@ export const remindersApi = {
 export const exportApi = {
   emailReport: async (id: string, email: string) => {
     const res = await apiClient.post(`/documents/${id}/email`, { email });
+    return res.data;
+  },
+  
+  downloadReport: async (id: string) => {
+    const res = await apiClient.get(`/documents/${id}/export`, { responseType: 'blob' });
     return res.data;
   },
   

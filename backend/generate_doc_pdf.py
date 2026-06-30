@@ -81,8 +81,8 @@ def generate_pdf():
         ("1. INGEST & EXTRACT", "User uploads policy PDF; backend extracts raw text using PyMuPDF/OCR."),
         ("2. CHUNK & CLEAN", "Text is cleaned and split into semantic chunks (500 tokens with 10% overlap)."),
         ("3. GENERATE VECTORS", "Each chunk is embedded into a 768-dimensional vector via nomic-embed-text."),
-        ("4. SQLITE STORAGE", "Chunks are stored in SQLite; vectors are stored as binary float arrays (BLOBs)."),
-        ("5. SEMANTIC QUERY", "User asks a question. Query is embedded; cosine similarity finds matching chunks."),
+        ("4. HYBRID STORAGE", "Text and vector metadata are stored in SQLite, and a FAISS index is built on disk."),
+        ("5. SEMANTIC QUERY", "User query is embedded; FAISS index matches query with document chunks in microseconds."),
         ("6. LOCAL LLM INFERENCE", "Retrieved chunks + query + system prompt are fed into Gemma 3 (4B) via Ollama."),
         ("7. UI RENDERING", "Gemma 3's response streams back to the Next.js React frontend via SSE/FastAPI.")
     ]
@@ -112,8 +112,8 @@ def generate_pdf():
         "└────────────────────────────────────────┼─────────────────────┼────────────┘\n"
         "                                         │ SQL queries         │ Ollama port 11434\n"
         "┌────────────────────────────────────────▼─────────┐  ┌────────▼─────────┐\n"
-        "│           SQLite DB (healthcare_ai.db)           │  │ Gemma 3 (4B)     │\n"
-        "│  [users]  [documents]  [document_chunks (BLOBs)]  │  │ nomic-embed-text │\n"
+        "│     SQLite (Metadata) & FAISS Index (Vectors)    │  │ Gemma 3 (4B)     │\n"
+        "│  [users]  [documents]  [document_chunks (TEXT)]  │  │ nomic-embed-text │\n"
         "└──────────────────────────────────────────────────┘  └──────────────────┘"
     )
     page2.insert_textbox(fitz.Rect(65, 565, 530, 770), mapping_text, fontsize=9.5, fontname="cour", color=PRIMARY)
@@ -137,8 +137,8 @@ def generate_pdf():
         ("Backend Server", "FastAPI (Python)", "High-performance async API server with automatic OpenAPI docs."),
         ("WebServer", "Uvicorn", "ASGI web server running the FastAPI python service on port 8000."),
         ("Database ORM", "SQLAlchemy + aiosqlite", "Asynchronous SQLite interaction and Object-Relational Mapping."),
-        ("Database Engine", "SQLite (Local File)", "Zero-configuration persistent file storing relational and vector data."),
-        ("Vector Search", "Custom Numpy/SQLite", "Calculates cosine-similarity directly in the python/SQL layer."),
+        ("Database Engine", "SQLite (Local File)", "Zero-configuration persistent file storing relational metadata and text chunks."),
+        ("Vector Search", "FAISS-CPU (Meta)", "Executes ultra-fast vector indexing and cosine-similarity searches on local vectors."),
         ("Local LLM Core", "Ollama (Gemma 3 4B)", "Ultra-fast response generation using 4.7B parameter Google Gemma 3."),
         ("Embedding Core", "Ollama (nomic-embed-text)", "Transforms text chunks into dense 768-dimension vector spaces."),
         ("Document Extract", "PyMuPDF (fitz)", "Parses, cleans, and structures text from uploaded PDF policy files."),
@@ -162,7 +162,7 @@ def generate_pdf():
         ("Interactive Chat Interface", "Provides a conversational thread where the user can query their insurance documents. Supports streaming tokens directly for a highly responsive, zero-delay UI."),
         ("Automated Compliance & Risk Analysis", "Extracts critical elements from medical insurance paperwork (like co-payments, waiting periods, room-rent limits) and flags high-severity exceptions automatically."),
         ("Policy Reminders & Due Dates", "Analyzes documents for renewal deadlines and premium payment schedules, storing them in the SQLite DB to notify users in the dashboard."),
-        ("Custom Local RAG Pipeline", "Bypasses slow cloud databases. Uses a custom SQLite integration storing floats as binary BLOBs and performing fast vector math locally to fetch context in milliseconds.")
+        ("Custom Local RAG Pipeline", "Bypasses slow cloud databases. Uses a custom FAISS integration to store vectors and calculate similarity locally, achieving context fetch times under 10ms.")
     ]
     
     y = 485
@@ -184,7 +184,7 @@ def generate_pdf():
     
     rag_p = (
         "Unlike enterprise architectures that rely on expensive external Vector Databases (like Pinecone or "
-        "Milvus), this project employs a custom SQLite-based vector storage system built for speed, simplicity, "
+        "Milvus), this project employs a custom hybrid FAISS and SQLite storage system built for speed, simplicity, "
         "and zero external dependencies. Let's explore how it's implemented."
     )
     page4.insert_textbox(fitz.Rect(50, 85, 545, 140), rag_p, fontsize=10.5, fontname="helv", color=TEXT_DARK, align=3)
@@ -193,11 +193,11 @@ def generate_pdf():
     
     schema_code = (
         "CREATE TABLE document_chunks (\n"
-        "    id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+        "    id VARCHAR(36) PRIMARY KEY,\n"
         "    document_id VARCHAR(36) NOT NULL,\n"
         "    chunk_index INTEGER NOT NULL,\n"
         "    text_content TEXT NOT NULL,\n"
-        "    embedding BLOB NOT NULL,          -- 768 float32 values stored as binary\n"
+        "    embedding TEXT NOT NULL,          -- 768 float32 values stored as JSON text\n"
         "    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n"
         "    FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE\n"
         ");"
@@ -210,8 +210,8 @@ def generate_pdf():
     ops = [
         ("Chunking", "Text is extracted from the PDF and broken into sections of 500 characters, with 10% overlap (50 characters) to ensure context is not severed at the boundaries. This handles long insurance policies effectively."),
         ("Embedding", "Each text chunk is sent to the local Ollama embedding endpoint (/api/embeddings) using the 'nomic-embed-text' model. This returns a vector of 768 floating-point values reflecting semantic meaning."),
-        ("BLOB Storage", "The 768 float list is serialized into binary using Python's struct.pack('f'*768, *embedding) or numpy's tobytes() method, and saved directly into the SQLite 'embedding' BLOB column. This keeps queries extremely fast."),
-        ("Cosine Similarity", "When a user asks a query, the query is embedded. Then all chunks for the active document are loaded from SQLite. The vector bytes are unpacked back into numpy float arrays. Cosine similarity is computed: dot_product(A,B) / (norm(A)*norm(B)). Chunks are sorted, and the top K (e.g. top 3-4) are returned as context."),
+        ("JSON Vector Storage", "The 768 float list is serialized into a standard JSON string and saved directly into the SQLite 'embedding' TEXT column. This makes DB schema management and migrations straightforward and highly portable."),
+        ("FAISS Index Search", "When a document is indexed, its vectors are compiled into a FAISS index file on disk. When a user queries, the search is executed against this local FAISS index, performing ultra-fast similarity calculations in microseconds to retrieve top context chunks."),
         ("Prompt Synthesis", "The matching context chunks are combined and injected into the LLM system prompt as context. Gemma 3 uses this context to synthesize a fact-grounded response, eliminating hallucinations.")
     ]
     
@@ -239,8 +239,8 @@ def generate_pdf():
     page4.insert_text(fitz.Point(70, 715), "RAG CONTEXT EXTRACTION & QUERY LIFECYCLE", fontsize=11, fontname="hebo", color=WHITE)
     
     lifecycle = (
-        "User Query ──► [Embed Query] ──► [Cosine Similarity vs SQLite BLOBs] ──┐\n"
-        "                                                                       ▼\n"
+        "User Query ──► [Embed Query] ──► [High-Speed FAISS Index Search] ──┐\n"
+        "                                                                    ▼\n"
         "User Screen ◄── [Stream Tokens] ◄── [Ollama: Gemma 3] ◄── [Synthesized Context + Prompt]"
     )
     page4.insert_textbox(fitz.Rect(70, 735, 530, 780), lifecycle, fontsize=8.5, fontname="cour", color=WHITE)

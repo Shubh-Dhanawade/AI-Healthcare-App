@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { documentsApi, aiApi } from '@/lib/apiHelpers';
 import { Document } from '@/types';
@@ -53,7 +53,7 @@ function FormattedMessage({ content }: { content: string }) {
     });
   };
 
-  const elements: JSX.Element[] = [];
+  const elements: React.ReactNode[] = [];
   let i = 0;
   let bulletBuffer: string[] = [];
   let orderedBuffer: { num: string; text: string }[] = [];

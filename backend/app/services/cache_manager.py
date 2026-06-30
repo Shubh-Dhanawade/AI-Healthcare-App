@@ -68,6 +68,13 @@ class CacheManager:
         _summary_cache[doc_id] = summary_data
 
     @staticmethod
+    def invalidate_summary(doc_id: str) -> None:
+        """Evict a cached summary so it gets re-fetched from DB on next access."""
+        if doc_id in _summary_cache:
+            del _summary_cache[doc_id]
+            logger.info(f"🧹 Summary cache evicted for document {doc_id}.")
+
+    @staticmethod
     def get(key: str) -> Optional[Any]:
         """Get value from general cache with TTL expiration check."""
         if key in _general_cache:

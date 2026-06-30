@@ -8,6 +8,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
+from sqlalchemy.orm import selectinload
 from loguru import logger
 
 from app.core.database import get_db
@@ -35,29 +36,38 @@ router = APIRouter()
 _analysis_in_progress: set = set()
 
 
-async def _run_fields_background(doc_id: str) -> None:
+async def _run_fields_background(doc_id: str, force_regenerate: bool = False) -> None:
     """Server-side asyncio task: Extract Fields only. Launched via create_task()."""
     from app.core.database import AsyncSessionLocal
     from app.services.ai_service import extract_policy_fields
 
     tracker_key = f"fields:{doc_id}"
-    logger.info(f"[BG-FIELDS] Starting field extraction for {doc_id}")
+    logger.info(f"[BG-FIELDS] Starting field extraction for {doc_id} (force={force_regenerate})")
 
+    # 1. Fetch extracted text in a quick read-only block to release locks immediately
+    extracted_text = None
     async with AsyncSessionLocal() as db:
-        try:
-            result = await db.execute(select(Document).where(Document.id == doc_id))
-            doc = result.scalar_one_or_none()
-            if not doc or not doc.extracted_text:
-                logger.warning(f"[BG-FIELDS] Document {doc_id} not found or has no text. Aborting.")
-                return
+        result = await db.execute(select(Document).where(Document.id == doc_id))
+        doc = result.scalar_one_or_none()
+        if doc and doc.extracted_text:
+            extracted_text = doc.extracted_text
 
+    if not extracted_text:
+        logger.warning(f"[BG-FIELDS] Document {doc_id} not found or has no text. Aborting.")
+        _analysis_in_progress.discard(tracker_key)
+        return
+
+    try:
+        # 2. Call Ollama FIRST (takes 10-30s, NO database session/lock is held!)
+        fields_data = await extract_policy_fields(extracted_text, force_regenerate=force_regenerate)
+
+        # 3. Save to database in a new quick write transaction
+        async with AsyncSessionLocal() as db:
             # Clear old fields first
             existing = await db.execute(select(ExtractedField).where(ExtractedField.document_id == doc_id))
             for f in existing.scalars().all():
                 await db.delete(f)
             await db.flush()
-
-            fields_data = await extract_policy_fields(doc.extracted_text)
 
             for field in fields_data:
                 db.add(ExtractedField(
@@ -67,40 +77,52 @@ async def _run_fields_background(doc_id: str) -> None:
                     field_category=field.get("field_category"),
                 ))
 
-            if doc.status not in ("completed",):
+            # Update document status
+            result = await db.execute(select(Document).where(Document.id == doc_id))
+            doc = result.scalar_one_or_none()
+            if doc and doc.status not in ("completed",):
                 doc.status = "completed"
 
             await db.commit()
             logger.info(f"[BG-FIELDS] Done for {doc_id} — {len(fields_data)} fields saved")
-        except Exception as e:
-            logger.error(f"[BG-FIELDS] Failed for {doc_id}: {e}")
+    except Exception as e:
+        logger.error(f"[BG-FIELDS] Failed for {doc_id}: {e}")
 
     _analysis_in_progress.discard(tracker_key)
 
 
-async def _run_risks_background(doc_id: str) -> None:
+async def _run_risks_background(doc_id: str, force_regenerate: bool = False) -> None:
     """Server-side asyncio task: Risk Analysis only. Launched via create_task()."""
     from app.core.database import AsyncSessionLocal
     from app.services.ai_service import analyze_risks
 
     tracker_key = f"risks:{doc_id}"
-    logger.info(f"[BG-RISKS] Starting risk analysis for {doc_id}")
+    logger.info(f"[BG-RISKS] Starting risk analysis for {doc_id} (force={force_regenerate})")
 
+    # 1. Fetch extracted text in a quick read-only block to release locks immediately
+    extracted_text = None
     async with AsyncSessionLocal() as db:
-        try:
-            result = await db.execute(select(Document).where(Document.id == doc_id))
-            doc = result.scalar_one_or_none()
-            if not doc or not doc.extracted_text:
-                logger.warning(f"[BG-RISKS] Document {doc_id} not found or has no text. Aborting.")
-                return
+        result = await db.execute(select(Document).where(Document.id == doc_id))
+        doc = result.scalar_one_or_none()
+        if doc and doc.extracted_text:
+            extracted_text = doc.extracted_text
 
+    if not extracted_text:
+        logger.warning(f"[BG-RISKS] Document {doc_id} not found or has no text. Aborting.")
+        _analysis_in_progress.discard(tracker_key)
+        return
+
+    try:
+        # 2. Call Ollama FIRST (takes 10-30s, NO database session/lock is held!)
+        risk_data = await analyze_risks(extracted_text, force_regenerate=force_regenerate)
+
+        # 3. Save to database in a new quick write transaction
+        async with AsyncSessionLocal() as db:
             # Clear old risks first
             existing = await db.execute(select(RiskAnalysis).where(RiskAnalysis.document_id == doc_id))
             for r in existing.scalars().all():
                 await db.delete(r)
             await db.flush()
-
-            risk_data = await analyze_risks(doc.extracted_text)
 
             for risk in risk_data.get("risks", []):
                 db.add(RiskAnalysis(
@@ -114,14 +136,43 @@ async def _run_risks_background(doc_id: str) -> None:
 
             await db.commit()
             logger.info(f"[BG-RISKS] Done for {doc_id} — {len(risk_data.get('risks', []))} risks saved")
+    except Exception as e:
+        logger.error(f"[BG-RISKS] Failed for {doc_id}: {e}")
+
+    _analysis_in_progress.discard(tracker_key)
+
+
+async def _run_summary_background(doc_id: str, force_regenerate: bool = False) -> None:
+    """Server-side asyncio task: Summarization only. Launched via create_task()."""
+    from app.core.database import AsyncSessionLocal
+    from app.services.summary_service import generate_and_store_summary
+
+    tracker_key = f"summary:{doc_id}"
+    logger.info(f"[BG-SUMMARY] Starting summarization for {doc_id} (force={force_regenerate})")
+
+    async with AsyncSessionLocal() as db:
+        try:
+            result = await db.execute(select(Document).where(Document.id == doc_id))
+            doc = result.scalar_one_or_none()
+            if not doc or not doc.extracted_text:
+                logger.warning(f"[BG-SUMMARY] Document {doc_id} not found or has no text. Aborting.")
+                return
+
+            extracted_text = doc.extracted_text
+
+            # Call summary service — this calls Ollama then saves to DB
+            await generate_and_store_summary(db, doc_id, extracted_text, force_regenerate=force_regenerate)
+            await db.commit()
+            logger.info(f"[BG-SUMMARY] Done for {doc_id}")
         except Exception as e:
-            logger.error(f"[BG-RISKS] Failed for {doc_id}: {e}")
+            logger.error(f"[BG-SUMMARY] Failed for {doc_id}: {e}")
 
     _analysis_in_progress.discard(tracker_key)
 
 
 async def run_full_analysis_background(doc_id: str) -> None:
-    """Combined wrapper: runs fields then risks sequentially (used by upload pipeline)."""
+    """Combined wrapper: runs summary, fields, and risks sequentially (used by upload pipeline)."""
+    await _run_summary_background(doc_id, force_regenerate=False)
     await _run_fields_background(doc_id)
     await _run_risks_background(doc_id)
 
@@ -449,6 +500,48 @@ async def get_document(
     return DocumentDetailResponse.model_validate(doc)
 
 
+@router.post("/{document_id}/run-summary", status_code=status.HTTP_202_ACCEPTED)
+async def trigger_background_summary(
+    document_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Force-regenerate the AI Summary from the actual document text (deletes stale/mock data first).
+    Returns 202 immediately. Poll GET /documents/{id} for results.
+    """
+    result = await db.execute(
+        select(Document).where(
+            Document.id == document_id,
+            Document.user_id == current_user.id,
+        )
+    )
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+    if not doc.extracted_text:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Document text not yet extracted. Please wait for processing.",
+        )
+
+    tracker_key = f"summary:{document_id}"
+    if tracker_key in _analysis_in_progress:
+        return {"status": "already_running", "message": "Summarization is already running for this document."}
+
+    _analysis_in_progress.add(tracker_key)
+    import asyncio
+    asyncio.create_task(_run_summary_background(document_id, force_regenerate=True))
+
+    logger.info(f"[API] Background re-summarization launched for {document_id}")
+    return {
+        "status": "started",
+        "message": "Summary regeneration queued on server. Results will appear automatically.",
+        "document_id": document_id,
+        "job": "summary",
+    }
+
+
 @router.post("/{document_id}/run-fields", status_code=status.HTTP_202_ACCEPTED)
 async def trigger_background_fields(
     document_id: str,
@@ -480,7 +573,7 @@ async def trigger_background_fields(
 
     _analysis_in_progress.add(tracker_key)
     import asyncio
-    asyncio.create_task(_run_fields_background(document_id))
+    asyncio.create_task(_run_fields_background(document_id, force_regenerate=True))
 
     logger.info(f"[API] Background field extraction launched for {document_id}")
     return {
@@ -522,7 +615,7 @@ async def trigger_background_risks(
 
     _analysis_in_progress.add(tracker_key)
     import asyncio
-    asyncio.create_task(_run_risks_background(document_id))
+    asyncio.create_task(_run_risks_background(document_id, force_regenerate=True))
 
     logger.info(f"[API] Background risk analysis launched for {document_id}")
     return {
@@ -976,15 +1069,21 @@ async def export_report(
 ):
     """Export policy analysis report as a formatted printable HTML/PDF attachment."""
     result = await db.execute(
-        select(Document).where(
-            Document.id == id,
-            Document.user_id == current_user.id
+        select(Document)
+        .where(Document.id == id, Document.user_id == current_user.id)
+        .options(
+            selectinload(Document.summary),
+            selectinload(Document.extracted_fields),
+            selectinload(Document.risk_analyses),
         )
     )
     doc = result.scalar_one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
         
+    # Explicitly load relationships to avoid lazy loading MissingGreenlet errors in sync generator
+    await db.refresh(doc, ["summary", "extracted_fields", "risk_analyses"])
+    
     html_content = generate_html_report(doc)
     headers = {"Content-Disposition": f"attachment; filename=HealthAI_Report_{doc.id}.html"}
     return HTMLResponse(content=html_content, headers=headers)
@@ -999,15 +1098,21 @@ async def email_report(
 ):
     """Email the formatted HTML policy audit report directly to the user."""
     result = await db.execute(
-        select(Document).where(
-            Document.id == id,
-            Document.user_id == current_user.id
+        select(Document)
+        .where(Document.id == id, Document.user_id == current_user.id)
+        .options(
+            selectinload(Document.summary),
+            selectinload(Document.extracted_fields),
+            selectinload(Document.risk_analyses),
         )
     )
     doc = result.scalar_one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
         
+    # Explicitly load relationships to avoid lazy loading MissingGreenlet errors in sync generator
+    await db.refresh(doc, ["summary", "extracted_fields", "risk_analyses"])
+    
     html_content = generate_html_report(doc)
     
     # 1. Setup email structure

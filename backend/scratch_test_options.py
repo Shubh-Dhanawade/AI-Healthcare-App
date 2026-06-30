@@ -15,7 +15,7 @@ async def test_ollama(name, options):
         url = url.replace("localhost", "127.0.0.1")
         
     payload = {
-        "model": "hf.co/kkross/gemma-3-4b-cord19-finetuned-new:latest",
+        "model": settings.OLLAMA_MODEL,
         "messages": [{"role": "user", "content": "Hello, write a 1-sentence welcome message."}],
         "stream": False,
         "options": options

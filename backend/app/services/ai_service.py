@@ -39,17 +39,16 @@ def _rag_cache_key(query: str, policy_ids: list) -> str:
 
 # ── Concise prompts — fewer input tokens = faster model processing ──
 
-SUMMARIZATION_PROMPT = """You are a healthcare insurance expert. Analyze the following insurance document and provide a BRIEF summary.
+SUMMARIZATION_PROMPT = """You are a healthcare insurance expert. Analyze the following insurance document and provide a comprehensive yet clear explanatory summary.
 Return ONLY a valid JSON object matching the schema below. Do not output any preamble, explanation, or conversational text.
-Be concise and direct.
 
 Return format JSON:
 {{
-  "summary_text": "Executive summary of the policy (maximum 80 words)",
-  "coverage_summary": "Summary of major coverages and benefits (maximum 50 words)",
-  "exclusions_summary": "Summary of key exclusions and what is not covered (maximum 50 words)",
-  "waiting_period_summary": "Summary of waiting periods for pre-existing or standard diseases (maximum 50 words)",
-  "premium_summary": "Summary of premium, deductibles, and co-payment details (maximum 50 words)"
+  "summary_text": "A comprehensive, detailed plain-language executive summary of the policy (around 200-250 words). Outline the primary insured parties, main coverage scopes, financial obligations (premium, co-pays, deductibles), crucial waiting periods, room rent limits, and critical exclusions. Provide a thorough explanation so the user understands the key aspects of the document.",
+  "coverage_summary": "Thorough summary of major coverages, sub-limits, and benefits (maximum 100 words)",
+  "exclusions_summary": "Thorough summary of key exclusions and what is not covered (maximum 100 words)",
+  "waiting_period_summary": "Thorough summary of waiting periods for pre-existing or standard diseases (maximum 100 words)",
+  "premium_summary": "Thorough summary of premium, deductibles, and co-payment details (maximum 100 words)"
 }}
 
 DOCUMENT:
@@ -257,40 +256,16 @@ async def warmup_model() -> None:
         logger.warning(f"Model warmup skipped: {e}")
 
 
+
 async def call_ollama(
     prompt: str,
     model: Optional[str] = None,
-    num_predict: int = 700,
-    num_ctx: int = 1024,
+    num_predict: int = 512,
+    num_ctx: int = 1536,
 ) -> str:
-    """Call Ollama API with aggressive speed-optimised options."""
-    model = model or settings.OLLAMA_MODEL
-    url = f"{settings.OLLAMA_BASE_URL}/api/chat"
-    if "localhost" in url:
-        url = url.replace("localhost", "127.0.0.1")
-
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "stream": False,
-        "options": {
-            "temperature": 0,          # Greedy decoding — zero sampling overhead
-            "num_predict": num_predict, # Strict token limit per task
-            "num_ctx": num_ctx,        # REDUCED context for speed — 1024 base instead of 2048
-            "num_batch": 1024,         # Larger batches = faster prefill 
-            "use_mmap": True,          # Memory-map for fast reloads
-            "use_mlock": False,        # Disable model locking in RAM to avoid slow OS virtual memory allocation
-            "repeat_penalty": 1.0,     # No sampling overhead
-            "top_k": 1,                # Greedy only — fastest
-            "top_p": 1.0,              # Disable nucleus sampling
-        },
-    }
-
-    logger.info(f"Ollama: {model} predict={num_predict} ctx={num_ctx}")
-    async with httpx.AsyncClient(timeout=180.0) as client:  # Increased timeout from 60s to 180s to prevent early aborts
-        response = await client.post(url, json=payload)
-        response.raise_for_status()
-        return response.json().get("message", {}).get("content", "")
+    """Call Ollama API using shared connection pool with GPU-accelerated settings."""
+    from app.services.ollama_client import call_ollama as _pooled_call
+    return await _pooled_call(prompt, model=model, num_predict=num_predict, num_ctx=num_ctx)
 
 
 def extract_json_from_response(text: str) -> dict:
@@ -331,21 +306,20 @@ def _clean_field(val):
     return str(val)
 
 
-async def generate_summary(document_text: str) -> dict:
+async def generate_summary(document_text: str, force_regenerate: bool = False) -> dict:
     """Generate AI summary. Cached per document hash, falls back to demo data."""
     ck = _cache_key("summary", document_text)
-    if ck in _ai_cache:
+    if not force_regenerate and ck in _ai_cache:
         logger.info("Cache hit: summary")
         return _ai_cache[ck]
 
-    # Trim to 2000 chars — enough context, MUCH faster prefill
-    truncated = document_text[:2000] if len(document_text) > 2000 else document_text
+    # Use up to 10000 chars — captures multi-page PDFs adequately
+    truncated = document_text[:10000] if len(document_text) > 10000 else document_text
     try:
-        # 400 tokens max (reduced from 600) 
         response = await call_ollama(
             SUMMARIZATION_PROMPT.format(document_text=truncated),
-            num_predict=600,
-            num_ctx=2048,
+            num_predict=900,
+            num_ctx=4096,
         )
         result = extract_json_from_response(response)
         if result.get("summary_text"):
@@ -364,20 +338,19 @@ async def generate_summary(document_text: str) -> dict:
     return dict(MOCK_SUMMARY)
 
 
-async def extract_policy_fields(document_text: str) -> list[dict]:
+async def extract_policy_fields(document_text: str, force_regenerate: bool = False) -> list[dict]:
     """Extract key fields. Cached per document hash, falls back to demo data."""
     ck = _cache_key("fields", document_text)
-    if ck in _ai_cache:
+    if not force_regenerate and ck in _ai_cache:
         logger.info("Cache hit: fields")
         return _ai_cache[ck]
 
-    truncated = document_text[:2000] if len(document_text) > 2000 else document_text
+    truncated = document_text[:10000] if len(document_text) > 10000 else document_text
     try:
-        # Fields extraction is pure JSON — 200 tokens max (reduced from 400)
         response = await call_ollama(
             FIELD_EXTRACTION_PROMPT.format(document_text=truncated),
-            num_predict=600,
-            num_ctx=2048,
+            num_predict=700,
+            num_ctx=4096,
         )
         result = extract_json_from_response(response)
         if result:
@@ -408,20 +381,19 @@ async def extract_policy_fields(document_text: str) -> list[dict]:
     return list(MOCK_FIELDS)
 
 
-async def analyze_risks(document_text: str) -> dict:
+async def analyze_risks(document_text: str, force_regenerate: bool = False) -> dict:
     """Detect risky clauses. Cached per document hash, falls back to demo data."""
     ck = _cache_key("risks", document_text)
-    if ck in _ai_cache:
+    if not force_regenerate and ck in _ai_cache:
         logger.info("Cache hit: risks")
         return _ai_cache[ck]
 
-    truncated = document_text[:2000] if len(document_text) > 2000 else document_text
+    truncated = document_text[:10000] if len(document_text) > 10000 else document_text
     try:
-        # Risk JSON is compact — 250 tokens max (reduced from 350)
         response = await call_ollama(
             RISK_ANALYSIS_PROMPT.format(document_text=truncated),
-            num_predict=600,
-            num_ctx=2048,
+            num_predict=700,
+            num_ctx=4096,
         )
         result = extract_json_from_response(response)
         if result.get("risks"):
