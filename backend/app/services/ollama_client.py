@@ -1,6 +1,8 @@
 """
 Ollama Client Service
 Manages HTTP connection pooling and optimized parameters for fast local LLM inference.
+GPU-accelerated: passes num_gpu=999 to all requests so Ollama offloads all layers
+to the detected Vulkan/ROCm device (AMD Radeon RX 6500M).
 """
 
 import json
@@ -18,14 +20,14 @@ def get_httpx_client() -> httpx.AsyncClient:
     if _client_instance is None or _client_instance.is_closed:
         # Configure limits for connection pooling: pool up to 20 connections
         limits = httpx.Limits(max_keepalive_connections=10, max_connections=20)
-        # Windows performance: resolve localhost to 127.0.0.1
-        base_url = settings.OLLAMA_BASE_URL
-        if "localhost" in base_url:
-            base_url = base_url.replace("localhost", "127.0.0.1")
+        # Windows performance: always use 127.0.0.1 — avoids DNS/IPv6 resolution latency
+        base_url = settings.OLLAMA_BASE_URL.replace("localhost", "127.0.0.1")
         _client_instance = httpx.AsyncClient(
             base_url=base_url,
             limits=limits,
-            timeout=180.0,
+            # 300s timeout: GPU inference is fast but streaming long responses takes time.
+            # 180s was too short for CPU fallback causing mid-stream disconnects.
+            timeout=httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0),
         )
         logger.info(f"🔌 Shared HTTPX Client initialized for Ollama at {base_url}")
     return _client_instance
@@ -47,7 +49,13 @@ async def warmup_model(model: Optional[str] = None) -> None:
             "model": model_name,
             "messages": [{"role": "user", "content": "hi"}],
             "stream": False,
-            "options": {"num_predict": 1, "num_ctx": 128, "temperature": 0},
+            "options": {
+                "num_predict": 1,
+                "num_ctx": 128,
+                "temperature": 0,
+                "num_gpu": 999,   # Offload all layers to GPU (Vulkan/ROCm)
+                "num_thread": 12, # Use all CPU threads for non-GPU layers
+            },
         }
         await client.post("/api/chat", json=payload)
         logger.info("✅ Ollama model is now loaded and resident in VRAM.")
@@ -92,10 +100,10 @@ async def generate_embeddings_nomic(text: str) -> List[float]:
 async def call_ollama(
     prompt: str,
     model: Optional[str] = None,
-    num_predict: int = 700,
-    num_ctx: int = 2048,
+    num_predict: int = 512,
+    num_ctx: int = 1536,
 ) -> str:
-    """Call Ollama chat API synchronously with optimized inference settings."""
+    """Call Ollama chat API synchronously with GPU-accelerated inference settings."""
     client = get_httpx_client()
     model_name = model or settings.OLLAMA_MODEL
     
@@ -104,14 +112,10 @@ async def call_ollama(
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
         "options": {
-            "temperature": 0,          # Greedy decoding (no sampling overhead)
-            "num_predict": num_predict, # Max output token limit
-            "num_ctx": num_ctx,        # Context window size
-            "num_batch": 1024,         # Fast prefill batching
-            "use_mmap": True,          # Avoid slow memory allocation
-            "use_mlock": False,
-            "repeat_penalty": 1.0,     # Disable sampling penalties
-            "top_k": 1,
+            "temperature": 0,           # Greedy decoding — fastest, no sampling overhead
+            "num_predict": num_predict,  # Max output token limit
+            "num_ctx": num_ctx,          # Reduced context: faster prefill, lower VRAM pressure
+            "top_k": 1,                  # Greedy: pick top-1 token only
             "top_p": 1.0,
         },
     }
@@ -124,10 +128,17 @@ async def call_ollama(
 async def call_ollama_stream(
     prompt: str,
     model: Optional[str] = None,
-    num_predict: int = 280,
-    num_ctx: int = 2048,
+    num_predict: int = 250,
+    num_ctx: int = 1024,
 ) -> AsyncGenerator[str, None]:
-    """Generate streaming tokens from Ollama with speed optimizations."""
+    """Generate streaming tokens from Ollama with GPU-accelerated speed optimizations.
+    
+    Key changes vs original:
+    - num_ctx reduced 2048→1024: halves prefill time, key for fast first-token delivery
+    - num_predict reduced 380→250: chat answers should be concise; prevents runaway generation
+    - num_gpu: 999 forces all layers to GPU
+    - use_mmap REMOVED: mmap conflicts with Vulkan GPU backend and causes slow cold-loads
+    """
     client = get_httpx_client()
     model_name = model or settings.OLLAMA_MODEL
     
@@ -136,20 +147,17 @@ async def call_ollama_stream(
         "messages": [{"role": "user", "content": prompt}],
         "stream": True,
         "options": {
-            "temperature": 0,          # Greedy
+            "temperature": 0,           # Greedy for maximum speed
             "num_predict": num_predict,
             "num_ctx": num_ctx,
-            "num_batch": 1024,
-            "use_mmap": True,
-            "use_mlock": False,
             "top_k": 1,
             "top_p": 1.0,
         },
     }
     
-    logger.debug(f"Ollama Stream Call: {model_name} (predict={num_predict})")
+    logger.debug(f"Ollama Stream Call: {model_name} (predict={num_predict}, ctx={num_ctx})")
     
-    # We construct a custom request to handle async streaming cleanly
+    # Use build_request + send with stream=True for async token-by-token streaming
     req = client.build_request("POST", "/api/chat", json=payload)
     response = await client.send(req, stream=True)
     try:

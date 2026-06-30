@@ -40,38 +40,53 @@ async def get_document_summary(db: AsyncSession, doc_id: str) -> Optional[Dict[s
 async def generate_and_store_summary(
     db: AsyncSession,
     doc_id: str,
-    text: str
+    text: str,
+    force_regenerate: bool = False,
 ) -> Dict[str, Any]:
-    """Generate BRIEF summary using Ollama, save to SQLite and cache. Optimized for speed."""
-    # Check if already exists in DB (safety check)
+    """Generate summary using Ollama, save to SQLite and cache.
+    
+    Pass force_regenerate=True to delete the old summary and generate a fresh one from the actual document.
+    """
+    # Check if already exists in DB
     existing = await get_document_summary(db, doc_id)
-    if existing:
+    if existing and not force_regenerate:
         logger.info(f"Summary already exists for document {doc_id}, skipping generation.")
         return existing
+    
+    # If force_regenerate, delete existing DB row and evict cache
+    if force_regenerate and existing:
+        del_result = await db.execute(select(Summary).where(Summary.document_id == doc_id))
+        old_summary = del_result.scalar_one_or_none()
+        if old_summary:
+            await db.delete(old_summary)
+            await db.flush()
+        CacheManager.invalidate_summary(doc_id)
+        logger.info(f"Deleted existing summary for {doc_id} to force regeneration.")
         
-    # Generate new summary from document excerpt
-    truncated = text[:2000] if len(text) > 2000 else text
-    summary_data = {}
+    # Generate new summary — use up to 6000 chars for multi-page PDFs
+    truncated = text[:6000] if len(text) > 6000 else text
+    summary_data = dict(MOCK_SUMMARY)
     
     try:
         response = await call_ollama(
             SUMMARIZATION_PROMPT.format(document_text=truncated),
-            num_predict=400,  # Reduced from 600 for faster generation of brief summaries
+            num_predict=800,  # Increased to allow for more detailed explanatory summaries
             num_ctx=2048,
         )
         result = extract_json_from_response(response)
-        if result.get("summary_text"):
+        if result and result.get("summary_text"):
             logger.info("Ollama summary generation successful")
             summary_data = {
-                "summary_text": _clean_field(result.get("summary_text", MOCK_SUMMARY["summary_text"])),
+                "summary_text": _clean_field(result.get("summary_text")),
                 "coverage_summary": _clean_field(result.get("coverage_summary")),
                 "exclusions_summary": _clean_field(result.get("exclusions_summary")),
                 "waiting_period_summary": _clean_field(result.get("waiting_period_summary")),
                 "premium_summary": _clean_field(result.get("premium_summary")),
             }
+        else:
+            logger.warning("Ollama summary returned invalid or missing keys, using mock fallback.")
     except Exception as e:
         logger.warning(f"Ollama summarization error ({e}), using mock fallback.")
-        summary_data = dict(MOCK_SUMMARY)
         
     # Save to DB
     summary = Summary(

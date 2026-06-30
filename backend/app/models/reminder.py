@@ -24,7 +24,7 @@ class PolicyReminder(Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     reminder_type: Mapped[str] = mapped_column(String(50), default="renewal", nullable=False)  # renewal | premium
     reminder_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    premium_amount: Mapped[str] = mapped_column(String(100), nullable=True)
+    premium_amount: Mapped[str] = mapped_column(String(255), nullable=True)
     is_dismissed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(

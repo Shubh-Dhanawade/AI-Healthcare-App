@@ -322,56 +322,61 @@ async def run_chat_query_stream(
         total_time = time.time() - start_time
         logger.info(f"⏱️ Streaming complete in {total_time:.4f}s [Retrieval: {retrieval_time:.4f}s, First Token: {first_token_time:.4f}s]")
         
-        # Evaluate & log in background so streaming is not delayed for the user
+        # Evaluate & log in background — does NOT block the next user message
         if user_id and filtered_chunks:
-            try:
-                context_str = "\n\n".join(c["text"] for c in filtered_chunks)
-                faithfulness_score = 1.0
-                faithfulness_reason = "No context retrieved."
-                relevance_score = 1.0
-                relevance_reason = "Answer relevance check completed."
-                context_relevance = sum(c.get("score", 0.0) for c in filtered_chunks) / len(filtered_chunks) if filtered_chunks else 1.0
-                
-                from app.services.ai_service import FAITHFULNESS_PROMPT, RELEVANCE_PROMPT, extract_json_from_response
-                faith_prompt = FAITHFULNESS_PROMPT.format(context=context_str, answer=full_response)
-                rel_prompt = RELEVANCE_PROMPT.format(query=query, answer=full_response)
-                
-                faith_res, rel_res = await asyncio.gather(
-                    call_ollama(faith_prompt, num_predict=128),
-                    call_ollama(rel_prompt, num_predict=128),
-                    return_exceptions=True
-                )
-                
-                if not isinstance(faith_res, Exception):
-                    faith_json = extract_json_from_response(faith_res)
-                    if "score" in faith_json:
-                        faithfulness_score = float(faith_json["score"])
-                        faithfulness_reason = faith_json.get("reasoning", "Faithfulness check complete.")
-                        
-                if not isinstance(rel_res, Exception):
-                    rel_json = extract_json_from_response(rel_res)
-                    if "score" in rel_json:
-                        relevance_score = float(rel_json["score"])
-                        relevance_reason = rel_json.get("reasoning", "Relevance check complete.")
-                        
-                from app.models.rag_query_log import RAGQueryLog
-                log_entry = RAGQueryLog(
-                    user_id=user_id,
-                    query=query,
-                    answer=full_response,
-                    faithfulness=min(max(faithfulness_score, 0.0), 1.0),
-                    faithfulness_reasoning=faithfulness_reason,
-                    answer_relevance=min(max(relevance_score, 0.0), 1.0),
-                    answer_relevance_reasoning=relevance_reason,
-                    context_relevance=min(max(context_relevance, 0.0), 1.0),
-                    latency=round(total_time, 2)
-                )
-                db.add(log_entry)
-                await db.commit()
-                logger.info("✅ Logged streamed RAG query evaluation to database successfully")
-            except Exception as log_err:
-                logger.error(f"Error logging streamed RAG query evaluation: {log_err}")
-                
+            async def _log_rag_eval_background():
+                try:
+                    context_str = "\n\n".join(c["text"] for c in filtered_chunks)
+                    faithfulness_score = 1.0
+                    faithfulness_reason = "Evaluation skipped for speed."
+                    relevance_score = 1.0
+                    relevance_reason = "Evaluation skipped for speed."
+                    context_relevance = sum(c.get("score", 0.0) for c in filtered_chunks) / len(filtered_chunks) if filtered_chunks else 1.0
+
+                    from app.services.ai_service import FAITHFULNESS_PROMPT, RELEVANCE_PROMPT, extract_json_from_response
+                    faith_prompt = FAITHFULNESS_PROMPT.format(context=context_str, answer=full_response)
+                    rel_prompt = RELEVANCE_PROMPT.format(query=query, answer=full_response)
+
+                    faith_res, rel_res = await asyncio.gather(
+                        call_ollama(faith_prompt, num_predict=80),
+                        call_ollama(rel_prompt, num_predict=80),
+                        return_exceptions=True
+                    )
+
+                    if not isinstance(faith_res, Exception):
+                        faith_json = extract_json_from_response(faith_res)
+                        if "score" in faith_json:
+                            faithfulness_score = float(faith_json["score"])
+                            faithfulness_reason = faith_json.get("reasoning", "Faithfulness check complete.")
+
+                    if not isinstance(rel_res, Exception):
+                        rel_json = extract_json_from_response(rel_res)
+                        if "score" in rel_json:
+                            relevance_score = float(rel_json["score"])
+                            relevance_reason = rel_json.get("reasoning", "Relevance check complete.")
+
+                    from app.models.rag_query_log import RAGQueryLog
+                    from app.core.database import AsyncSessionLocal
+                    async with AsyncSessionLocal() as bg_db:
+                        log_entry = RAGQueryLog(
+                            user_id=user_id,
+                            query=query,
+                            answer=full_response,
+                            faithfulness=min(max(faithfulness_score, 0.0), 1.0),
+                            faithfulness_reasoning=faithfulness_reason,
+                            answer_relevance=min(max(relevance_score, 0.0), 1.0),
+                            answer_relevance_reasoning=relevance_reason,
+                            context_relevance=min(max(context_relevance, 0.0), 1.0),
+                            latency=round(total_time, 2)
+                        )
+                        bg_db.add(log_entry)
+                        await bg_db.commit()
+                    logger.info("✅ Background: Logged streamed RAG query evaluation to database")
+                except Exception as log_err:
+                    logger.error(f"Background RAG eval logging failed: {log_err}")
+
+            asyncio.create_task(_log_rag_eval_background())
+
     except Exception as e:
         logger.error(f"Streaming failed: {e}")
         fallback_msg = "\n❌ Failed to generate streamed response. Local Ollama server may be overloaded."

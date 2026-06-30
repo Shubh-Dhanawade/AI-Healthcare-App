@@ -38,7 +38,7 @@ TEXT TO TRANSLATE:
 async def call_ollama(prompt: str) -> str:
     url = f"{settings.OLLAMA_BASE_URL}/api/generate"
     payload = {
-        "model": "llama3.2",
+        "model": settings.OLLAMA_MODEL,
         "prompt": prompt,
         "stream": False,
         "options": {

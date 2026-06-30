@@ -72,7 +72,11 @@ async def summarize_document(
     
     # Acquire lock for this document to prevent concurrent AI processing
     async with _document_locks[doc.id]:
-        # Delete existing summary for re-generation
+        # 1. Generate new summary via AI first (NO database locks held during slow Ollama call)
+        logger.info(f"Generating AI summary for document {doc.id}")
+        summary_data = await generate_summary(doc.extracted_text, force_regenerate=True)
+        
+        # 2. Delete existing summary for re-generation in a fast database transaction
         existing = await db.execute(
             select(Summary).where(Summary.document_id == doc.id)
         )
@@ -82,10 +86,6 @@ async def summarize_document(
             logger.info(f"Deleting existing summary for document {doc.id} to regenerate")
             await db.delete(existing_summary)
             await db.flush()
-        
-        # Generate new summary via AI
-        logger.info(f"Generating AI summary for document {doc.id}")
-        summary_data = await generate_summary(doc.extracted_text)
         
         # Save to database
         from app.core.config import settings
@@ -120,6 +120,9 @@ async def summarize_document(
         else:
             await db.refresh(summary)
         
+        # Explicitly commit the transaction to release SQLite database locks immediately
+        await db.commit()
+        
         return SummarizeResponse(
             document_id=doc.id,
             summary=SummarySchema.model_validate(summary),
@@ -150,7 +153,7 @@ async def extract_fields(
         
         # Extract via AI
         logger.info(f"Extracting fields for document {doc.id}")
-        fields_data = await extract_policy_fields(doc.extracted_text)
+        fields_data = await extract_policy_fields(doc.extracted_text, force_regenerate=True)
         
         saved_fields = []
         for field in fields_data:
@@ -202,7 +205,7 @@ async def risk_analysis(
         
         # Analyze via AI
         logger.info(f"Running risk analysis for document {doc.id}")
-        risk_data = await analyze_risks(doc.extracted_text)
+        risk_data = await analyze_risks(doc.extracted_text, force_regenerate=True)
         
         saved_risks = []
         for risk in risk_data.get("risks", []):

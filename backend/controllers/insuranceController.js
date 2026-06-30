@@ -41,7 +41,7 @@ const uploadInsurance = async (req, res) => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'llama3',
+          model: process.env.OLLAMA_MODEL || 'gemma3:4b',
           prompt: `Analyze the following insurance document. Extract important coverage details, detect any risks or exclusions, and provide a short summary:\n\n${extractedText.substring(0, 4000)}`, // limit text for prompt
           stream: false,
         }),

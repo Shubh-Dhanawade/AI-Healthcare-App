@@ -37,7 +37,7 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
         cursor.execute("PRAGMA synchronous=NORMAL")
         cursor.execute("PRAGMA cache_size=-64000")  # 64MB cache
         cursor.execute("PRAGMA temp_store=MEMORY")
-        cursor.execute("PRAGMA busy_timeout=5000")
+        cursor.execute("PRAGMA busy_timeout=30000")
     except Exception as e:
         logger.warning(f"Failed to set SQLite PRAGMAs: {e}")
     finally:
