@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.risk_analysis import Summary
 from app.services.cache_manager import CacheManager
 from app.services.ollama_client import call_ollama, settings
-from app.services.ai_service import SUMMARIZATION_PROMPT, MOCK_SUMMARY, extract_json_from_response, _clean_field
+from app.services.ai_service import SUMMARIZATION_PROMPT, _build_fallback_summary, extract_json_from_response, _clean_field
 
 async def get_document_summary(db: AsyncSession, doc_id: str) -> Optional[Dict[str, Any]]:
     """Retrieve summary from memory cache or database."""
@@ -65,7 +65,7 @@ async def generate_and_store_summary(
         
     # Generate new summary — use up to 6000 chars for multi-page PDFs
     truncated = text[:6000] if len(text) > 6000 else text
-    summary_data = dict(MOCK_SUMMARY)
+    summary_data = _build_fallback_summary(text)
     
     try:
         response = await call_ollama(

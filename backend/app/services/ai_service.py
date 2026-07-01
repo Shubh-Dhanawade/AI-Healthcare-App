@@ -139,97 +139,242 @@ Return JSON format:
 
 
 # ─────────────────────────────────────────
-# Mock Data (used when Ollama is unavailable)
+# Text-based fallback extractor (used when Ollama is unavailable)
+# Extracts real content from the uploaded document instead of returning hardcoded demo data.
 # ─────────────────────────────────────────
 
-MOCK_SUMMARY = {
-    "summary_text": (
-        "This is the Star Health Comprehensive Plan, a premium family-floater policy designed for comprehensive "
-        "medical coverage. It covers standard hospitalization, daycare treatments, and advanced procedures up to "
-        "a ₹5,00,000 annual limit. To make it affordable, the policy incorporates cost-sharing features like a "
-        "₹5,00,000 sum insured, a ₹5,000 initial deductible (the amount you pay before insurance pays anything), "
-        "and a 20% co-payment (your share of every hospital bill). Room rent is capped at 1% of the sum insured "
-        "per day (₹5,000/day), meaning staying in a room that costs more will trigger a 'proportionate deduction' "
-        "where the insurer reduces payouts for doctor fees and surgeries as well."
-    ),
-    "coverage_summary": (
-        "• Hospitalization & ICU: Complete coverage up to the ₹5,00,000 sum insured.\n"
-        "• Daycare Procedures: All daycare treatments (requiring less than 24h stay) are fully covered.\n"
-        "• Road Ambulance: Covered up to ₹2,000 per hospitalization event to handle emergencies.\n"
-        "• No-Claim Bonus: 10% increase in sum insured for every claim-free year (up to 50% maximum) as an incentive."
-    ),
-    "exclusions_summary": (
-        "• Cosmetic & Obesity Treatments: Surgeries for aesthetic enhancement or weight loss are excluded.\n"
-        "• Outpatient Dental & Vision: Routine dental work and spectacles are not covered unless due to an accident.\n"
-        "• Hazardous Sports: Treatment for injuries from extreme adventure sports or self-harm is completely excluded."
-    ),
-    "waiting_period_summary": (
-        "• Initial 30-Day Delay: No illness coverage for the first 30 days, except for emergency accident claims.\n"
-        "• Specific Treatments (24 Months): Common procedures (cataracts, hernia, joint replacements) require 2 years.\n"
-        "• Pre-existing Conditions (48 Months): Long-term conditions (diabetes, high blood pressure) are covered only after 4 years."
-    ),
-    "premium_summary": (
-        "• Base Premium: ₹12,500 annually for a typical family plan (plus 18% GST).\n"
-        "• Deductible: You pay the first ₹5,000 deductible per hospital admission before insurance coverage applies.\n"
-        "• Co-Payment (20%): You must pay 20% of every approved claim value, while the insurer pays the remaining 80%."
-    ),
-}
+def _extract_sentences_with_keywords(text: str, keywords: list[str], max_results: int = 3) -> list[str]:
+    """Find sentences in document text that contain any of the given keywords."""
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    hits = []
+    for s in sentences:
+        s_clean = s.strip()
+        if not s_clean:
+            continue
+        if any(kw.lower() in s_clean.lower() for kw in keywords):
+            hits.append(s_clean[:200])
+        if len(hits) >= max_results:
+            break
+    return hits
 
-MOCK_FIELDS = [
-    {"field_name": "Policy Name", "field_value": "Star Health Comprehensive Plan", "field_category": "policy_info"},
-    {"field_name": "Insurer Name", "field_value": "Star Health and Allied Insurance Co. Ltd.", "field_category": "policy_info"},
-    {"field_name": "Policy Number", "field_value": "P/211111/01/2024/000001", "field_category": "policy_info"},
-    {"field_name": "Sum Insured", "field_value": "₹5,00,000 (Maximum annual coverage limit)", "field_category": "coverage"},
-    {"field_name": "Premium Amount", "field_value": "₹12,500 per annum (excludes 18% GST)", "field_category": "premium"},
-    {"field_name": "Deductible", "field_value": "₹5,00,000 (The amount you pay first for each hospitalization)", "field_category": "premium"},
-    {"field_name": "Co Payment", "field_value": "20% (Your share of the total bill for every claim)", "field_category": "premium"},
-    {"field_name": "Waiting Period", "field_value": "30 days initial; 48 months for pre-existing diseases", "field_category": "restrictions"},
-    {"field_name": "Coverage Type", "field_value": "Family Floater (Covers all listed family members)", "field_category": "coverage"},
-    {"field_name": "Policy Term", "field_value": "1 year (Requires annual renewal to stay active)", "field_category": "policy_info"},
-    {"field_name": "Network Hospitals", "field_value": "5,000+ partner hospitals providing cashless claims", "field_category": "coverage"},
-    {"field_name": "Pre Existing Coverage", "field_value": "Covered only after a 48-month continuous waiting period", "field_category": "coverage"},
-    {"field_name": "Maternity Coverage", "field_value": "Up to ₹25,000 limit after a 24-month waiting period", "field_category": "coverage"},
-    {"field_name": "Room Rent Limit", "field_value": "1% of Sum Insured per day (₹5,000/day); proportionate deductions apply", "field_category": "restrictions"},
-    {"field_name": "Claim Process", "field_value": "Cashless at network hospitals; reimbursement documents must be sent within 30 days", "field_category": "process"},
-]
 
-MOCK_RISKS = [
-    {
-        "clause_text": "All pre-existing diseases shall not be covered during the first 48 months of the policy.",
-        "risk_type": "waiting_period",
-        "severity": "high",
-        "explanation": "A 48-month (4-year) waiting period means you pay premiums for 4 full years before receiving any coverage for chronic illnesses like diabetes or hypertension. This is an exceptionally long delay.",
-        "recommendation": "If you have pre-existing illnesses, consider policies with shorter waiting periods (12 to 24 months) or look into paying a slightly higher premium for a waiver rider.",
-    },
-    {
-        "clause_text": "Co-payment of 20% shall be applicable for each and every claim under this policy.",
-        "risk_type": "co_payment",
-        "severity": "high",
-        "explanation": "A 20% co-pay requires you to pay 20% of every hospital bill out of pocket. For a large claim of ₹5 Lakhs, you must pay ₹1 Lakh yourself. This represents a heavy unexpected financial burden.",
-        "recommendation": "Check if you can buy a 'Co-payment Waiver Rider' to remove this clause. Compare other plans without co-payments, as the higher upfront premium is often cheaper than one hospital bill.",
-    },
-    {
-        "clause_text": "Room rent shall be limited to 1% of the Sum Insured per day. If room rent exceeds this limit, proportionate deduction shall apply.",
-        "risk_type": "coverage_limit",
-        "severity": "medium",
-        "explanation": "At a ₹5 Lakh sum insured, your room cap is ₹5,000/day. If you stay in a standard room costing ₹8,000/day, you don't just pay the ₹3,000 difference—all your surgeon fees, ICU, and medicine charges will be reduced by 37.5% proportionately.",
-        "recommendation": "Select a plan with no room rent sub-limit, or ensure you strictly stay in a room that costs less than ₹5,000/day during hospitalization to avoid massive out-of-pocket charges.",
-    },
-    {
-        "clause_text": "Deductible of ₹5,000 applicable per hospitalization event.",
-        "risk_type": "deductible",
-        "severity": "medium",
-        "explanation": "A ₹5,000 deductible means the insurance company will deduct ₹5,000 from your approved claim amount for every single hospital stay. You are fully responsible for this initial sum.",
-        "recommendation": "Maintain a dedicated health emergency fund of at least ₹15,000 to cover these per-incident deductibles without affecting your main savings.",
-    },
-    {
-        "clause_text": "Cosmetic or aesthetic treatments, dental procedures (except accidental), and vision correction are excluded.",
-        "risk_type": "exclusion",
-        "severity": "low",
-        "explanation": "Standard exclusions common to most health insurance. Cosmetic treatments, routine dental work, and vision aids are not covered.",
-        "recommendation": "These are industry-standard exclusions, so no action is needed. Just be sure to budget for dental and eye care separately outside of insurance.",
-    },
-]
+def _regex_find(pattern: str, text: str, group: int = 1, default: str = "Not found in document") -> str:
+    """Run a regex on document text and return the first match or a default."""
+    m = re.search(pattern, text, re.IGNORECASE)
+    if m:
+        try:
+            return m.group(group).strip()
+        except IndexError:
+            pass
+    return default
+
+
+def _build_fallback_summary(document_text: str) -> dict:
+    """Build a document-specific summary by extracting real text snippets from the PDF."""
+    text = document_text[:15000]  # Use more text for better extraction
+    words = text.split()
+    word_count = len(words)
+
+    # --- Identify insurer / policy name ---
+    insurer = _regex_find(
+        r'(?:insurer|insurance company|underwritten by|issued by)[:\s]+([A-Za-z &.]+(?:Ltd|Limited|Co|Inc)?)',
+        text, default=""
+    )
+    policy_name = _regex_find(
+        r'(?:policy name|plan name|product name)[:\s]+([A-Za-z0-9 \-&]+)',
+        text, default=""
+    )
+
+    # --- Introductory description (first 3 non-trivial sentences) ---
+    intro_sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text)
+                       if len(s.strip()) > 60][:3]
+    intro = " ".join(intro_sentences) if intro_sentences else text[:500]
+
+    header_parts = []
+    if insurer:
+        header_parts.append(f"Insurer: {insurer}.")
+    if policy_name:
+        header_parts.append(f"Plan: {policy_name}.")
+    header = " ".join(header_parts)
+    summary_text = f"{header} {intro}".strip()[:1200]
+    if not summary_text:
+        summary_text = f"Document extracted ({word_count} words). " + text[:800]
+
+    # --- Coverage ---
+    coverage_hits = _extract_sentences_with_keywords(
+        text,
+        ["hospitaliz", "cover", "benefit", "daycare", "ICU", "ambulance", "sum insured", "reimburse"],
+        max_results=4,
+    )
+    coverage_summary = "\n".join(f"• {s}" for s in coverage_hits) if coverage_hits else \
+        "• Coverage details not clearly identified — please review the full document."
+
+    # --- Exclusions ---
+    excl_hits = _extract_sentences_with_keywords(
+        text,
+        ["exclud", "not cover", "not payable", "exception", "not admissible", "shall not"],
+        max_results=4,
+    )
+    exclusions_summary = "\n".join(f"• {s}" for s in excl_hits) if excl_hits else \
+        "• Exclusions not clearly identified — please review the full document."
+
+    # --- Waiting period ---
+    wait_hits = _extract_sentences_with_keywords(
+        text,
+        ["waiting period", "initial waiting", "pre-existing", "months waiting", "days waiting"],
+        max_results=3,
+    )
+    waiting_period_summary = "\n".join(f"• {s}" for s in wait_hits) if wait_hits else \
+        "• Waiting period details not found — please review the policy schedule."
+
+    # --- Premium / cost ---
+    premium_hits = _extract_sentences_with_keywords(
+        text,
+        ["premium", "deductible", "co-pay", "co pay", "copay", "sum insured", "GST"],
+        max_results=4,
+    )
+    premium_summary = "\n".join(f"• {s}" for s in premium_hits) if premium_hits else \
+        "• Premium and cost details not clearly identified — please review the policy schedule."
+
+    return {
+        "summary_text": summary_text,
+        "coverage_summary": coverage_summary,
+        "exclusions_summary": exclusions_summary,
+        "waiting_period_summary": waiting_period_summary,
+        "premium_summary": premium_summary,
+    }
+
+
+def _build_fallback_fields(document_text: str) -> list[dict]:
+    """Extract structured fields directly from document text using regex patterns."""
+    text = document_text[:15000]
+    fields = []
+
+    def add(name: str, value: str, category: str):
+        if value and value != "Not found in document":
+            fields.append({"field_name": name, "field_value": value, "field_category": category})
+
+    add("Policy Name", _regex_find(
+        r'(?:policy name|plan name|product)[:\s]+([A-Za-z0-9 \-&]+)',
+        text), "policy_info")
+    add("Insurer Name", _regex_find(
+        r'(?:insurer|insurance company|underwritten by)[:\s]+([A-Za-z &.]+(?:Ltd|Limited|Co)?)',
+        text), "policy_info")
+    add("Policy Number", _regex_find(
+        r'(?:policy no|policy number|certificate no)[.:\s]+([A-Z0-9/\-]+)',
+        text), "policy_info")
+    add("Sum Insured", _regex_find(
+        r'(?:sum insured|sum assured|coverage amount)[:\s₹Rs.]+([\d,]+(?:\s*(?:Lakh|Lakhs|lakh))?)',
+        text), "coverage")
+    add("Premium Amount", _regex_find(
+        r'(?:premium)[:\s₹Rs.]+([\d,]+(?:\s*per\s*(?:annum|year|month))?)',
+        text), "premium")
+    add("Deductible", _regex_find(
+        r'(?:deductible|excess)[:\s₹Rs.]+([\d,]+)',
+        text), "premium")
+    add("Co Payment", _regex_find(
+        r'(?:co-?pay(?:ment)?)[:\s]+([\d]+%?[^.\n]{0,60})',
+        text), "premium")
+    add("Waiting Period", _regex_find(
+        r'(?:waiting period)[:\s]+([^.\n]{0,120})',
+        text), "restrictions")
+    add("Coverage Type", _regex_find(
+        r'(?:coverage type|plan type|floater|individual)[:\s]+([A-Za-z ]+)',
+        text), "coverage")
+    add("Policy Term", _regex_find(
+        r'(?:policy term|policy period|duration)[:\s]+([^.\n]{0,60})',
+        text), "policy_info")
+    add("Network Hospitals", _regex_find(
+        r'([\d,]+\+?\s*(?:network|cashless|empanelled)\s*hospitals?)',
+        text), "coverage")
+    add("Room Rent Limit", _regex_find(
+        r'(?:room rent)[^.\n]{0,40}([\d%,]+[^.\n]{0,80})',
+        text), "restrictions")
+    add("Claim Process", _regex_find(
+        r'(?:claim process|how to claim|claims?)[:\s]+([^.\n]{0,150})',
+        text), "process")
+
+    if not fields:
+        # Last resort: return document-specific note
+        snippet = document_text[:200].replace("\n", " ")
+        fields.append({
+            "field_name": "Document Content",
+            "field_value": f"Could not extract structured fields. Document preview: {snippet}",
+            "field_category": "general",
+        })
+    return fields
+
+
+def _build_fallback_risks(document_text: str) -> dict:
+    """Detect risk clauses directly from document text."""
+    text = document_text[:15000]
+    risks = []
+
+    risk_patterns = [
+        {
+            "keywords": ["pre-existing", "pre existing"],
+            "risk_type": "waiting_period",
+            "severity": "high",
+            "explanation": "Pre-existing disease clauses typically impose multi-year waiting periods before coverage starts.",
+            "recommendation": "Check the exact waiting period length and compare with other policies offering shorter waits.",
+        },
+        {
+            "keywords": ["co-pay", "co pay", "copay", "co-payment"],
+            "risk_type": "co_payment",
+            "severity": "high",
+            "explanation": "Co-payment clauses require you to pay a percentage of every claim out of pocket.",
+            "recommendation": "Check if a co-payment waiver rider is available or compare zero co-pay alternatives.",
+        },
+        {
+            "keywords": ["room rent", "room-rent"],
+            "risk_type": "coverage_limit",
+            "severity": "medium",
+            "explanation": "Room rent limits can trigger proportionate deductions on all associated hospital charges.",
+            "recommendation": "Choose a room within the policy's limit to avoid proportionate deductions on your entire bill.",
+        },
+        {
+            "keywords": ["deductible", "excess"],
+            "risk_type": "deductible",
+            "severity": "medium",
+            "explanation": "A deductible is the amount deducted from every approved claim before the insurer pays.",
+            "recommendation": "Maintain an emergency fund to cover per-hospitalization deductibles.",
+        },
+        {
+            "keywords": ["exclud", "not cover", "not payable"],
+            "risk_type": "exclusion",
+            "severity": "low",
+            "explanation": "Exclusions define situations where the policy will not pay out, limiting your coverage.",
+            "recommendation": "Read all exclusions carefully and ensure they don't apply to your medical history.",
+        },
+    ]
+
+    for pattern in risk_patterns:
+        hits = _extract_sentences_with_keywords(text, pattern["keywords"], max_results=1)
+        if hits:
+            risks.append({
+                "clause_text": hits[0],
+                "risk_type": pattern["risk_type"],
+                "severity": pattern["severity"],
+                "explanation": pattern["explanation"],
+                "recommendation": pattern["recommendation"],
+            })
+
+    overall = "high" if any(r["severity"] == "high" for r in risks) else \
+              "medium" if any(r["severity"] == "medium" for r in risks) else "low"
+
+    if not risks:
+        # No specific risk clauses found — return a generic note based on document content
+        snippet = document_text[:300].replace("\n", " ")
+        risks.append({
+            "clause_text": snippet,
+            "risk_type": "general",
+            "severity": "low",
+            "explanation": "No specific risk clauses automatically detected. Manual review recommended.",
+            "recommendation": "Read the full policy document carefully before purchasing.",
+        })
+        overall = "low"
+
+    return {"risks": risks, "overall_risk_level": overall}
 
 
 # ─────────────────────────────────────────
@@ -313,19 +458,19 @@ async def generate_summary(document_text: str, force_regenerate: bool = False) -
         logger.info("Cache hit: summary")
         return _ai_cache[ck]
 
-    # Use up to 10000 chars — captures multi-page PDFs adequately
-    truncated = document_text[:10000] if len(document_text) > 10000 else document_text
+    # Use up to 5000 chars — enough for key policy content, keeps input tokens low for speed
+    truncated = document_text[:5000] if len(document_text) > 5000 else document_text
     try:
         response = await call_ollama(
             SUMMARIZATION_PROMPT.format(document_text=truncated),
-            num_predict=900,
-            num_ctx=4096,
+            num_predict=500,
+            num_ctx=2048,
         )
         result = extract_json_from_response(response)
         if result.get("summary_text"):
             logger.info("Ollama summarization successful")
             out = {
-                "summary_text": _clean_field(result.get("summary_text", MOCK_SUMMARY["summary_text"])),
+                "summary_text": _clean_field(result.get("summary_text", "")),
                 "coverage_summary": _clean_field(result.get("coverage_summary")),
                 "exclusions_summary": _clean_field(result.get("exclusions_summary")),
                 "waiting_period_summary": _clean_field(result.get("waiting_period_summary")),
@@ -334,8 +479,11 @@ async def generate_summary(document_text: str, force_regenerate: bool = False) -
             _ai_cache[ck] = out
             return out
     except Exception as e:
-        logger.warning(f"Ollama unavailable ({e}), using demo summary data")
-    return dict(MOCK_SUMMARY)
+        logger.warning(f"Ollama unavailable ({e}), extracting summary from document text")
+    # Ollama offline: extract real content from the uploaded document instead of returning hardcoded demo data
+    fallback = _build_fallback_summary(document_text)
+    _ai_cache[ck] = fallback
+    return fallback
 
 
 async def extract_policy_fields(document_text: str, force_regenerate: bool = False) -> list[dict]:
@@ -345,12 +493,12 @@ async def extract_policy_fields(document_text: str, force_regenerate: bool = Fal
         logger.info("Cache hit: fields")
         return _ai_cache[ck]
 
-    truncated = document_text[:10000] if len(document_text) > 10000 else document_text
+    truncated = document_text[:5000] if len(document_text) > 5000 else document_text
     try:
         response = await call_ollama(
             FIELD_EXTRACTION_PROMPT.format(document_text=truncated),
-            num_predict=700,
-            num_ctx=4096,
+            num_predict=400,
+            num_ctx=2048,
         )
         result = extract_json_from_response(response)
         if result:
@@ -377,8 +525,11 @@ async def extract_policy_fields(document_text: str, force_regenerate: bool = Fal
             _ai_cache[ck] = fields
             return fields
     except Exception as e:
-        logger.warning(f"Ollama unavailable ({e}), using demo field data")
-    return list(MOCK_FIELDS)
+        logger.warning(f"Ollama unavailable ({e}), extracting fields from document text")
+    # Ollama offline: extract real fields from the uploaded document
+    fallback = _build_fallback_fields(document_text)
+    _ai_cache[ck] = fallback
+    return fallback
 
 
 async def analyze_risks(document_text: str, force_regenerate: bool = False) -> dict:
@@ -388,12 +539,12 @@ async def analyze_risks(document_text: str, force_regenerate: bool = False) -> d
         logger.info("Cache hit: risks")
         return _ai_cache[ck]
 
-    truncated = document_text[:10000] if len(document_text) > 10000 else document_text
+    truncated = document_text[:5000] if len(document_text) > 5000 else document_text
     try:
         response = await call_ollama(
             RISK_ANALYSIS_PROMPT.format(document_text=truncated),
-            num_predict=700,
-            num_ctx=4096,
+            num_predict=400,
+            num_ctx=2048,
         )
         result = extract_json_from_response(response)
         if result.get("risks"):
@@ -414,8 +565,11 @@ async def analyze_risks(document_text: str, force_regenerate: bool = False) -> d
             _ai_cache[ck] = out
             return out
     except Exception as e:
-        logger.warning(f"Ollama unavailable ({e}), using demo risk data")
-    return {"risks": list(MOCK_RISKS), "overall_risk_level": "high"}
+        logger.warning(f"Ollama unavailable ({e}), extracting risks from document text")
+    # Ollama offline: detect risk clauses from the actual uploaded document
+    fallback = _build_fallback_risks(document_text)
+    _ai_cache[ck] = fallback
+    return fallback
 
 
 async def generate_comparison_synthesis(policies_data: list[dict]) -> dict:

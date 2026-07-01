@@ -439,10 +439,13 @@ export default function ChatPage() {
               sessions.map((session) => {
                 const isActive = session.id === activeSessionId;
                 return (
-                  <button
+                  <div
                     key={session.id}
+                    role="button"
+                    tabIndex={0}
                     onClick={() => setActiveSessionId(session.id)}
-                    className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-left transition-all duration-200 group relative border ${
+                    onKeyDown={(e) => e.key === 'Enter' && setActiveSessionId(session.id)}
+                    className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-left transition-all duration-200 group relative border cursor-pointer ${
                       isActive
                         ? 'bg-slate-900 border-slate-700/50 text-white font-medium shadow-lg'
                         : 'text-slate-400 hover:bg-slate-900/60 hover:text-white border-transparent'
@@ -461,7 +464,7 @@ export default function ChatPage() {
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
-                  </button>
+                  </div>
                 );
               })
             )}

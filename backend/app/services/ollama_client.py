@@ -112,11 +112,13 @@ async def call_ollama(
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
         "options": {
-            "temperature": 0,           # Greedy decoding — fastest, no sampling overhead
-            "num_predict": num_predict,  # Max output token limit
-            "num_ctx": num_ctx,          # Reduced context: faster prefill, lower VRAM pressure
-            "top_k": 1,                  # Greedy: pick top-1 token only
+            "temperature": 0,
+            "num_predict": num_predict,
+            "num_ctx": num_ctx,
+            "top_k": 1,
             "top_p": 1.0,
+            "num_gpu": 999,   # Offload all layers to GPU (Vulkan/ROCm)
+            "num_thread": 12, # Use all CPU threads for non-GPU layers
         },
     }
     

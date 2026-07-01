@@ -171,10 +171,13 @@ async def _run_summary_background(doc_id: str, force_regenerate: bool = False) -
 
 
 async def run_full_analysis_background(doc_id: str) -> None:
-    """Combined wrapper: runs summary, fields, and risks sequentially (used by upload pipeline)."""
-    await _run_summary_background(doc_id, force_regenerate=False)
-    await _run_fields_background(doc_id)
-    await _run_risks_background(doc_id)
+    """Combined wrapper: runs summary, fields, and risks CONCURRENTLY for maximum speed."""
+    import asyncio
+    await asyncio.gather(
+        _run_summary_background(doc_id, force_regenerate=False),
+        _run_fields_background(doc_id),
+        _run_risks_background(doc_id),
+    )
 
 
 

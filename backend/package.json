@@ -12,6 +12,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@supabase/supabase-js": "^2.110.0",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^12.11.1",
     "cors": "^2.8.6",
@@ -24,5 +25,9 @@
     "pdf-parse": "^2.4.5",
     "tesseract.js": "^7.0.0",
     "uuid": "^14.0.0"
+  },
+  "allowScripts": {
+    "better-sqlite3@12.11.1": true,
+    "tesseract.js@7.0.0": true
   }
 }
