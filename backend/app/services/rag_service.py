@@ -10,6 +10,7 @@ from app.services.ai_service import call_ollama, extract_json_from_response
 import json
 import httpx
 from app.core.config import settings
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.document import DocumentChunk
 

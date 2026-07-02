@@ -39,58 +39,63 @@ def _rag_cache_key(query: str, policy_ids: list) -> str:
 
 # ── Concise prompts — fewer input tokens = faster model processing ──
 
-SUMMARIZATION_PROMPT = """You are a healthcare insurance expert. Analyze the following insurance document and provide a comprehensive yet clear explanatory summary.
+SUMMARIZATION_PROMPT = """You are a healthcare insurance expert. Analyze the following insurance document and provide a summary.
 Return ONLY a valid JSON object matching the schema below. Do not output any preamble, explanation, or conversational text.
+Keep descriptions concise. Explain the policy directly to the user (e.g. use "Your policy details", "You are covered for", "Your premium is").
 
 Return format JSON:
 {{
-  "summary_text": "A comprehensive, detailed plain-language executive summary of the policy (around 200-250 words). Outline the primary insured parties, main coverage scopes, financial obligations (premium, co-pays, deductibles), crucial waiting periods, room rent limits, and critical exclusions. Provide a thorough explanation so the user understands the key aspects of the document.",
-  "coverage_summary": "Thorough summary of major coverages, sub-limits, and benefits (maximum 100 words)",
-  "exclusions_summary": "Thorough summary of key exclusions and what is not covered (maximum 100 words)",
-  "waiting_period_summary": "Thorough summary of waiting periods for pre-existing or standard diseases (maximum 100 words)",
-  "premium_summary": "Thorough summary of premium, deductibles, and co-payment details (maximum 100 words)"
+  "summary_text": "A detailed, comprehensive executive summary explaining the policy details in depth to the user in a friendly, conversational tone (around 200-250 words). Address the user directly. Detail the primary insured family members, the policy period, premium amounts/breakdown for each family member, overall sum insured, and the key policy highlights so they understand the brief fully.",
+  "coverage_summary": "Summary of major coverages and benefits directly explaining what is covered for the user in clean bullet points (maximum 60 words)",
+  "exclusions_summary": "Summary of key exclusions and what is not covered for the user in clean bullet points (maximum 60 words)",
+  "waiting_period_summary": "Summary of waiting periods for pre-existing or standard diseases in clean bullet points (maximum 60 words)",
+  "premium_summary": "Summary of premium, deductibles, and co-payment details in clean bullet points (maximum 60 words)"
 }}
 
 DOCUMENT:
 {document_text}"""
 
 
-FIELD_EXTRACTION_PROMPT = """Extract key fields from this health insurance document. Return ONLY valid JSON, no preamble. Use null if field is not found.
+FIELD_EXTRACTION_PROMPT = """You are a healthcare insurance data entry clerk. Analyze the following health insurance document text and extract values for the requested fields.
+If a field is not explicitly mentioned or cannot be found in the text, use null or "Not specified".
+Do not create any extra keys. Return ONLY a valid JSON object matching the schema below. Do not output any markdown code blocks, preamble, or trailing text.
 
 Return format JSON:
 {{
-  "policy_name": "policy plan name",
-  "insurer_name": "insurance provider",
-  "policy_number": "policy ID",
-  "sum_insured": "coverage amount",
-  "premium_amount": "premium cost",
-  "deductible": "deductible",
-  "co_payment": "co-payment",
-  "waiting_period": "waiting period",
-  "coverage_type": "plan type",
-  "policy_term": "duration",
-  "network_hospitals": "hospitals count",
-  "pre_existing_coverage": "pre-existing terms",
-  "maternity_coverage": "maternity benefits",
-  "room_rent_limit": "room rent limit",
-  "claim_process": "claim filing steps"
+  "policy_name": "the name of the policy plan",
+  "insurer_name": "the insurance provider name",
+  "policy_number": "the policy number",
+  "sum_insured": "overall coverage amount",
+  "premium_amount": "premium cost if specified",
+  "deductible": "deductible terms or amount",
+  "co_payment": "co-payment terms or percentage",
+  "waiting_period": "waiting period rules",
+  "coverage_type": "type of plan (family floater, individual, etc.)",
+  "policy_term": "policy duration",
+  "network_hospitals": "network hospital count or details",
+  "pre_existing_coverage": "waiting periods/terms for pre-existing diseases",
+  "maternity_coverage": "maternity benefit details/limits",
+  "room_rent_limit": "daily room rent limit",
+  "claim_process": "brief instructions on filing a claim"
 }}
 
 DOCUMENT:
 {document_text}"""
 
 
-RISK_ANALYSIS_PROMPT = """Identify up to 3 risky clauses in this health insurance policy. Return ONLY valid JSON, no preamble.
+RISK_ANALYSIS_PROMPT = """You are an insurance risk compliance auditor. Identify up to 3 risky clauses, exclusions, or limiting terms in the following health insurance policy document.
+For each risk, provide the exact clause text, risk type (waiting_period, exclusion, deductible, co_payment, coverage_limit), severity (low, medium, or high), a brief explanation, and a recommendation.
+Return ONLY a valid JSON object matching the schema below. Do not output any markdown code blocks, preamble, or trailing text.
 
 Return format JSON:
 {{
   "risks": [
     {{
-      "clause_text": "exact clause from document",
+      "clause_text": "the exact sentence or text of the clause from the document",
       "risk_type": "waiting_period|exclusion|deductible|co_payment|coverage_limit",
       "severity": "low|medium|high",
-      "explanation": "why it's risky (max 30 words)",
-      "recommendation": "recommended action (max 30 words)"
+      "explanation": "why this clause presents a risk to the customer (maximum 35 words)",
+      "recommendation": "what action or alternative the customer should consider (maximum 35 words)"
     }}
   ],
   "overall_risk_level": "low|medium|high"
@@ -145,14 +150,42 @@ Return JSON format:
 
 def _extract_sentences_with_keywords(text: str, keywords: list[str], max_results: int = 3) -> list[str]:
     """Find sentences in document text that contain any of the given keywords."""
-    sentences = re.split(r'(?<=[.!?])\s+', text)
+    # Split on sentence boundaries and newlines
+    candidates = re.split(r'(?<=[.!?])\s+|\n{2,}', text)
     hits = []
-    for s in sentences:
+    seen = set()
+    skip_patterns = re.compile(
+        r'^(page\s*\d+|\[page|dear\s+|subject:|date of|name of|relationship|gender|period$)',
+        re.IGNORECASE
+    )
+    for s in candidates:
         s_clean = s.strip()
-        if not s_clean:
+        # Clean weird leading symbols like private-use area bullets (\uf0b7) or question marks
+        s_clean = re.sub(r'^[\s\u2022\uf0b7?•\-*●]*', '', s_clean).strip()
+        # Skip very short fragments and page headers
+        if len(s_clean) < 30 or skip_patterns.match(s_clean):
+            continue
+
+        # Filter out noisy sentences containing PII, corporate metadata, addresses, or links
+        s_lower = s_clean.lower()
+        if any(noise in s_lower for noise in [
+            "registered & corporate office", "leela business park", "lbs marg", "bhandup",
+            "andheri-kurla road", "mumbai - 400", "pincode -", "pimpri chinchwad", "gst registration",
+            "gstin", "reverse charge basis", "exempt under the notification", "contact number",
+            "email id", "pan no", "proposal details", "relationship to nominee", "date of birth",
+            "member wise premium", "appointee", "proposer", "communication address", "permanent address",
+            "download our mobile app", "self-help page", "kyc verification", "cersai portal",
+            "visit help section", "call us at", "http://", "https://", "www.hdfcergo.com",
+            "gst for this invoice", "bill of supply", "tax certificate", "make changes"
+        ]):
+            continue
+
+        key = s_clean[:80].lower()
+        if key in seen:
             continue
         if any(kw.lower() in s_clean.lower() for kw in keywords):
-            hits.append(s_clean[:200])
+            seen.add(key)
+            hits.append(s_clean[:300])
         if len(hits) >= max_results:
             break
     return hits
@@ -163,75 +196,181 @@ def _regex_find(pattern: str, text: str, group: int = 1, default: str = "Not fou
     m = re.search(pattern, text, re.IGNORECASE)
     if m:
         try:
-            return m.group(group).strip()
+            val = m.group(group).strip()
+            # Strip trailing noise
+            val = re.sub(r'[\n\r\t]+.*$', '', val).strip()
+            val = re.sub(r'\s{2,}', ' ', val)
+            return val if val else default
         except IndexError:
             pass
     return default
 
 
+def _regex_find_any(patterns: list[str], text: str, group: int = 1, default: str = "") -> str:
+    """Try multiple regex patterns and return the first successful match."""
+    for pattern in patterns:
+        result = _regex_find(pattern, text, group, "")
+        if result and result != "Not found in document":
+            # Validate: must have some alphanumeric content
+            if re.search(r'[a-zA-Z0-9]', result):
+                return result.strip()
+    return default
+
+
 def _build_fallback_summary(document_text: str) -> dict:
     """Build a document-specific summary by extracting real text snippets from the PDF."""
-    text = document_text[:15000]  # Use more text for better extraction
-    words = text.split()
-    word_count = len(words)
+    # Use a large portion of the document for better coverage
+    text = document_text[:40000]
+    full_text = document_text
 
-    # --- Identify insurer / policy name ---
-    insurer = _regex_find(
-        r'(?:insurer|insurance company|underwritten by|issued by)[:\s]+([A-Za-z &.]+(?:Ltd|Limited|Co|Inc)?)',
-        text, default=""
-    )
-    policy_name = _regex_find(
-        r'(?:policy name|plan name|product name)[:\s]+([A-Za-z0-9 \-&]+)',
-        text, default=""
-    )
+    # ── Helper: extract a clean labeled value ──────────────────────────────
+    def labeled(label: str, value: str) -> str:
+        return f"{label}: {value}" if value else ""
 
-    # --- Introductory description (first 3 non-trivial sentences) ---
-    intro_sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text)
-                       if len(s.strip()) > 60][:3]
-    intro = " ".join(intro_sentences) if intro_sentences else text[:500]
+    # ── Identify key policy facts ──────────────────────────────────────────
+    insurer = _regex_find_any([
+        r'(?:HDFC ERGO|(?:insurer|insurance company|underwritten by|issued by)[:\s]+)([A-Za-z &.]+(?:General Insurance|Life Insurance|Insurance|Ltd|Limited|Co|Inc)[A-Za-z .]*)',
+        r'(HDFC\s+ERGO[A-Za-z ]*(?:General Insurance|Life Insurance|Insurance)?[A-Za-z .]*(?:Ltd|Limited)?)',
+        r'(Bajaj\s+Allianz[A-Za-z ]*(?:General|Life)?[A-Za-z .]*(?:Ltd|Limited)?)',
+        r'(Star\s+Health[A-Za-z ]*(?:Insurance)?[A-Za-z .]*(?:Ltd|Limited)?)',
+        r'(Max\s+Bupa[A-Za-z ]*(?:Insurance)?[A-Za-z .]*(?:Ltd|Limited)?)',
+        r'(Niva\s+Bupa[A-Za-z ]*(?:Insurance)?[A-Za-z .]*(?:Ltd|Limited)?)',
+        r'((?:New\s+India|National|United\s+India|Oriental)\s+(?:Assurance|Insurance)[A-Za-z .]*(?:Ltd|Limited)?)',
+        r'(?:insurer|insurance company|underwritten by)[:\s]+([A-Za-z &.]+(?:Ltd|Limited|Co)?)',
+    ], text)
 
-    header_parts = []
+    policy_name = _regex_find_any([
+        r'(?:product name|plan name|policy name)[:\s]+([A-Za-z0-9 \-&/]+?)(?=\s*UIN|\s*\n|\s*\.\s)',
+        r'my\.\s+([A-Za-z0-9 \-&]+(?:Secure|Health|Protect|Plus|Elite|Care|Shield|Optima)[A-Za-z0-9 ]*)(?=\s*UIN|\n|$)',
+        r'((?:Optima|Secure|Health|Protect|Care|Shield)\s+(?:Secure|Plus|Elite|Care|Restore|Senior|Family|Individual)[A-Za-z0-9 ]*)',
+        r'Product\s+Name[:\s]+([A-Za-z0-9 \-&]+)',
+    ], text)
+
+    policy_number = _regex_find_any([
+        r'(?:policy\s+no|policy\s+number|certificate\s+no|policy\s+schedule\s+no)[.:\s]+([A-Z0-9\-/]+)',
+        r'([0-9]{10,20})',
+    ], text)
+
+    policy_holder = _regex_find_any([
+        r'(?:Dear|insured|policyholder|policy\s*holder)[\s:,]+([A-Z][A-Za-z ]{3,40})',
+        r'(?:name\s+of\s+(?:insured|policyholder))[:\s]+([A-Z][A-Za-z ]{3,40})',
+    ], text)
+
+    sum_insured = _regex_find_any([
+        r'(?:base\s+)?sum\s+insured\s*(?:opted)?\s*[:\s₹Rs.]+([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
+        r'(?:sum\s+insured|sum\s+assured|si)[:\s₹Rs.]+([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
+        r'(?:coverage\s+amount)[:\s₹Rs.]+([1-9]\d{4,})',
+        r'₹\s*([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,})\s*(?:Lakh|Lakhs|lakh)?',
+    ], text)
+
+    premium = _regex_find_any([
+        r'(?:total\s+premium|gross\s+premium|net\s+premium|premium\s+paid|premium\s+amount)[:\s₹Rs.]+([\d,]{4,}(?:\.[\d]+)?)',
+        r'(?:premium)[:\s₹Rs.]+([\d,]{4,}(?:\.[\d]+)?)',
+    ], text)
+
+    waiting_period = _regex_find_any([
+        r'(?:waiting\s+period)[:\s]+([\d]+\s*(?:month|year|day)[s]?[^.\n]{0,80})',
+        r'([\d]+\s*(?:month|year)[s]?\s+waiting\s+period)',
+    ], text)
+
+    co_pay = _regex_find_any([
+        r'(?:co-?pay(?:ment)?)[:\s]+([\d]+%[^.\n]{0,60})',
+        r'(?:co-?pay(?:ment)?\s+of\s+)([\d]+%[^.\n]{0,60})',
+    ], text)
+
+    # ── Build executive summary text ────────────────────────────────────────
+    facts = []
     if insurer:
-        header_parts.append(f"Insurer: {insurer}.")
+        facts.append(f"Insurer: {insurer}")
     if policy_name:
-        header_parts.append(f"Plan: {policy_name}.")
-    header = " ".join(header_parts)
-    summary_text = f"{header} {intro}".strip()[:1200]
-    if not summary_text:
-        summary_text = f"Document extracted ({word_count} words). " + text[:800]
+        facts.append(f"Plan: {policy_name}")
+    if policy_number:
+        facts.append(f"Policy Number: {policy_number}")
+    if policy_holder:
+        facts.append(f"Policyholder: {policy_holder}")
+    if sum_insured:
+        facts.append(f"Sum Insured: ₹{sum_insured}")
+    if premium:
+        facts.append(f"Premium: ₹{premium}")
+    if waiting_period:
+        facts.append(f"Waiting Period: {waiting_period}")
+    if co_pay:
+        facts.append(f"Co-payment: {co_pay}")
 
-    # --- Coverage ---
+    facts_text = ". ".join(facts) + "." if facts else ""
+
+    # Pull 2-3 meaningful description sentences from the document
+    desc_candidates = [s.strip() for s in re.split(r'(?<=[.!?])\s+|\n{2,}', text)
+                       if len(s.strip()) > 80 and not s.strip().startswith('[Page')]
+    desc_sentences = []
+    seen_desc = set()
+    skip_re = re.compile(
+        r'^(page\s*\d+|dear\s+|\[page|subject:|insured\s+person|date of|name of|relationship|gender|premium\s+period)',
+        re.IGNORECASE
+    )
+    for s in desc_candidates:
+        key = s[:60].lower()
+        if key not in seen_desc and not skip_re.match(s):
+            seen_desc.add(key)
+            desc_sentences.append(s[:350])
+        if len(desc_sentences) >= 3:
+            break
+
+    intro_text = " ".join(desc_sentences)
+    summary_text = f"{facts_text} {intro_text}".strip()[:1500]
+    if not summary_text or len(summary_text) < 100:
+        summary_text = (
+            f"This health insurance document contains policy details from "
+            f"{insurer or 'the insurer'}. "
+            f"{facts_text} "
+            f"Please refer to the full document for complete terms and conditions."
+        )
+
+    # ── Coverage section ────────────────────────────────────────────────────
     coverage_hits = _extract_sentences_with_keywords(
-        text,
-        ["hospitaliz", "cover", "benefit", "daycare", "ICU", "ambulance", "sum insured", "reimburse"],
-        max_results=4,
+        full_text,
+        [
+            "hospitaliz", "inpatient", "daycare", "ICU", "ambulance",
+            "sum insured", "reimburse", "cashless", "OPD", "wellness",
+            "benefit", "covered under", "entitled to", "eligible for",
+        ],
+        max_results=5,
     )
     coverage_summary = "\n".join(f"• {s}" for s in coverage_hits) if coverage_hits else \
-        "• Coverage details not clearly identified — please review the full document."
+        "• Please refer to the policy schedule for a full list of covered benefits."
 
-    # --- Exclusions ---
+    # ── Exclusions section ──────────────────────────────────────────────────
     excl_hits = _extract_sentences_with_keywords(
-        text,
-        ["exclud", "not cover", "not payable", "exception", "not admissible", "shall not"],
-        max_results=4,
+        full_text,
+        [
+            "exclud", "not cover", "not payable", "not admissible",
+            "shall not", "exception", "not eligible", "no claim",
+        ],
+        max_results=5,
     )
     exclusions_summary = "\n".join(f"• {s}" for s in excl_hits) if excl_hits else \
         "• Exclusions not clearly identified — please review the full document."
 
-    # --- Waiting period ---
+    # ── Waiting period section ──────────────────────────────────────────────
     wait_hits = _extract_sentences_with_keywords(
-        text,
-        ["waiting period", "initial waiting", "pre-existing", "months waiting", "days waiting"],
-        max_results=3,
+        full_text,
+        [
+            "waiting period", "initial waiting", "pre-existing",
+            "months waiting", "days waiting", "moratorium",
+        ],
+        max_results=4,
     )
     waiting_period_summary = "\n".join(f"• {s}" for s in wait_hits) if wait_hits else \
         "• Waiting period details not found — please review the policy schedule."
 
-    # --- Premium / cost ---
+    # ── Premium / cost section ──────────────────────────────────────────────
     premium_hits = _extract_sentences_with_keywords(
-        text,
-        ["premium", "deductible", "co-pay", "co pay", "copay", "sum insured", "GST"],
-        max_results=4,
+        full_text,
+        [
+            "premium", "deductible", "co-pay", "copay",
+            "sum insured", "GST", "tax", "renewal", "total amount",
+        ],
+        max_results=5,
     )
     premium_summary = "\n".join(f"• {s}" for s in premium_hits) if premium_hits else \
         "• Premium and cost details not clearly identified — please review the policy schedule."
@@ -246,73 +385,174 @@ def _build_fallback_summary(document_text: str) -> dict:
 
 
 def _build_fallback_fields(document_text: str) -> list[dict]:
-    """Extract structured fields directly from document text using regex patterns."""
-    text = document_text[:15000]
+    """Extract structured fields directly from document text using multi-pattern regex cascades."""
+    # Use more text for better field coverage across multi-page documents
+    text = document_text[:40000]
     fields = []
 
     def add(name: str, value: str, category: str):
-        if value and value != "Not found in document":
-            fields.append({"field_name": name, "field_value": value, "field_category": category})
+        """Add field only if value is meaningful (non-empty, has alphanumeric content)."""
+        if value and value != "Not found in document" and re.search(r'[a-zA-Z0-9]', value):
+            # Clean up value
+            v = value.strip()
+            v = re.sub(r'\s+', ' ', v)
+            v = v[:200]  # Cap length
+            fields.append({"field_name": name, "field_value": v, "field_category": category})
 
-    add("Policy Name", _regex_find(
-        r'(?:policy name|plan name|product)[:\s]+([A-Za-z0-9 \-&]+)',
-        text), "policy_info")
-    add("Insurer Name", _regex_find(
-        r'(?:insurer|insurance company|underwritten by)[:\s]+([A-Za-z &.]+(?:Ltd|Limited|Co)?)',
-        text), "policy_info")
-    add("Policy Number", _regex_find(
-        r'(?:policy no|policy number|certificate no)[.:\s]+([A-Z0-9/\-]+)',
-        text), "policy_info")
-    add("Sum Insured", _regex_find(
-        r'(?:sum insured|sum assured|coverage amount)[:\s₹Rs.]+([\d,]+(?:\s*(?:Lakh|Lakhs|lakh))?)',
-        text), "coverage")
-    add("Premium Amount", _regex_find(
-        r'(?:premium)[:\s₹Rs.]+([\d,]+(?:\s*per\s*(?:annum|year|month))?)',
-        text), "premium")
-    add("Deductible", _regex_find(
-        r'(?:deductible|excess)[:\s₹Rs.]+([\d,]+)',
-        text), "premium")
-    add("Co Payment", _regex_find(
+    # ── Policy Name ─────────────────────────────────────────────────────────
+    add("Policy Name", _regex_find_any([
+        r'(?:product\s+name|plan\s+name|policy\s+name)[:\s]+([A-Za-z0-9][A-Za-z0-9 \-&/]{3,60}?)(?=\s*UIN|\s*\n|\s*\.\s)',
+        r'my\.\s+([A-Za-z0-9][A-Za-z0-9 \-]{3,50}?)(?=\s+UIN|\n|$)',
+        r'Plan\s+Name[:\s]+([A-Za-z0-9][A-Za-z0-9 \-&]{3,50})',
+        r'((?:Optima|Secure|Health|Protect|Care|Shield|Star|Arogya)\s+(?:Secure|Plus|Elite|Care|Restore|Senior|Family|Individual|Sanjeevani)[A-Za-z0-9 ]*)',
+    ], text), "policy_info")
+
+    # ── Insurer Name ────────────────────────────────────────────────────────
+    add("Insurer Name", _regex_find_any([
+        r'(HDFC\s+ERGO[A-Za-z ]*(?:General\s+Insurance|Insurance)?[A-Za-z ]*(?:Ltd|Limited)?)',
+        r'(Bajaj\s+Allianz[A-Za-z ]*(?:General|Life)?\s*(?:Insurance)?[A-Za-z ]*(?:Ltd|Limited)?)',
+        r'(Star\s+Health[A-Za-z ]*(?:Insurance)?[A-Za-z ]*(?:Ltd|Limited)?)',
+        r'(Max\s+Bupa|Niva\s+Bupa)[A-Za-z ]*(?:Insurance)?[A-Za-z ]*(?:Ltd|Limited)?',
+        r'((?:New\s+India|National|United\s+India|Oriental)\s+(?:Assurance|Insurance)[A-Za-z .]*(?:Ltd|Limited)?)',
+        r'(Reliance\s+(?:General|Health)\s*Insurance[A-Za-z ]*(?:Ltd|Limited)?)',
+        r'(ICICI\s+Lombard[A-Za-z ]*(?:General\s+Insurance)?[A-Za-z ]*(?:Ltd|Limited)?)',
+        r'(?:insurer|insurance\s+company|underwritten\s+by|issued\s+by)[:\s]+([A-Za-z &.]+(?:Ltd|Limited|Co)?)',
+    ], text), "policy_info")
+
+    # ── Policy Number ───────────────────────────────────────────────────────
+    add("Policy Number", _regex_find_any([
+        r'(?:policy\s+no|policy\s+number)[.:\s]+([A-Z0-9][A-Z0-9\-/]{5,25})',
+        r'(?:certificate\s+no|certificate\s+number)[.:\s]+([A-Z0-9][A-Z0-9\-/]{5,25})',
+        r'(?:policy\s+schedule\s+no)[.:\s]+([A-Z0-9][A-Z0-9\-/]{5,25})',
+        r'(?:policy\s+id)[.:\s]+([A-Z0-9][A-Z0-9\-/]{5,25})',
+        r'(\d{10,20})',  # Long numeric strings often are policy numbers
+    ], text), "policy_info")
+
+    # ── Insured Person / Policyholder ───────────────────────────────────────
+    add("Insured Person", _regex_find_any([
+        r'(?:Dear|name\s+of\s+(?:insured|policyholder))[:\s,]+([A-Z][A-Z a-z]{3,40})',
+        r'(?:insured|policyholder|policy\s+holder)[:\s]+([A-Z][A-Z a-z]{3,40})',
+        r'(?:member\s+name)[:\s]+([A-Z][A-Z a-z]{3,40})',
+    ], text), "policy_info")
+
+    # ── Sum Insured ─────────────────────────────────────────────────────────
+    add("Sum Insured", _regex_find_any([
+        r'(?:base\s+)?sum\s+insured\s*(?:opted)?\s*[:\s₹Rs.]+([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
+        r'(?:sum\s+insured|sum\s+assured|si)[:\s₹Rs.]+([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
+        r'(?:total\s+sum\s+insured)[:\s₹Rs.]+([1-9]\d{4,})',
+        r'(?:basic\s+sum\s+insured)[:\s₹Rs.]+([1-9]\d{4,})',
+        r'₹\s*([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,})\s*(?:Lakh|Lakhs|lakh)?',
+    ], text), "coverage")
+
+    # ── Premium Amount ──────────────────────────────────────────────────────
+    add("Premium Amount", _regex_find_any([
+        r'(?:total\s+premium|gross\s+premium|net\s+premium)[:\s₹Rs.]+([\d,]{4,}(?:\.[\d]{0,2})?)',
+        r'(?:premium\s+paid|premium\s+amount)[:\s₹Rs.]+([\d,]{4,}(?:\.[\d]{0,2})?)',
+        r'(?:annual\s+premium)[:\s₹Rs.]+([\d,]{4,}(?:\.[\d]{0,2})?)',
+        r'Total\s+(?:Premium|Amount)[:\s₹Rs.]+([\d,]{4,}(?:\.[\d]{0,2})?)',
+    ], text), "premium")
+
+    # ── Deductible ──────────────────────────────────────────────────────────
+    add("Deductible", _regex_find_any([
+        r'(?:deductible|excess)[:\s₹Rs.]+([₹Rs\d,]+(?:\.[\d]{0,2})?)',
+        r'(?:per\s+hospitalization\s+deductible)[:\s₹Rs.]+([\d,]+)',
+    ], text), "premium")
+
+    # ── Co-payment ──────────────────────────────────────────────────────────
+    add("Co Payment", _regex_find_any([
         r'(?:co-?pay(?:ment)?)[:\s]+([\d]+%?[^.\n]{0,60})',
-        text), "premium")
-    add("Waiting Period", _regex_find(
-        r'(?:waiting period)[:\s]+([^.\n]{0,120})',
-        text), "restrictions")
-    add("Coverage Type", _regex_find(
-        r'(?:coverage type|plan type|floater|individual)[:\s]+([A-Za-z ]+)',
-        text), "coverage")
-    add("Policy Term", _regex_find(
-        r'(?:policy term|policy period|duration)[:\s]+([^.\n]{0,60})',
-        text), "policy_info")
-    add("Network Hospitals", _regex_find(
+        r'co-?pay(?:ment)?\s+(?:of\s+)?([\d]+%)',
+        r'(?:you\s+pay|patient\s+pays?)[:\s]+([\d]+%[^.\n]{0,40})',
+    ], text), "premium")
+
+    # ── Waiting Period ──────────────────────────────────────────────────────
+    add("Waiting Period", _regex_find_any([
+        r'(?:waiting\s+period)[:\s]+([\d]+\s*(?:month|year|day)[s]?[^.\n]{0,120})',
+        r'([\d]+\s*(?:month|year)[s]?\s+waiting\s+period[^.\n]{0,80})',
+        r'(?:initial\s+waiting\s+period)[:\s]+([^.\n]{0,100})',
+    ], text), "restrictions")
+
+    # ── Coverage Type ───────────────────────────────────────────────────────
+    add("Coverage Type", _regex_find_any([
+        r'(?:plan\s+type|coverage\s+type)[:\s]+([A-Za-z ]+)',
+        r'(?:floater\s+basis|individual\s+basis|family\s+floater)',
+        r'(?:individual|floater|family)[:\s]+(?:plan|policy|basis)',
+    ], text), "coverage")
+
+    # ── Policy Term / Period ────────────────────────────────────────────────
+    add("Policy Term", _regex_find_any([
+        r'(?:policy\s+term|policy\s+period|duration)[:\s]+([^.\n]{0,80})',
+        r'(?:from|valid\s+from)[:\s]+([\d]{1,2}[\-/][\d]{1,2}[\-/][\d]{2,4}[^\n]{0,50}to[^\n]{0,50})',
+        r'(?:inception\s+date|start\s+date)[:\s]+([\d]{1,2}[\-/][\d]{1,2}[\-/][\d]{2,4})',
+    ], text), "policy_info")
+
+    # ── Network Hospitals ───────────────────────────────────────────────────
+    add("Network Hospitals", _regex_find_any([
         r'([\d,]+\+?\s*(?:network|cashless|empanelled)\s*hospitals?)',
-        text), "coverage")
-    add("Room Rent Limit", _regex_find(
-        r'(?:room rent)[^.\n]{0,40}([\d%,]+[^.\n]{0,80})',
-        text), "restrictions")
-    add("Claim Process", _regex_find(
-        r'(?:claim process|how to claim|claims?)[:\s]+([^.\n]{0,150})',
-        text), "process")
+        r'(?:network\s+of)[\s]+([\d,]+\+?\s*hospitals?)',
+        r'([\d,]+)\s*(?:hospitals?|network)',
+    ], text), "coverage")
+
+    # ── Room Rent Limit ─────────────────────────────────────────────────────
+    add("Room Rent Limit", _regex_find_any([
+        r'(?:room\s+rent\s+limit)[:\s₹Rs.]+([^.\n]{0,100})',
+        r'(?:room\s+rent)[^.\n]{0,30}([₹Rs\d,]+(?:\s*per\s+day)?[^.\n]{0,60})',
+        r'((?:single\s+private\s+AC\s+room|private\s+room)[^.\n]{0,60})',
+    ], text), "restrictions")
+
+    # ── Pre-existing Disease Coverage ───────────────────────────────────────
+    add("Pre-existing Coverage", _regex_find_any([
+        r'(?:pre-?existing)[^.\n]{0,50}((?:cover|wait|period)[^.\n]{0,80})',
+        r'(?:pre-?existing\s+disease)[:\s]+([^.\n]{0,120})',
+    ], text), "restrictions")
+
+    # ── Maternity Coverage ──────────────────────────────────────────────────
+    add("Maternity Coverage", _regex_find_any([
+        r'(?:maternity)[:\s]+([^.\n]{0,120})',
+        r'(?:maternity\s+benefit)[:\s]+([^.\n]{0,100})',
+    ], text), "coverage")
+
+    # ── Claim Process ───────────────────────────────────────────────────────
+    add("Claim Process", _regex_find_any([
+        r'(?:claim\s+process|how\s+to\s+claim|claim\s+procedure)[:\s]+([^.\n]{0,200})',
+        r'(?:to\s+(?:file|lodge|submit)\s+a\s+claim)[,\s]+([^.\n]{0,200})',
+        r'(?:cashless\s+claim|reimbursement\s+claim)[:\s]+([^.\n]{0,150})',
+    ], text), "process")
+
+    # ── GSTIN / GST ─────────────────────────────────────────────────────────
+    add("GSTIN / UIN", _regex_find_any([
+        r'(?:GSTIN|GST\s+IN)[:\s]+([0-9A-Z]{15})',
+        r'(?:UIN)[:\s]+([A-Z0-9]{15,20})',
+        r'(?:product\s+UIN)[:\s]+([A-Z0-9]{10,25})',
+    ], text), "policy_info")
+
+    # ── Contact / Customer Care ─────────────────────────────────────────────
+    add("Contact Number", _regex_find_any([
+        r'(?:customer\s+(?:care|service|helpline)|toll\s+free|contact)[:\s]+([+0-9 \-]{8,18})',
+        r'(?:call\s+us)[\s:]+([+0-9 \-]{8,18})',
+        r'(1800\s*[0-9\-]+)',
+    ], text), "policy_info")
 
     if not fields:
-        # Last resort: return document-specific note
-        snippet = document_text[:200].replace("\n", " ")
+        # Last resort — return document identification info
+        snippet = document_text[:300].replace("\n", " ").strip()
         fields.append({
             "field_name": "Document Content",
-            "field_value": f"Could not extract structured fields. Document preview: {snippet}",
+            "field_value": f"Could not extract structured fields. Document preview: {snippet[:200]}",
             "field_category": "general",
         })
     return fields
 
 
 def _build_fallback_risks(document_text: str) -> dict:
-    """Detect risk clauses directly from document text."""
-    text = document_text[:15000]
+    """Detect risk clauses directly from document text using the full document."""
+    # Use a large portion for better clause detection across all pages
+    text = document_text[:40000]
     risks = []
 
     risk_patterns = [
         {
-            "keywords": ["pre-existing", "pre existing"],
+            "keywords": ["pre-existing", "pre existing", "pre- existing"],
             "risk_type": "waiting_period",
             "severity": "high",
             "explanation": "Pre-existing disease clauses typically impose multi-year waiting periods before coverage starts.",
@@ -323,36 +563,56 @@ def _build_fallback_risks(document_text: str) -> dict:
             "risk_type": "co_payment",
             "severity": "high",
             "explanation": "Co-payment clauses require you to pay a percentage of every claim out of pocket.",
-            "recommendation": "Check if a co-payment waiver rider is available or compare zero co-pay alternatives.",
+            "recommendation": "Check if a co-payment waiver rider is available or look for zero co-pay alternatives.",
         },
         {
-            "keywords": ["room rent", "room-rent"],
+            "keywords": ["room rent", "room-rent", "accommodation limit"],
             "risk_type": "coverage_limit",
             "severity": "medium",
-            "explanation": "Room rent limits can trigger proportionate deductions on all associated hospital charges.",
-            "recommendation": "Choose a room within the policy's limit to avoid proportionate deductions on your entire bill.",
+            "explanation": "Room rent limits can trigger proportionate deductions on all associated hospital charges if exceeded.",
+            "recommendation": "Choose a hospital room within the policy's room rent limit to avoid proportionate deductions.",
         },
         {
-            "keywords": ["deductible", "excess"],
+            "keywords": ["deductible", "excess amount", "per hospitalization"],
             "risk_type": "deductible",
             "severity": "medium",
-            "explanation": "A deductible is the amount deducted from every approved claim before the insurer pays.",
-            "recommendation": "Maintain an emergency fund to cover per-hospitalization deductibles.",
+            "explanation": "A deductible is the amount deducted from every approved claim before the insurer pays the balance.",
+            "recommendation": "Maintain an emergency fund to cover any per-hospitalization deductible amounts.",
         },
         {
-            "keywords": ["exclud", "not cover", "not payable"],
+            "keywords": ["exclud", "not cover", "not payable", "not admissible", "shall not"],
             "risk_type": "exclusion",
+            "severity": "medium",
+            "explanation": "Exclusions define specific situations where the policy will not pay, limiting your actual coverage.",
+            "recommendation": "Read all exclusion clauses carefully to ensure they do not affect your current medical conditions.",
+        },
+        {
+            "keywords": ["waiting period", "initial waiting", "30 days", "90 days"],
+            "risk_type": "waiting_period",
+            "severity": "medium",
+            "explanation": "Initial waiting period clauses mean claims cannot be made for the first 30-90 days after policy start.",
+            "recommendation": "Be aware of the initial waiting period — do not let your previous policy lapse before renewing.",
+        },
+        {
+            "keywords": ["sub-limit", "sub limit", "capped at", "maximum limit", "up to a limit"],
+            "risk_type": "coverage_limit",
             "severity": "low",
-            "explanation": "Exclusions define situations where the policy will not pay out, limiting your coverage.",
-            "recommendation": "Read all exclusions carefully and ensure they don't apply to your medical history.",
+            "explanation": "Sub-limits restrict specific treatment costs, which can leave you with out-of-pocket expenses.",
+            "recommendation": "Review all sub-limits (e.g., cataract, hernia) and confirm they are sufficient for your healthcare needs.",
         },
     ]
 
+    seen_clauses: set = set()
     for pattern in risk_patterns:
         hits = _extract_sentences_with_keywords(text, pattern["keywords"], max_results=1)
         if hits:
+            clause = hits[0]
+            clause_key = clause[:60].lower()
+            if clause_key in seen_clauses:
+                continue
+            seen_clauses.add(clause_key)
             risks.append({
-                "clause_text": hits[0],
+                "clause_text": clause[:350],
                 "risk_type": pattern["risk_type"],
                 "severity": pattern["severity"],
                 "explanation": pattern["explanation"],
@@ -363,14 +623,14 @@ def _build_fallback_risks(document_text: str) -> dict:
               "medium" if any(r["severity"] == "medium" for r in risks) else "low"
 
     if not risks:
-        # No specific risk clauses found — return a generic note based on document content
-        snippet = document_text[:300].replace("\n", " ")
+        # No specific risk clauses found — return a document-based note
+        snippet = document_text[:300].replace("\n", " ").strip()
         risks.append({
-            "clause_text": snippet,
+            "clause_text": snippet[:300],
             "risk_type": "general",
             "severity": "low",
-            "explanation": "No specific risk clauses automatically detected. Manual review recommended.",
-            "recommendation": "Read the full policy document carefully before purchasing.",
+            "explanation": "No specific risk clauses were automatically detected. A manual review is recommended.",
+            "recommendation": "Read the full policy document carefully before purchasing or renewing.",
         })
         overall = "low"
 
@@ -463,8 +723,8 @@ async def generate_summary(document_text: str, force_regenerate: bool = False) -
     try:
         response = await call_ollama(
             SUMMARIZATION_PROMPT.format(document_text=truncated),
-            num_predict=500,
-            num_ctx=2048,
+            num_predict=800,
+            num_ctx=4096,
         )
         result = extract_json_from_response(response)
         if result.get("summary_text"):
@@ -503,6 +763,31 @@ async def extract_policy_fields(document_text: str, force_regenerate: bool = Fal
         result = extract_json_from_response(response)
         if result:
             logger.info("Ollama field extraction successful")
+            
+            # Post-process and validate LLM outputs (e.g. reject list headers like 1.1)
+            if "sum_insured" in result:
+                val = str(result["sum_insured"]).strip()
+                if val in ("1", "1.1", "0", "null", "") or len(val) < 3:
+                    fallback_si = _regex_find_any([
+                        r'(?:base\s+)?sum\s+insured\s*(?:opted)?\s*[:\s₹Rs.]+([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
+                        r'(?:sum\s+insured|sum\s+assured|si)[:\s₹Rs.]+([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
+                        r'(?:total\s+sum\s+insured)[:\s₹Rs.]+([1-9]\d{4,})',
+                        r'₹\s*([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,})\s*(?:Lakh|Lakhs|lakh)?',
+                    ], document_text)
+                    if fallback_si and fallback_si != "Not found in document":
+                        result["sum_insured"] = fallback_si
+                        
+            if "premium_amount" in result:
+                val = str(result["premium_amount"]).strip()
+                if val in ("0", "null", "") or len(val) < 3:
+                    fallback_prem = _regex_find_any([
+                        r'(?:total\s+premium|gross\s+premium|net\s+premium)[:\s₹Rs.]+([\d,]{4,}(?:\.[\d]{0,2})?)',
+                        r'(?:premium\s+paid|premium\s+amount)[:\s₹Rs.]+([\d,]{4,}(?:\.[\d]{0,2})?)',
+                        r'Total\s+(?:Premium|Amount)[:\s₹Rs.]+([\d,]{4,}(?:\.[\d]{0,2})?)',
+                    ], document_text)
+                    if fallback_prem and fallback_prem != "Not found in document":
+                        result["premium_amount"] = fallback_prem
+            
             field_category_map = {
                 "policy_name": "policy_info", "insurer_name": "policy_info",
                 "policy_number": "policy_info", "sum_insured": "coverage",
@@ -915,8 +1200,10 @@ _THANKS_PATTERNS = {
 
 def _is_greeting(query: str) -> bool:
     """Fallback check for greeting or general chitchat."""
-    q = query.strip().lower().rstrip("!?.")
+    q = query.strip().lower().rstrip("!?. ,")
     if q in _GREETING_PATTERNS or q in _GUIDANCE_PATTERNS or q in _THANKS_PATTERNS:
+        return True
+    if re.match(r'^h+[eay]+y*$', q) or re.match(r'^h+i+$', q) or re.match(r'^hell+o+$', q) or re.match(r'^y+o+$', q):
         return True
     words = q.split()
     if len(words) <= 2 and (q in _GREETING_PATTERNS or q in _THANKS_PATTERNS):
@@ -925,10 +1212,17 @@ def _is_greeting(query: str) -> bool:
 
 def _get_chitchat_response(query: str, user_name: str) -> Optional[str]:
     """Identify if a query is a general chitchat or guidance request and return a standard response."""
-    q = query.strip().lower().rstrip("!?.")
+    q = query.strip().lower().rstrip("!?. ,")
     
     # Check words and phrase matches
-    is_greeting = q in _GREETING_PATTERNS or any(pat in q for pat in ["hello", "how are you", "what's up", "greetings"]) and len(q.split()) <= 3
+    is_greeting = (
+        q in _GREETING_PATTERNS or 
+        re.match(r'^h+[eay]+y*$', q) or 
+        re.match(r'^h+i+$', q) or 
+        re.match(r'^hell+o+$', q) or 
+        re.match(r'^y+o+$', q) or 
+        any(pat in q for pat in ["hello", "how are you", "what's up", "greetings", "good morning", "good afternoon", "good evening"]) and len(q.split()) <= 3
+    )
     
     # Substring lists for guidance (about app features or assistant role)
     guidance_substrings = [
