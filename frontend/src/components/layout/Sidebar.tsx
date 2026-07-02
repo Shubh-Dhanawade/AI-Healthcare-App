@@ -33,7 +33,7 @@ export default function Sidebar() {
           <Activity className="w-5 h-5 text-white" />
         </div>
         <div>
-          <p className="font-bold text-white text-sm">HealthAI</p>
+          <p className="font-bold text-white text-sm">HealthPolicyLens</p>
           <p className="text-xs text-slate-500">Insurance Intel</p>
         </div>
       </div>
