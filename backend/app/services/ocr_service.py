@@ -6,7 +6,7 @@ PaddleOCR is optional — falls back gracefully if not installed.
 
 import os
 from typing import Tuple
-from loguru import logger
+from loguru import logger 
 
 
 def extract_text_from_pdf(file_path: str) -> Tuple[str, str, int]:

@@ -53,8 +53,7 @@ async def warmup_model(model: Optional[str] = None) -> None:
                 "num_predict": 1,
                 "num_ctx": 128,
                 "temperature": 0,
-                "num_gpu": 999,   # Offload all layers to GPU (Vulkan/ROCm)
-                "num_thread": 12, # Use all CPU threads for non-GPU layers
+                "num_thread": 12, # Use CPU threads as fallback
             },
         }
         await client.post("/api/chat", json=payload)
@@ -103,7 +102,7 @@ async def call_ollama(
     num_predict: int = 512,
     num_ctx: int = 1536,
 ) -> str:
-    """Call Ollama chat API synchronously with GPU-accelerated inference settings."""
+    """Call Ollama chat API synchronously with dynamic CPU/GPU layer allocation."""
     client = get_httpx_client()
     model_name = model or settings.OLLAMA_MODEL
     
@@ -117,8 +116,7 @@ async def call_ollama(
             "num_ctx": num_ctx,
             "top_k": 1,
             "top_p": 1.0,
-            "num_gpu": 999,   # Offload all layers to GPU (Vulkan/ROCm)
-            "num_thread": 12, # Use all CPU threads for non-GPU layers
+            "num_thread": 12, # Use all CPU threads for shared processing
         },
     }
     
