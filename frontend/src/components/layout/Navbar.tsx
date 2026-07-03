@@ -16,7 +16,7 @@ function getRouteLabel(pathname: string): string {
   if (pathname.startsWith('/documents/') && pathname !== '/documents') {
     return 'Document Details';
   }
-  return routeLabels[pathname] || 'HealthAI';
+  return routeLabels[pathname] || 'HealthPolicyLens';
 }
 
 export default function Navbar() {

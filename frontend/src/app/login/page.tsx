@@ -55,7 +55,7 @@ export default function LoginPage() {
           >
             <Activity className="w-8 h-8 text-white" />
           </div>
-          <h1 className="text-3xl font-black gradient-text">HealthAI</h1>
+          <h1 className="text-3xl font-black gradient-text">HealthPolicyLens</h1>
           <p className="text-slate-400 mt-2">Sign in to your account</p>
         </div>
 

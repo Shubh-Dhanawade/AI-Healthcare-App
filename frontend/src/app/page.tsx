@@ -61,7 +61,7 @@ export default function HomePage() {
           <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #3b82f6, #8b5cf6)' }}>
             <Activity className="w-5 h-5 text-white" />
           </div>
-          <span className="text-xl font-bold gradient-text">HealthAI</span>
+          <span className="text-xl font-bold gradient-text">HealthPolicyLens</span>
         </div>
         <div className="flex items-center gap-3">
           <button onClick={() => router.push('/login')} className="btn-secondary text-sm">
@@ -75,19 +75,14 @@ export default function HomePage() {
 
       {/* Hero */}
       <section className="max-w-7xl mx-auto px-6 pt-20 pb-24 text-center">
-        <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full mb-8 text-sm font-medium"
-          style={{ background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.3)', color: '#60a5fa' }}>
-          <Zap className="w-4 h-4" /> Powered by local RAG AI
-        </div>
+       
 
         <h1 className="text-5xl md:text-6xl font-black mb-6 leading-tight">
           Understand Your{' '}
           <span className="gradient-text">Insurance Policy</span>
           <br />in Minutes
         </h1>
-        <p className="text-lg text-slate-400 max-w-2xl mx-auto mb-10">
-          Upload any healthcare insurance document and our AI instantly extracts key fields, generates plain-language summaries, and flags risky clauses — no expertise required.
-        </p>
+       
 
         <div className="flex items-center justify-center gap-4 flex-wrap">
           <button onClick={() => router.push('/register')} className="btn-primary text-base px-8 py-3">
@@ -98,20 +93,7 @@ export default function HomePage() {
           </button>
         </div>
 
-        {/* Stats */}
-        <div className="mt-20 grid grid-cols-2 md:grid-cols-4 gap-6">
-          {[
-            { label: 'Documents Processed', value: '10K+' },
-            { label: 'Clauses Detected', value: '250K+' },
-            { label: 'AI Accuracy', value: '94%' },
-            { label: 'Time Saved', value: '98%' },
-          ].map((s) => (
-            <div key={s.label} className="glass-card p-6 text-center">
-              <p className="text-3xl font-black gradient-text">{s.value}</p>
-              <p className="text-sm text-slate-400 mt-1">{s.label}</p>
-            </div>
-          ))}
-        </div>
+       
       </section>
 
       {/* Features */}
