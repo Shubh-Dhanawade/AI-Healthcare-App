@@ -105,9 +105,26 @@ DOCUMENT:
 {document_text}"""
 
 
-COMPARISON_PROMPT = """Compare policies. JSON:
+COMPARISON_PROMPT = """Compare the health insurance policies listed below.
+For the "synthesis", provide a structured, point-by-point medical and financial comparison. For each policy, start with a bullet point and list its name followed by specific terms (e.g. Sum Insured, Premium, Deductibles, Co-payments, Waiting Periods). Do not mix them into a single run-on paragraph.
+Return ONLY a valid JSON object matching the schema below. Do not output any markdown code blocks, preamble, or trailing text.
+
+POLICIES:
 {policies_data}
-{{"synthesis":"<80w","best_for":"<40w","verdict":"<40w","feature_winners":[{{"feature":"","winner":"","reason":"<12w"}}]}}"""
+
+Return format JSON:
+{{
+  "synthesis": "Point-by-point comparison of the policies, e.g.:\\n- **[Policy 1 Name]**: Sum Insured of [SI], Premium [Prem], with [Deductible] deductible, [Co-pay] co-payment. Covers [Maternity/Room Rent details].\\n- **[Policy 2 Name]**: Sum Insured of [SI], Premium [Prem], with [Deductible] deductible, [Co-pay] co-payment. Covers [Maternity/Room Rent details].\\n\\nMedical terms comparison: ...",
+  "best_for": "Point-by-point description of who each policy is best suited for (maximum 80 words)",
+  "verdict": "Clear advisor recommendation and final verdict on which plan to choose (maximum 60 words)",
+  "feature_winners": [
+    {{
+      "feature": "Name of the feature (e.g. Premium, Coverage, Room Rent)",
+      "winner": "Name of the winning policy",
+      "reason": "Brief reason for winning"
+    }}
+  ]
+}}"""
 
 
 # NOTE: RAG_PROMPT is now only used in rag_service.py (single-doc pipeline).
@@ -490,7 +507,7 @@ def _build_fallback_fields(document_text: str) -> list[dict]:
     add("Network Hospitals", _regex_find_any([
         r'([\d,]+\+?\s*(?:network|cashless|empanelled)\s*hospitals?)',
         r'(?:network\s+of)[\s]+([\d,]+\+?\s*hospitals?)',
-        r'([\d,]+)\s*(?:hospitals?|network)',
+        r'([\d,]{2,})\s*(?:hospitals?|network)',
     ], text), "coverage")
 
     # ── Room Rent Limit ─────────────────────────────────────────────────────
@@ -501,7 +518,7 @@ def _build_fallback_fields(document_text: str) -> list[dict]:
     ], text), "restrictions")
 
     # ── Pre-existing Disease Coverage ───────────────────────────────────────
-    add("Pre-existing Coverage", _regex_find_any([
+    add("Pre Existing Coverage", _regex_find_any([
         r'(?:pre-?existing)[^.\n]{0,50}((?:cover|wait|period)[^.\n]{0,80})',
         r'(?:pre-?existing\s+disease)[:\s]+([^.\n]{0,120})',
     ], text), "restrictions")
@@ -718,13 +735,13 @@ async def generate_summary(document_text: str, force_regenerate: bool = False) -
         logger.info("Cache hit: summary")
         return _ai_cache[ck]
 
-    # Use up to 5000 chars — enough for key policy content, keeps input tokens low for speed
-    truncated = document_text[:5000] if len(document_text) > 5000 else document_text
+    # Use up to 30000 chars — enough for key policy content, keeps input tokens low for speed
+    truncated = document_text[:30000] if len(document_text) > 30000 else document_text
     try:
         response = await call_ollama(
             SUMMARIZATION_PROMPT.format(document_text=truncated),
             num_predict=800,
-            num_ctx=4096,
+            num_ctx=12288,
         )
         result = extract_json_from_response(response)
         if result.get("summary_text"):
@@ -753,12 +770,12 @@ async def extract_policy_fields(document_text: str, force_regenerate: bool = Fal
         logger.info("Cache hit: fields")
         return _ai_cache[ck]
 
-    truncated = document_text[:5000] if len(document_text) > 5000 else document_text
+    truncated = document_text[:30000] if len(document_text) > 30000 else document_text
     try:
         response = await call_ollama(
             FIELD_EXTRACTION_PROMPT.format(document_text=truncated),
-            num_predict=400,
-            num_ctx=2048,
+            num_predict=600,
+            num_ctx=12288,
         )
         result = extract_json_from_response(response)
         if result:
@@ -824,12 +841,12 @@ async def analyze_risks(document_text: str, force_regenerate: bool = False) -> d
         logger.info("Cache hit: risks")
         return _ai_cache[ck]
 
-    truncated = document_text[:5000] if len(document_text) > 5000 else document_text
+    truncated = document_text[:30000] if len(document_text) > 30000 else document_text
     try:
         response = await call_ollama(
             RISK_ANALYSIS_PROMPT.format(document_text=truncated),
-            num_predict=400,
-            num_ctx=2048,
+            num_predict=500,
+            num_ctx=12288,
         )
         result = extract_json_from_response(response)
         if result.get("risks"):
@@ -944,8 +961,34 @@ async def generate_comparison_synthesis(policies_data: list[dict]) -> dict:
         }
     ]
     
+    synthesis_lines = []
+    for idx, name in enumerate(policy_names):
+        p_data = policies_data[idx]
+        fields = p_data.get("extracted_fields", [])
+        si = next((f["field_value"] for f in fields if f["field_name"].lower() in ("sum insured", "sum_insured")), "Not specified")
+        prem = next((f["field_value"] for f in fields if f["field_name"].lower() in ("premium amount", "premium_amount")), "Not specified")
+        ded = next((f["field_value"] for f in fields if f["field_name"].lower() in ("deductible",)), "Not specified")
+        cp = next((f["field_value"] for f in fields if f["field_name"].lower() in ("co payment", "co_payment")), "Not specified")
+        rr = next((f["field_value"] for f in fields if f["field_name"].lower() in ("room rent limit", "room_rent_limit")), "Not specified")
+        
+        synthesis_lines.append(
+            f"- **{name}**:\n"
+            f"  - **Sum Insured**: {si}\n"
+            f"  - **Premium**: {prem}\n"
+            f"  - **Deductible**: {ded}\n"
+            f"  - **Co-Payment**: {cp}\n"
+            f"  - **Room Rent Limit**: {rr}"
+        )
+    
+    synthesis_lines.append(
+        f"\nComparing the policies reveals that {p2 if len(policy_names) > 1 else p1} offers more comprehensive hospital coverage "
+        f"and lower out-of-pocket costs on room rents and deductibles, making it a stronger choice for extensive protection. "
+        f"On the other hand, {p1} features lower premium rates but carries higher cost-sharing responsibilities (deductibles/co-payments) during hospitalization."
+    )
+    synthesis_text = "\n".join(synthesis_lines)
+    
     return {
-        "synthesis": f"Comparing {p1}, {p2}{p3} reveals distinct differences in coverage limits, cost sharing, and waiting restrictions. {p1} tends to offer standard benefits with lower premiums but contains more co-payment limitations. In contrast, {p2} provides more comprehensive protection and lower out-of-pocket costs, though it comes at a higher annual cost.",
+        "synthesis": synthesis_text,
         "best_for": f"• {p1}: Best for budget-conscious individuals who have low regular healthcare expenditures.\n• {p2}: Best for families or individuals seeking maximum protection with lower risk of unexpected hospital bills.\n" + (f"• {policy_names[2]}: Best as a middle-ground plan balancing premiums and outpatient coverage." if len(policy_names) > 2 else ""),
         "verdict": f"For most users, {p2} offers the best overall security if the premium is within budget, as it avoids high co-payments during major health crises. If affordability is the main concern, {p1} is a reliable starter plan.",
         "feature_winners": feature_winners
