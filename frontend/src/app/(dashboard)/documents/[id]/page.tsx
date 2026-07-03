@@ -478,6 +478,11 @@ export default function DocumentDetailPage() {
 
   const handleSendEmail = async () => {
     if (!emailInput.trim()) return;
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(emailInput.trim())) {
+      toast.error('Please enter a valid email address');
+      return;
+    }
     setSendingEmail(true);
     const toastId = toast.loading(`Sending email to ${emailInput}...`);
     try {
