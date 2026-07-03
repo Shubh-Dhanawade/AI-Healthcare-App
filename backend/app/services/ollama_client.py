@@ -39,6 +39,14 @@ async def close_httpx_client() -> None:
         await _client_instance.aclose()
         logger.info("🔌 Shared HTTPX Client closed.")
 
+def parse_keep_alive(val: str):
+    """Convert numeric keep alive string to integer, or return string duration."""
+    try:
+        return int(val)
+    except ValueError:
+        return val
+
+
 async def warmup_model(model: Optional[str] = None) -> None:
     """Keep the model resident in VRAM by sending a dummy fast-completion prompt."""
     model_name = model or settings.OLLAMA_MODEL
@@ -49,11 +57,13 @@ async def warmup_model(model: Optional[str] = None) -> None:
             "model": model_name,
             "messages": [{"role": "user", "content": "hi"}],
             "stream": False,
+            "keep_alive": parse_keep_alive(settings.OLLAMA_KEEP_ALIVE),
             "options": {
                 "num_predict": 1,
                 "num_ctx": 128,
                 "temperature": 0,
-                "num_thread": 12, # Use CPU threads as fallback
+                "num_thread": settings.OLLAMA_NUM_THREAD,
+                "num_gpu": settings.OLLAMA_NUM_GPU,
             },
         }
         await client.post("/api/chat", json=payload)
@@ -66,7 +76,11 @@ async def generate_embeddings_nomic(text: str) -> List[float]:
     client = get_httpx_client()
     payload = {
         "model": "nomic-embed-text",
-        "prompt": text
+        "prompt": text,
+        "keep_alive": parse_keep_alive(settings.OLLAMA_KEEP_ALIVE),
+        "options": {
+            "num_gpu": settings.OLLAMA_NUM_GPU,
+        }
     }
     
     try:
@@ -81,7 +95,11 @@ async def generate_embeddings_nomic(text: str) -> List[float]:
     # Fallback to /api/embed
     payload_embed = {
         "model": "nomic-embed-text",
-        "input": text
+        "input": text,
+        "keep_alive": parse_keep_alive(settings.OLLAMA_KEEP_ALIVE),
+        "options": {
+            "num_gpu": settings.OLLAMA_NUM_GPU,
+        }
     }
     try:
         response = await client.post("/api/embed", json=payload_embed)
@@ -110,13 +128,15 @@ async def call_ollama(
         "model": model_name,
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
+        "keep_alive": parse_keep_alive(settings.OLLAMA_KEEP_ALIVE),
         "options": {
             "temperature": 0,
             "num_predict": num_predict,
             "num_ctx": num_ctx,
             "top_k": 1,
             "top_p": 1.0,
-            "num_thread": 12, # Use all CPU threads for shared processing
+            "num_thread": settings.OLLAMA_NUM_THREAD,
+            "num_gpu": settings.OLLAMA_NUM_GPU,
         },
     }
     
@@ -146,12 +166,15 @@ async def call_ollama_stream(
         "model": model_name,
         "messages": [{"role": "user", "content": prompt}],
         "stream": True,
+        "keep_alive": parse_keep_alive(settings.OLLAMA_KEEP_ALIVE),
         "options": {
             "temperature": 0,           # Greedy for maximum speed
             "num_predict": num_predict,
             "num_ctx": num_ctx,
             "top_k": 1,
             "top_p": 1.0,
+            "num_thread": settings.OLLAMA_NUM_THREAD,
+            "num_gpu": settings.OLLAMA_NUM_GPU,
         },
     }
     

@@ -1176,6 +1176,8 @@ async def generate_claims_checklist(policy_name: str, fields_summary: str, treat
 
 async def call_ollama_stream(prompt: str, model: Optional[str] = None, num_predict: int = 200):
     """Generate streaming tokens from Ollama — optimized for speed."""
+    from app.services.ollama_client import parse_keep_alive
+    
     model = model or settings.OLLAMA_MODEL
     url = f"{settings.OLLAMA_BASE_URL}/api/chat"
     
@@ -1191,6 +1193,7 @@ async def call_ollama_stream(prompt: str, model: Optional[str] = None, num_predi
             }
         ],
         "stream": True,
+        "keep_alive": parse_keep_alive(settings.OLLAMA_KEEP_ALIVE),
         "options": {
             "temperature": 0,  # CHANGED from 0.1 to 0 for greedy decoding
             "num_predict": num_predict,  # REDUCED from 512
@@ -1198,6 +1201,8 @@ async def call_ollama_stream(prompt: str, model: Optional[str] = None, num_predi
             "num_batch": 1024,
             "top_k": 1,  # GREEDY only
             "top_p": 1.0,
+            "num_thread": settings.OLLAMA_NUM_THREAD,
+            "num_gpu": settings.OLLAMA_NUM_GPU,
         },
     }
 

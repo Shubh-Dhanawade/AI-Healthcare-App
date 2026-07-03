@@ -60,6 +60,41 @@ async def create_tables():
     from app.models import user, document, summary, risk_analysis, rag_query_log, chat  # noqa
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        
+        # Dynamically add file_hash column if it does not exist (SQLite/PostgreSQL compatible)
+        try:
+            from sqlalchemy import text
+            await conn.execute(text("ALTER TABLE documents ADD COLUMN file_hash VARCHAR(64)"))
+            logger.info("✅ Dynamically added file_hash column to documents table")
+        except Exception:
+            # Column already exists, ignore
+            pass
+
+        # Populate file_hash for existing documents if NULL
+        try:
+            from sqlalchemy import text
+            import hashlib
+            import os
+            
+            result = await conn.execute(text("SELECT id, file_path FROM documents WHERE file_hash IS NULL"))
+            rows = result.all()
+            for row in rows:
+                doc_id, file_path = row
+                if file_path and os.path.exists(file_path):
+                    try:
+                        with open(file_path, "rb") as f:
+                            content = f.read()
+                        h = hashlib.sha256(content).hexdigest()
+                        await conn.execute(
+                            text("UPDATE documents SET file_hash = :file_hash WHERE id = :id"),
+                            {"file_hash": h, "id": doc_id}
+                        )
+                        logger.info(f"✅ Populated file_hash for existing document {doc_id}")
+                    except Exception as fe:
+                        logger.warning(f"Failed to hash existing file {file_path}: {fe}")
+        except Exception as e:
+            logger.warning(f"Failed to migrate existing document hashes: {e}")
+            
     logger.info("✅ Database tables created/verified")
 
 

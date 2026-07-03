@@ -305,6 +305,24 @@ async def upload_document(
             detail=f"File too large. Maximum size: {settings.MAX_FILE_SIZE_MB}MB",
         )
     
+    # Calculate SHA-256 hash of the file content
+    import hashlib
+    file_hash = hashlib.sha256(content).hexdigest()
+    
+    # Check if a document with this hash has already been uploaded by this user
+    result = await db.execute(
+        select(Document).where(
+            Document.user_id == current_user.id,
+            Document.file_hash == file_hash
+        )
+    )
+    existing_doc = result.scalar_one_or_none()
+    if existing_doc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This document has already been uploaded. Duplicate uploads of the same report are not allowed.",
+        )
+    
     # Generate unique filename
     extension = FilePath(file.filename).suffix.lower() or (".pdf" if file_type == "pdf" else ".jpg")
     stored_filename = f"{uuid.uuid4()}{extension}"
@@ -331,6 +349,7 @@ async def upload_document(
         file_size_bytes=len(content),
         mime_type=content_type,
         status="uploaded",
+        file_hash=file_hash,
     )
     db.add(doc)
     await db.flush()

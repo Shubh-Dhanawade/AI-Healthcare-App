@@ -66,39 +66,8 @@ async def generate_and_store_summary(
     # Commit transaction to release SQLite database locks during the slow LLM call
     await db.commit()
         
-    # Generate new summary — use up to 6000 chars for multi-page PDFs
-    truncated = text[:6000] if len(text) > 6000 else text
-    summary_data = _build_fallback_summary(text)
-    
-    try:
-        response = await call_ollama(
-            SUMMARIZATION_PROMPT.format(document_text=truncated),
-            num_predict=800,  # Increased to allow for more detailed explanatory summaries
-            num_ctx=4096,
-        )
-        result = extract_json_from_response(response)
-        if result and result.get("summary_text"):
-            logger.info("Ollama summary generation successful (JSON)")
-            summary_data = {
-                "summary_text": _clean_field(result.get("summary_text")),
-                "coverage_summary": _clean_field(result.get("coverage_summary")),
-                "exclusions_summary": _clean_field(result.get("exclusions_summary")),
-                "waiting_period_summary": _clean_field(result.get("waiting_period_summary")),
-                "premium_summary": _clean_field(result.get("premium_summary")),
-            }
-        elif response and len(response.strip()) > 100:
-            logger.info("Ollama summary generation successful (Plain Text)")
-            summary_data = {
-                "summary_text": response.strip(),
-                "coverage_summary": _clean_field(summary_data.get("coverage_summary")),
-                "exclusions_summary": _clean_field(summary_data.get("exclusions_summary")),
-                "waiting_period_summary": _clean_field(summary_data.get("waiting_period_summary")),
-                "premium_summary": _clean_field(summary_data.get("premium_summary")),
-            }
-        else:
-            logger.warning("Ollama summary returned invalid or empty content, using mock fallback.")
-    except Exception as e:
-        logger.warning(f"Ollama summarization error ({e}), using mock fallback.")
+    from app.services.ai_service import generate_summary
+    summary_data = await generate_summary(text, force_regenerate=force_regenerate)
         
     # Save to DB
     summary = Summary(

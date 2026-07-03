@@ -26,6 +26,7 @@ class Document(Base):
     file_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     mime_type: Mapped[str] = mapped_column(String(100), nullable=True)
     page_count: Mapped[int] = mapped_column(Integer, default=1)
+    file_hash: Mapped[str] = mapped_column(String(64), nullable=True, index=True)
 
     # Processing status
     status: Mapped[str] = mapped_column(String(30), default="uploaded", nullable=False)
