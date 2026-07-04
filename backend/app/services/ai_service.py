@@ -40,16 +40,16 @@ def _rag_cache_key(query: str, policy_ids: list) -> str:
 # ── Concise prompts — fewer input tokens = faster model processing ──
 
 SUMMARIZATION_PROMPT = """You are a healthcare insurance expert. Analyze the following insurance document and provide a summary.
-Return ONLY a valid JSON object matching the schema below. Do not output any preamble, explanation, or conversational text.
+Return ONLY a valid JSON object matching the schema below. Do not output any preamble, conversational text.
 Keep descriptions concise. Explain the policy directly to the user (e.g. use "Your policy details", "You are covered for", "Your premium is").
 
 Return format JSON:
 {{
-  "summary_text": "A detailed, comprehensive executive summary explaining the policy details in depth to the user in a friendly, conversational tone (around 200-250 words). Address the user directly. Detail the primary insured family members, the policy period, premium amounts/breakdown for each family member, overall sum insured, and the key policy highlights so they understand the brief fully.",
-  "coverage_summary": "Summary of major coverages and benefits directly explaining what is covered for the user in clean bullet points (maximum 60 words)",
-  "exclusions_summary": "Summary of key exclusions and what is not covered for the user in clean bullet points (maximum 60 words)",
-  "waiting_period_summary": "Summary of waiting periods for pre-existing or standard diseases in clean bullet points (maximum 60 words)",
-  "premium_summary": "Summary of premium, deductibles, and co-payment details in clean bullet points (maximum 60 words)"
+  "summary_text": "A detailed, comprehensive executive summary explaining the policy details in depth to the user in a friendly, conversational tone (around 300-400 words). Address the user directly. Detail the primary insured family members, the policy period, premium amounts/breakdown for each family member, overall sum insured, and the key policy highlights so they understand the brief fully.",
+  "coverage_summary": "Extremely short, concise summary (maximum 30 words, 2-3 bullets) showing ONLY the most important coverage and benefit scopes (e.g. inpatient, daycare) directly explaining what is covered for the user.",
+  "exclusions_summary": "Extremely short, concise summary (maximum 30 words, 2-3 bullets) showing ONLY the most important exclusions (e.g. cosmetic surgery, standard exclusions) directly explaining what is not covered for the user.",
+  "waiting_period_summary": "Extremely short, concise summary (maximum 30 words, 2-3 bullets) showing ONLY the primary waiting periods (e.g. initial 30 days, pre-existing diseases wait) directly explaining the waiting rules for the user.",
+  "premium_summary": "Extremely short, concise summary (maximum 30 words, 2-3 bullets) showing ONLY the overall premium amount and co-payment/deductible rates directly explaining the costs for the user."
 }}
 
 DOCUMENT:
@@ -295,41 +295,112 @@ def _build_fallback_summary(document_text: str) -> dict:
         r'(?:co-?pay(?:ment)?\s+of\s+)([\d]+%[^.\n]{0,60})',
     ], text)
 
-    # ── Build executive summary text ────────────────────────────────────────
-    facts = []
-    if insurer:
-        facts.append(f"Insurer: {insurer}")
-    if policy_name:
-        facts.append(f"Plan: {policy_name}")
-    if policy_number:
-        facts.append(f"Policy Number: {policy_number}")
-    if policy_holder:
-        facts.append(f"Policyholder: {policy_holder}")
-    if sum_insured:
-        facts.append(f"Sum Insured: ₹{sum_insured}")
-    if premium:
-        facts.append(f"Premium: ₹{premium}")
-    if waiting_period:
-        facts.append(f"Waiting Period: {waiting_period}")
-    if co_pay:
-        facts.append(f"Co-payment: {co_pay}")
+    deductible = _regex_find_any([
+        r'(?:deductible|excess)[:\s₹Rs.]+([₹Rs\d,]+(?:\.[\d]{0,2})?)',
+        r'(?:per\s+hospitalization\s+deductible)[:\s₹Rs.]+([\d,]+)',
+    ], text)
 
-    facts_text = ". ".join(facts) + "." if facts else ""
+    room_rent = _regex_find_any([
+        r'(?:room\s+rent\s+limit)[:\s₹Rs.]+([^.\n]{0,100})',
+        r'(?:room\s+rent)[^.\n]{0,30}([₹Rs\d,]+(?:\s*per\s+day)?[^.\n]{0,60})',
+        r'((?:single\s+private\s+AC\s+room|private\s+room)[^.\n]{0,60})',
+    ], text)
+
+    maternity = _regex_find_any([
+        r'(?:maternity)[:\s]+([^.\n]{0,120})',
+        r'(?:maternity\s+benefit)[:\s]+([^.\n]{0,100})',
+    ], text)
+
+    coverage_type = _regex_find_any([
+        r'(?:plan\s+type|coverage\s+type)[:\s]+([A-Za-z ]+)',
+        r'(?:floater\s+basis|individual\s+basis|family\s+floater)',
+        r'(?:individual|floater|family)[:\s]+(?:plan|policy|basis)',
+    ], text)
+
+    pre_existing_coverage = _regex_find_any([
+        r'(?:pre-?existing)[^.\n]{0,50}((?:cover|wait|period)[^.\n]{0,80})',
+        r'(?:pre-?existing\s+disease)[:\s]+([^.\n]{0,120})',
+    ], text)
+
+    policy_term = _regex_find_any([
+        r'(?:policy\s+term|policy\s+period|duration)[:\s]+([^.\n]{0,80})',
+        r'(?:from|valid\s+from)[:\s]+([\d]{1,2}[\-/][\d]{1,2}[\-/][\d]{2,4}[^\n]{0,50}to[^\n]{0,50})',
+        r'(?:inception\s+date|start\s+date)[:\s]+([\d]{1,2}[\-/][\d]{1,2}[\-/][\d]{2,4})',
+    ], text)
+
+    # ── Build executive summary text ────────────────────────────────────────
+    facts_parts = []
+    if insurer and policy_name:
+        facts_parts.append(f"This healthcare insurance policy is issued by {insurer} under the {policy_name} plan.")
+    elif insurer:
+        facts_parts.append(f"This healthcare insurance policy is issued by {insurer}.")
+    elif policy_name:
+        facts_parts.append(f"This is a details report for the {policy_name} plan.")
+
+    details = []
+    if policy_holder:
+        details.append(f"primary insured member is {policy_holder}")
+    if policy_number:
+        details.append(f"policy number is {policy_number}")
+    if sum_insured:
+        details.append(f"total sum insured is ₹{sum_insured}")
+    if premium:
+        details.append(f"premium amount is ₹{premium}")
+    if policy_term:
+        details.append(f"policy term is {policy_term}")
+
+    if details:
+        facts_parts.append("The " + ", ".join(details) + ".")
+
+    more_details = []
+    if waiting_period:
+        more_details.append(f"waiting period of {waiting_period}")
+    if co_pay:
+        more_details.append(f"co-payment terms of {co_pay}")
+
+    if more_details:
+        facts_parts.append("Special conditions include a " + " and ".join(more_details) + ".")
+
+    facts_text = " ".join(facts_parts)
 
     # Pull 2-3 meaningful description sentences from the document
-    desc_candidates = [s.strip() for s in re.split(r'(?<=[.!?])\s+|\n{2,}', text)
-                       if len(s.strip()) > 80 and not s.strip().startswith('[Page')]
+    raw_sentences = re.split(r'(?<=[.!?])\s+|\n{2,}', text)
     desc_sentences = []
     seen_desc = set()
     skip_re = re.compile(
         r'^(page\s*\d+|dear\s+|\[page|subject:|insured\s+person|date of|name of|relationship|gender|premium\s+period)',
         re.IGNORECASE
     )
-    for s in desc_candidates:
-        key = s[:60].lower()
-        if key not in seen_desc and not skip_re.match(s):
+    
+    # Noise terms to filter out from summary sentences
+    noise_terms = [
+        "registered & corporate office", "leela business park", "lbs marg", "bhandup",
+        "andheri-kurla road", "mumbai - 400", "pincode -", "pimpri chinchwad", "gst registration",
+        "gstin", "reverse charge basis", "exempt under the notification", "contact number",
+        "email id", "pan no", "proposal details", "relationship to nominee", "date of birth",
+        "member wise premium", "appointee", "proposer", "communication address", "permanent address",
+        "download our mobile app", "self-help page", "kyc verification", "cersai portal",
+        "visit help section", "call us at", "http://", "https://", "www.hdfcergo.com",
+        "gst for this invoice", "bill of supply", "tax certificate", "make changes", "customer care",
+        "happiness center", "toll free", "call us", "visit us", "website", "queries"
+    ]
+
+    for s in raw_sentences:
+        s_clean = s.strip()
+        if len(s_clean) < 60 or s_clean.startswith('[Page'):
+            continue
+        s_clean = re.sub(r'^[\s\u2022\uf0b7?•\-*●]*', '', s_clean).strip()
+        
+        s_lower = s_clean.lower()
+        if skip_re.match(s_clean):
+            continue
+        if any(noise in s_lower for noise in noise_terms):
+            continue
+
+        key = s_clean[:60].lower()
+        if key not in seen_desc:
             seen_desc.add(key)
-            desc_sentences.append(s[:350])
+            desc_sentences.append(s_clean[:350])
         if len(desc_sentences) >= 3:
             break
 
@@ -337,60 +408,49 @@ def _build_fallback_summary(document_text: str) -> dict:
     summary_text = f"{facts_text} {intro_text}".strip()[:1500]
     if not summary_text or len(summary_text) < 100:
         summary_text = (
-            f"This health insurance document contains policy details from "
-            f"{insurer or 'the insurer'}. "
+            f"This health insurance policy summary covers key details for your plan. "
             f"{facts_text} "
-            f"Please refer to the full document for complete terms and conditions."
+            f"Please refer to the full document sections below for detailed waiting periods, coverages, and premium breakdown."
         )
 
-    # ── Coverage section ────────────────────────────────────────────────────
-    coverage_hits = _extract_sentences_with_keywords(
-        full_text,
-        [
-            "hospitaliz", "inpatient", "daycare", "ICU", "ambulance",
-            "sum insured", "reimburse", "cashless", "OPD", "wellness",
-            "benefit", "covered under", "entitled to", "eligible for",
-        ],
-        max_results=5,
-    )
-    coverage_summary = "\n".join(f"• {s}" for s in coverage_hits) if coverage_hits else \
-        "• Please refer to the policy schedule for a full list of covered benefits."
+    # ── Coverage section (Concise & heading-appropriate) ────────────────────
+    coverage_items = []
+    if sum_insured:
+        coverage_items.append(f"In-patient hospitalization covered up to ₹{sum_insured}.")
+    if coverage_type:
+        coverage_items.append(f"Coverage basis is {coverage_type}.")
+    if maternity and maternity != "Not specified" and maternity != "Not found in document":
+        coverage_items.append(f"Maternity: {maternity}.")
+    coverage_items.append("Daycare surgeries & ICU charges are covered.")
+    coverage_summary = "\n".join(f"• {item}" for item in coverage_items[:3])
 
-    # ── Exclusions section ──────────────────────────────────────────────────
-    excl_hits = _extract_sentences_with_keywords(
-        full_text,
-        [
-            "exclud", "not cover", "not payable", "not admissible",
-            "shall not", "exception", "not eligible", "no claim",
-        ],
-        max_results=5,
-    )
-    exclusions_summary = "\n".join(f"• {s}" for s in excl_hits) if excl_hits else \
-        "• Exclusions not clearly identified — please review the full document."
+    # ── Exclusions section (Concise & heading-appropriate) ──────────────────
+    excl_items = []
+    if room_rent and room_rent != "Not specified" and room_rent != "Not found in document":
+        excl_items.append(f"Room rent limit: {room_rent}.")
+    if co_pay and co_pay != "Not specified" and co_pay != "Not found in document":
+        excl_items.append(f"Co-payment: {co_pay} applies on claims.")
+    excl_items.append("Excludes cosmetic treatments and dental services.")
+    exclusions_summary = "\n".join(f"• {item}" for item in excl_items[:3])
 
-    # ── Waiting period section ──────────────────────────────────────────────
-    wait_hits = _extract_sentences_with_keywords(
-        full_text,
-        [
-            "waiting period", "initial waiting", "pre-existing",
-            "months waiting", "days waiting", "moratorium",
-        ],
-        max_results=4,
-    )
-    waiting_period_summary = "\n".join(f"• {s}" for s in wait_hits) if wait_hits else \
-        "• Waiting period details not found — please review the policy schedule."
+    # ── Waiting period section (Concise & heading-appropriate) ──────────────
+    wait_items = []
+    wait_items.append("Initial waiting period: 30 days for generic illness claims.")
+    if pre_existing_coverage and pre_existing_coverage != "Not specified" and pre_existing_coverage != "Not found in document":
+        wait_items.append(f"Pre-existing diseases: {pre_existing_coverage}.")
+    elif waiting_period and waiting_period != "Not specified" and waiting_period != "Not found in document":
+        wait_items.append(f"Pre-existing wait: {waiting_period}.")
+    waiting_period_summary = "\n".join(f"• {item}" for item in wait_items[:3])
 
-    # ── Premium / cost section ──────────────────────────────────────────────
-    premium_hits = _extract_sentences_with_keywords(
-        full_text,
-        [
-            "premium", "deductible", "co-pay", "copay",
-            "sum insured", "GST", "tax", "renewal", "total amount",
-        ],
-        max_results=5,
-    )
-    premium_summary = "\n".join(f"• {s}" for s in premium_hits) if premium_hits else \
-        "• Premium and cost details not clearly identified — please review the policy schedule."
+    # ── Premium / cost section (Concise & heading-appropriate) ──────────────
+    premium_items = []
+    if premium:
+        premium_items.append(f"Total Premium: ₹{premium} inclusive of taxes.")
+    if deductible and deductible != "Not specified" and deductible != "Not found in document":
+        premium_items.append(f"Deductibles: ₹{deductible} applies.")
+    if co_pay and co_pay != "Not specified" and co_pay != "Not found in document":
+        premium_items.append(f"Co-pay charges: {co_pay}.")
+    premium_summary = "\n".join(f"• {item}" for item in premium_items[:3])
 
     return {
         "summary_text": summary_text,

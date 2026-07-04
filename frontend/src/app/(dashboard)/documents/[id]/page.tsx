@@ -1070,6 +1070,7 @@ export default function DocumentDetailPage() {
                     </div>
                   </div>
 
+                  {/* ── Summary narrative paragraph ─────────────────────── */}
                   <div className="bg-slate-950/40 border border-white/5 rounded-xl p-4 relative overflow-hidden">
                     {isTranslating && (
                       <div className="absolute inset-0 bg-[#0a0f1e]/60 backdrop-blur-sm flex items-center justify-center z-10 transition-all">
@@ -1084,7 +1085,7 @@ export default function DocumentDetailPage() {
                     </p>
                   </div>
 
-                  {/* Detailed Policy Breakdowns */}
+                  {/* ── Detailed Policy Breakdowns (Prose paragraphs in equal height cards) ── */}
                   <div className="mt-6 border-t border-white/5 pt-6 space-y-4">
                     <h3 className="text-xs font-bold text-slate-400 tracking-wider uppercase">Policy Details & Exclusions</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1094,9 +1095,14 @@ export default function DocumentDetailPage() {
                         { label: '⏰ Waiting Periods', value: displayedSummary.waiting_period_summary, color: '#f59e0b', border: 'border-amber-500/10', bg: 'bg-amber-500/5' },
                         { label: '💰 Premium & Charges', value: displayedSummary.premium_summary, color: '#3b82f6', border: 'border-blue-500/10', bg: 'bg-blue-500/5' },
                       ].filter(s => s.value).map((section) => (
-                        <div key={section.label} className={`p-4 rounded-xl border ${section.border} ${section.bg}`}>
-                          <h4 className="font-bold text-xs uppercase tracking-wider mb-2.5" style={{ color: section.color }}>{section.label}</h4>
-                          <div className="text-slate-300 text-xs leading-relaxed space-y-2 whitespace-pre-wrap">
+                        <div
+                          key={section.label}
+                          className={`p-4 rounded-xl border ${section.border} ${section.bg} flex flex-col h-[180px] overflow-hidden`}
+                        >
+                          <h4 className="font-bold text-xs uppercase tracking-wider mb-2.5 flex-shrink-0" style={{ color: section.color }}>
+                            {section.label}
+                          </h4>
+                          <div className="text-slate-300 text-xs leading-relaxed flex-1 overflow-y-auto whitespace-pre-wrap pr-1 scrollbar-thin">
                             {section.value}
                           </div>
                         </div>
