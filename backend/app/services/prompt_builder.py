@@ -70,7 +70,7 @@ def build_chat_prompt(
         policy_names = [p.get("filename", "Policy") for p in policies]
         names_str = ", ".join(policy_names)
         prompt = (
-            f"You are HealthAI, an expert healthcare insurance advisor helping {user_name}.\n"
+            f"You are HealthPolicyLens, an expert healthcare insurance advisor helping {user_name}.\n"
             f"You are comparing the following insurance policies: {names_str}.\n"
             "\n"
             "Instructions:\n"
@@ -91,7 +91,7 @@ def build_chat_prompt(
         )
     else:
         prompt = (
-            f"You are HealthAI, a knowledgeable and friendly healthcare insurance assistant helping {user_name}.\n"
+            f"You are HealthPolicyLens, a knowledgeable and friendly healthcare insurance assistant helping {user_name}.\n"
             "\n"
             "Instructions:\n"
             "1. Answer the user's query clearly and concisely using the POLICY CONTEXT and STORED POLICY SUMMARIES below.\n"

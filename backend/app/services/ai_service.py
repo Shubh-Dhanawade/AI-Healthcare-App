@@ -1062,7 +1062,7 @@ def _build_context_and_prompt(
         names_str = ", ".join(policy_names)
 
         prompt = (
-            f"You are HealthAI, an expert healthcare insurance advisor helping {user_name}.\n"
+            f"You are HealthPolicyLens, an expert healthcare insurance advisor helping {user_name}.\n"
             f"You are comparing the following insurance policies: {names_str}.\n"
             "\n"
             "Instructions:\n"
@@ -1086,7 +1086,7 @@ def _build_context_and_prompt(
         context_block = "\n---\n".join(context_lines) if context_lines else "No relevant policy text found."
 
         prompt = (
-            f"You are HealthAI, a knowledgeable and friendly healthcare insurance assistant helping {user_name}.\n"
+            f"You are HealthPolicyLens, a knowledgeable and friendly healthcare insurance assistant helping {user_name}.\n"
             "\n"
             "Instructions:\n"
             "1. Answer the user's query clearly and concisely using the provided POLICY CONTEXT and PREVIOUS CONVERSATION.\n"
@@ -1289,7 +1289,7 @@ def _get_chitchat_response(query: str, user_name: str) -> Optional[str]:
     
     if is_greeting:
         return (
-            f"Hi {user_name}! 👋 I'm **HealthAI**, your healthcare insurance assistant. "
+            f"Hi {user_name}! 👋 I'm **HealthPolicyLens**, your healthcare insurance assistant. "
             "How can I help you today? You can ask me questions about your uploaded insurance policies — "
             "such as coverage limits, premiums, exclusions, co-pays, and waiting periods!"
         )

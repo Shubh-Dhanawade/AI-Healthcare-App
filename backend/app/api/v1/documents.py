@@ -937,7 +937,7 @@ def generate_html_report(doc: Document) -> str:
     <html>
     <head>
         <meta charset="utf-8">
-        <title>HealthAI Document Report - {doc.original_filename}</title>
+        <title>HealthPolicyLens Document Report - {doc.original_filename}</title>
         <style>
             body {{
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -1107,7 +1107,7 @@ async def export_report(
     await db.refresh(doc, ["summary", "extracted_fields", "risk_analyses"])
     
     html_content = generate_html_report(doc)
-    headers = {"Content-Disposition": f"attachment; filename=HealthAI_Report_{doc.id}.html"}
+    headers = {"Content-Disposition": f"attachment; filename=HealthPolicyLens_Report_{doc.id}.html"}
     return HTMLResponse(content=html_content, headers=headers)
 
 
@@ -1139,12 +1139,12 @@ async def email_report(
     
     # 1. Setup email structure
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"[HealthAI] Policy Analysis Audit Report: {doc.original_filename}"
-    msg["From"] = "noreply@healthai.local"
+    msg["Subject"] = f"[HealthPolicyLens] Policy Analysis Audit Report: {doc.original_filename}"
+    msg["From"] = "noreply@healthpolicylens.local"
     msg["To"] = request.email
     
     # Plaintext fallback
-    text_fallback = f"Dear User,\n\nPlease find attached the HealthAI policy analysis report for {doc.original_filename}."
+    text_fallback = f"Dear User,\n\nPlease find attached the HealthPolicyLens policy analysis report for {doc.original_filename}."
     part1 = MIMEText(text_fallback, "plain")
     part2 = MIMEText(html_content, "html")
     msg.attach(part1)

@@ -42,7 +42,7 @@ export default function RegisterPage() {
     try {
       const res = await authApi.register({ email, full_name: fullName, password });
       login(res.access_token, res.user);
-      toast.success(`Welcome to HealthAI, ${res.user.full_name}!`);
+      toast.success(`Welcome to HealthPolicyLens, ${res.user.full_name}!`);
       router.replace('/dashboard');
     } catch (err: any) {
       toast.error(err.response?.data?.detail || 'Registration failed. Please try again.');
@@ -71,7 +71,7 @@ export default function RegisterPage() {
             <Activity className="w-8 h-8 text-white" />
           </div>
           <h1 className="text-3xl font-black gradient-text">Create Account</h1>
-          <p className="text-slate-400 mt-2">Join HealthAI &mdash; it&apos;s free</p>
+          <p className="text-slate-400 mt-2">Join HealthPolicyLens &mdash; it&apos;s free</p>
         </div>
 
         <div className="glass-card p-8">
