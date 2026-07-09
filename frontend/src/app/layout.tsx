@@ -9,7 +9,7 @@ import { Toaster } from "react-hot-toast";
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 export const metadata: Metadata = {
-  title: "HealthAI - Insurance Document Intelligence",
+  title: "HealthPolicyLens - Insurance Document Intelligence",
   description:
     "AI-powered platform for analyzing healthcare insurance documents. Upload, extract, summarize and detect risks instantly.",
   keywords: "healthcare insurance, AI analysis, document intelligence, policy summary",

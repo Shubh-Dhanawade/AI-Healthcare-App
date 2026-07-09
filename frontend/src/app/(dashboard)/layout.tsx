@@ -21,7 +21,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <div className="flex h-screen items-center justify-center bg-[#0a0f1e]">
         <div className="flex flex-col items-center gap-4">
           <div className="w-12 h-12 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
-          <p className="text-slate-400">Loading HealthAI...</p>
+          <p className="text-slate-400">Loading HealthPolicyLens...</p>
         </div>
       </div>
     );
