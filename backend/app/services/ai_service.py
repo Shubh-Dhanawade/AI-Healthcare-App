@@ -1126,19 +1126,71 @@ async def query_policy_rag(
 
 
 async def translate_text(text: str, target_language: str) -> str:
-    """Translate text using Ollama — optimized for speed."""
+    """Translate text using Google Translate free API first, falling back to local Ollama if offline."""
+    if not text.strip():
+        return text
+
+    # Map language names to Google Translate language codes
+    lang_map = {
+        "hindi": "hi",
+        "marathi": "mr",
+        "english": "en",
+        "spanish": "es",
+        "french": "fr",
+        "german": "de",
+        "italian": "it",
+        "japanese": "ja",
+        "chinese": "zh-CN",
+    }
+    
+    lang_normalized = target_language.strip().lower()
+    target_code = lang_map.get(lang_normalized, lang_normalized)
+    
+    # Try free Google Translate API (fast, highly accurate, keyless)
+    url = "https://translate.googleapis.com/translate_a/single"
+    params = {
+        "client": "gtx",
+        "sl": "auto",
+        "tl": target_code,
+        "dt": "t",
+        "q": text
+    }
+    
     try:
-        # Limit translation to 300 tokens — usually enough for policy snippets
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url, params=params)
+            response.raise_for_status()
+            res_data = response.json()
+            
+            # Reconstruct translation from segments
+            translated_parts = []
+            if res_data and len(res_data) > 0 and res_data[0]:
+                for segment in res_data[0]:
+                    if segment and len(segment) > 0 and isinstance(segment[0], str):
+                        translated_parts.append(segment[0])
+            
+            if translated_parts:
+                translated_text = "".join(translated_parts).strip()
+                if translated_text:
+                    logger.info(f"Successfully translated via Google Translate API ({target_language})")
+                    return translated_text
+    except Exception as e:
+        logger.warning(f"Google Translate API failed: {e}. Falling back to local Ollama...")
+        
+    # Local Ollama fallback if offline or request failed
+    try:
         response = await call_ollama(
-            TRANSLATE_PROMPT.format(text=text[:1000], target_language=target_language),  # REDUCED input
+            TRANSLATE_PROMPT.format(text=text[:1000], target_language=target_language),
             num_predict=300,
-            num_ctx=512  # MINIMAL context for translation
+            num_ctx=512
         )
         if response:
+            logger.info(f"Successfully translated via local Ollama fallback ({target_language})")
             return response.strip()
-    except Exception as e:
-        logger.warning(f"Translation failed: {e}")
-    return text  # Return original if translation fails
+    except Exception as fallback_e:
+        logger.warning(f"Ollama translation fallback also failed: {fallback_e}")
+        
+    return text  # Return original if all else fails
 
 
 async def generate_claims_checklist(policy_name: str, fields_summary: str, treatment_type: str) -> dict:

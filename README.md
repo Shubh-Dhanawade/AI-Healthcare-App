@@ -1,6 +1,6 @@
 # 🏥 Healthcare Insurance Document Intelligence System
 
-> **AI-powered platform for analyzing healthcare insurance documents using Gemma 3 (4B), custom SQLite Vector RAG, PaddleOCR, and PyMuPDF.**
+> **AI-powered platform for analyzing healthcare insurance documents using Gemma 3 (4B), custom SQLite Vector RAG, FAISS local indices, PaddleOCR, and Machine Learning Underwriting Benchmarks with SHAP & LIME XAI attributions.**
 
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111-green)](https://fastapi.tiangolo.com/)
 [![Next.js](https://img.shields.io/badge/Next.js-15-black)](https://nextjs.org/)
@@ -11,55 +11,58 @@
 
 ## 📋 Table of Contents
 
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [Features](#features)
-- [Project Structure](#project-structure)
-- [Quick Start](#quick-start)
-- [Local Development](#local-development)
-- [Environment Variables](#environment-variables)
-- [API Documentation](#api-documentation)
-- [AI Prompts](#ai-prompts)
-- [Deployment](#deployment)
+- [Overview](#-overview)
+- [Architecture](#%EF%B8%8F-architecture)
+- [Features](#-features)
+- [Project Structure](#-project-structure)
+- [Quick Start](#-quick-start-docker)
+- [Local Development](#-local-development)
+- [Environment Variables](#-environment-variables)
+- [API Documentation](#-api-documentation)
+- [AI Prompts](#-ai-prompts)
+- [Deployment](#-deployment)
+- [Security Notes](#-security-notes)
 
 ---
 
 ## 🎯 Overview
 
-Upload any healthcare insurance PDF or image document and get:
+Upload any healthcare insurance PDF or image document and instantly get:
 
 | Feature | Description |
 |---|---|
-| 🔍 **OCR Extraction** | PyMuPDF for digital PDFs, PaddleOCR for scanned docs |
-| 🤖 **AI Summary** | Plain-language policy summaries via Gemma 3 (4B) |
-| 📋 **Field Extraction** | Premiums, coverage, deductibles, exclusions |
-| ⚠️ **Risk Detection** | Identifies risky clauses with severity levels |
-| 💬 **Conversational RAG** | Chat with your policies via a custom local vector search engine |
+| 🔍 **OCR Extraction** | PyMuPDF for digital PDFs, cascading fallback to PaddleOCR, EasyOCR, or PyTesseract for scanned documents |
+| 🤖 **AI Summary** | Plain-language policy summaries via Gemma 3 (4B) optimized under 80 words |
+| 📋 **Field Extraction** | Premiums, coverage, deductibles, co-payments, waiting periods, network hospitals |
+| ⚠️ **Risk Detection** | Identifies risky clauses (co-pays, hidden deductibles, exclusions) with severity levels |
+| 💬 **SSE Streaming RAG** | Chat with your policies via a custom local vector search engine (FAISS + SQLite) with token streaming |
+| 📊 **Underwriting Analytics** | Review claims denial model benchmarks and Explainable AI (SHAP/LIME) attribution plots |
+| ⚖️ **Policy Comparison** | Side-by-side comparison of up to 5 policies with synthesized verdicts |
+| ⏰ **Renewal Alerts** | Schedule renewal and premium reminders with automatic early warnings |
 
 ---
 
 ## 🏗️ Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│                   Nginx (Port 80)               │
-│         Reverse Proxy + Load Balancer           │
-└───────────────────┬─────────────────────────────┘
-                    │
-        ┌───────────┴────────────┐
-        │                        │
-┌───────▼──────┐      ┌─────────▼────────┐
-│  Next.js     │      │   FastAPI        │
-│  Frontend    │      │   Backend        │
-│  Port 3000   │      │   Port 8000      │
-└──────────────┘      └─────┬────────────┘
-                            │
-             ┌──────────────┼──────────────┐
-             │              │              │
-    ┌────────▼───┐  ┌───────▼────┐  ┌─────▼──────┐
-    │  SQLite DB │  │   Ollama   │  │  Uploads   │
-    │ (Local dev)│  │ Port 11434 │  │  Volume    │
-    └────────────┘  └────────────┘  └────────────┘
+                  ┌─────────────────────────────────────────────────┐
+                  │                 Nginx (Port 80)                 │
+                  │         Reverse Proxy + Load Balancer           │
+                  └───────────────────────┬─────────────────────────┘
+                                          │
+                            ┌─────────────┴─────────────┐
+                            │                           │
+                  ┌─────────▼────────┐        ┌─────────▼────────┐
+                  │  Next.js Frontend│        │  FastAPI Backend │
+                  │    (Port 3000)   │        │    (Port 8000)   │
+                  └──────────────────┘        └─────────┬────────┘
+                                                        │
+                                   ┌────────────────────┼────────────────────┐
+                                   │                    │                    │
+                          ┌────────▼────────┐  ┌────────▼────────┐  ┌────────▼────────┐
+                          │ SQLite/Postgres │  │     Ollama      │  │  Uploads Vol    │
+                          │   Database DB   │  │  (Port 11434)   │  │  FAISS Indexes  │
+                          └─────────────────┘  └─────────────────┘  └─────────────────┘
 ```
 
 ---
@@ -67,94 +70,110 @@ Upload any healthcare insurance PDF or image document and get:
 ## ✨ Features
 
 ### 🔐 Authentication
-- JWT-based auth with bcrypt password hashing
-- User roles: Admin / User
-- Secure token management
+- JWT-based auth using the HS256 algorithm.
+- Secure token management with password hashing via `bcrypt`.
+- Role-based access control (`Admin` or `User`).
 
-### 📁 Document Upload
-- Drag-and-drop file upload
-- Supports PDF, JPG, PNG, TIFF, WEBP
-- Up to 50MB files
-- Upload progress indicator
+### 📁 Intelligent Document Upload
+- Drag-and-drop file uploader with dynamic progress metrics.
+- Support for PDF, JPG, PNG, TIFF, and WEBP formats up to 50MB.
+- **SHA-256 Duplicate Check**: Prevents identical uploads by checking hashes in the DB.
 
-### 🔍 OCR & Text Extraction
-- **PyMuPDF** for digital PDF text extraction
-- **PaddleOCR** for scanned documents and images
-- Auto-detection of document type
-- Text cleaning and normalization
+### 🔍 Optimized Cascading OCR Pipeline
+- **PyMuPDF** for digital PDFs (character extraction in ~1-2s).
+- **Threshold fallback**: Triggers OCR when character count falls under 50 chars/page.
+- **Cascading OCR Engine**: Sequentially attempts **PaddleOCR**, falling back to **EasyOCR**, and then **PyTesseract** depending on system configurations.
+- Cleans double-spacing, strips headers/footers, and ignores blank pages.
 
-### 🤖 AI Summarization (Gemma 3 (4B))
-- Plain-language policy summaries
-- Coverage overview
-- Exclusions and restrictions
-- Waiting periods
-- Premium details
+### 🤖 Asynchronous Background Auto-Processing
+- The system automatically triggers the analysis sequence immediately after text extraction.
+- Status changes: `uploaded` ➔ `processing` ➔ `text_extracted` ➔ `completed`.
+- Summarization, key-field extraction, and risk analysis run concurrently.
+- Manual reprocessing triggers become available only after initial completion.
 
 ### 📋 Key Field Extraction
-- Policy name, insurer, policy number
-- Sum insured, premium, deductible
-- Co-payment, waiting periods
-- Coverage type, network hospitals
+- Extracts policy meta-parameters: Insurer, Policy Name, Policy Number, Sum Insured, Premium, Deductibles, Co-payments, Waiting Periods, Coverage Type, and Network Hospitals.
+- Saves results as structured attributes in the database for queries and comparisons.
 
 ### ⚠️ Risk Detection
-- Long waiting periods
-- High deductibles
-- Broad exclusions
-- Hidden conditions
-- Co-payment traps
-- Severity: Low / Medium / High
+- Scans policy text to evaluate risk clauses.
+- Rates severity level (`Low`, `Medium`, `High`) with clear 30-word summaries and recommendations.
 
-### 💬 Conversational Chat & Streaming RAG
-- **Instant Token Streaming (SSE)**: Leverages Server-Sent Events to stream response tokens in real-time, reducing latency (Time to First Token < 200ms).
-- **Custom Local Vector Store**: Zero-dependency SQLite BLOB serialization storing 768-dimensional float embeddings generated via `nomic-embed-text`.
-- **Typo-Tolerant Keyword Matcher**: Implements Levenshtein edit distance logic to silently fix user typos before RAG retrieval.
-- **Identity Grounding**: Contextually binds logged-in user names (e.g. `krushna`) directly into LLM prompts for personalized responses.
+### 💬 Conversational SSE Streaming RAG
+- Chat window supporting **instant token streaming** using FastAPI Server-Sent Events (SSE).
+- **Vector Database**: Zero-dependency SQLite BLOB serialization storing 768-dimensional embeddings generated via `nomic-embed-text`.
+- **FAISS Disk Caching**: Local FAISS IndexFlatIP files saved on disk per-document (`{doc_id}.faiss`) for ultra-fast top-k search.
+- **Typo Tolerance**: Implements Levenshtein edit distance logic to correct search terms (e.g. "deducable" -> "deductible") prior to retrieval.
+- **No-LLM Fallback Engine**: Dynamic keyword-based QA fallback if Ollama services are offline.
+- **Persistent Sessions**: Supports creating, switching, and deleting chat sessions.
+
+### 📊 Side-by-Side Policy Comparator
+- Compares up to 5 policies simultaneously.
+- Formulates comparison matrices and calls Gemma 3 to generate recommendations based on user profiles.
+
+### ⏰ Notification Reminders
+- Schedule renewal and premium due alerts.
+- Automatic alerts trigger **7 days prior** for renewal and **5 days prior** for premium deadlines.
+
+### 📈 Claims Underwriting Analytics & XAI
+- Evaluates classifiers predicting claims denial (`claim_denied`).
+- Addresses dataset imbalance via SMOTE resampling (50/50 balance).
+- Compares **Logistic Regression, Decision Tree, Random Forest,** and **XGBoost** benchmarks.
+- Integrates **Explainable AI (XAI)** attributions: ROC Curves, SHAP Summary Plots, and LIME Explainer plots.
+
+### 🌏 Translation & Claims Checklists
+- Translates summaries and analyses into multiple target languages.
+- Generates required steps and document checklists based on medical treatment types.
+
+### 📊 Metric Analytics
+- Analyzes processing latency and model metrics.
+- Asynchronous LLM-as-a-judge logs evaluating RAG **Faithfulness** and **Relevance**.
 
 ---
 
 ## 📁 Project Structure
 
 ```
-healthcare-ai-project/
+AI-Healthcare-App/
 ├── frontend/                   # Next.js 15 App
 │   ├── src/
 │   │   ├── app/
 │   │   │   ├── (dashboard)/    # Protected dashboard routes
-│   │   │   │   ├── dashboard/  # Overview page
-│   │   │   │   ├── upload/     # File upload page
-│   │   │   │   └── documents/  # Documents list + detail
-│   │   │   ├── login/          # Auth pages
+│   │   │   │   ├── analytics/  # Claims ML Underwriting & XAI plots
+│   │   │   │   ├── chat/       # Chat sessions & streaming RAG
+│   │   │   │   ├── compare/    # Side-by-side comparator
+│   │   │   │   ├── dashboard/  # Policy details & reminders
+│   │   │   │   ├── documents/  # Library list & detail view
+│   │   │   │   ├── model-metrics/ # LLM-as-a-judge latency & RAG logs
+│   │   │   │   └── upload/     # Drag & drop upload
+│   │   │   ├── login/          # Auth
 │   │   │   └── register/
-│   │   ├── components/
-│   │   │   ├── layout/         # Sidebar, Navbar
-│   │   │   ├── documents/      # Status badge
-│   │   │   └── providers/      # React Query
+│   │   ├── components/         # Layout & shared elements
 │   │   ├── contexts/           # Auth context
-│   │   ├── lib/                # API client
-│   │   └── types/              # TypeScript types
+│   │   ├── lib/                # API client helpers
+│   │   └── types/              # TypeScript typings
 │   └── Dockerfile
 │
 ├── backend/                    # FastAPI Python
 │   ├── app/
-│   │   ├── main.py             # App entry point
-│   │   ├── core/               # Config, DB, Security, Logging
-│   │   ├── models/             # SQLAlchemy ORM models
-│   │   ├── schemas/            # Pydantic schemas
-│   │   ├── services/           # Business logic
-│   │   │   ├── ocr_service.py  # PyMuPDF + PaddleOCR
-│   │   │   ├── ai_service.py   # Ollama AI integration
-│   │   │   └── user_service.py # User operations
-│   │   └── api/v1/             # REST endpoints
-│   │       ├── auth.py         # /auth/*
-│   │       ├── documents.py    # /documents/*
-│   │       └── ai_service.py   # /ai/*
-│   ├── sql/init.sql            # DB initialization
-│   ├── requirements.txt
+│   │   ├── main.py             # Entrypoint
+│   │   ├── api/v1/             # Endpoints (auth, documents, ai_service, claims)
+│   │   ├── core/               # Database, security config, logging
+│   │   ├── models/             # SQLAlchemy schemas
+│   │   ├── schemas/            # Pydantic validation structures
+│   │   └── services/           # OCR, Vector store, FAISS, RAG, Ollama clients
+│   ├── sql/init.sql            # SQL schema
+│   ├── requirements.txt        # Backend dependencies
 │   └── Dockerfile
 │
-├── nginx/                      # Reverse proxy
+├── nginx/                      # Reverse Proxy configuration
 │   ├── nginx.conf
 │   └── Dockerfile
+│
+├── data_science_analysis/      # Underwriting Machine Learning code
+│   ├── train_and_analyze.py    # Training, SMOTE, evaluation and XAI plots
+│   ├── mock_claims_dataset.csv # Mock underwriting dataset
+│   └── *.png                   # ROC, SHAP, and LIME output charts
 │
 ├── docker-compose.yml
 ├── .env.example
@@ -167,38 +186,35 @@ healthcare-ai-project/
 
 ### Prerequisites
 - Docker Desktop installed
-- 4GB+ RAM available
+- 8GB+ RAM available
 
 ### 1. Clone and Configure
 
 ```bash
 git clone <your-repo-url>
-cd healthcare-ai-project
+cd AI-Healthcare-App
 cp .env.example .env
-# Edit .env with your values
+# Edit .env with your variables
 ```
 
-### 2. Start All Services
+### 2. Start Services
 
 ```bash
-docker-compose up -d
+docker-compose up -d --build
 ```
 
-### 3. Pull the Gemma 3 and Embedding Models
+### 3. Pull Models
 
 ```bash
-docker exec -it healthcare_ollama ollama pull gemma3:4b
+docker exec -it healthcare_ollama ollama pull hf.co/kkross/gemma-3-4b-cord19-finetuned-new:latest
 docker exec -it healthcare_ollama ollama pull nomic-embed-text
 ```
 
-### 4. Access the Application
+### 4. Port Gateways
 
-| Service | URL |
-|---|---|
-| Web App | http://localhost |
-| API | http://localhost/api/v1 |
-| API Docs | http://localhost/api/docs |
-| Ollama | http://localhost:11434 |
+- Web App: `http://localhost`
+- API Gateway: `http://localhost/api/v1`
+- Swagger Docs: `http://localhost/api/docs`
 
 ---
 
@@ -208,25 +224,20 @@ docker exec -it healthcare_ollama ollama pull nomic-embed-text
 
 ```bash
 cd backend
-
-# Create virtual environment
 python -m venv venv
- # Windows venv\Scripts\activate.bat
+# Windows: venv\Scripts\activate.bat
+# Linux/Mac: source venv/bin/activate
 
-
-# Install dependencies
 pip install -r requirements.txt
-
-# Setup environment
 cp .env.example .env
-# Edit .env → set DATABASE_URL to sqlite+aiosqlite:///./healthcare_ai.db
+# Edit .env -> DATABASE_URL=sqlite+aiosqlite:///./healthcare_ai.db
 
-# Start Ollama locally
+# Ensure Ollama is running locally and pull models
 ollama serve
-ollama pull gemma3:4b
+ollama pull hf.co/kkross/gemma-3-4b-cord19-finetuned-new:latest
 ollama pull nomic-embed-text
 
-# Run backend
+# Run FastAPI dev server
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -234,72 +245,70 @@ uvicorn app.main:app --reload --port 8000
 
 ```bash
 cd frontend
-
-# Install dependencies
 npm install
-
-# Configure environment
 echo "NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1" > .env.local
-
-# Start development server
 npm run dev
 ```
-
-Access: http://localhost:3000
+Access: `http://localhost:3000`
 
 ---
 
 ## 🔧 Environment Variables
 
+### Backend Configuration (`backend/.env`)
 | Variable | Description | Default |
 |---|---|---|
-| `DATABASE_URL` | Database connection string | `sqlite+aiosqlite:///./healthcare_ai.db` |
-| `SECRET_KEY` | JWT signing key | ⚠️ Change this! |
-| `OLLAMA_BASE_URL` | Ollama API URL | `http://localhost:11434` |
-| `OLLAMA_MODEL` | AI model name | `gemma3:4b` |
-| `UPLOAD_DIR` | File upload directory | `./uploads` |
-| `MAX_FILE_SIZE_MB` | Max upload size | `50` |
+| `DATABASE_URL` | Database connection URL | `sqlite+aiosqlite:///./healthcare_ai.db` |
+| `SECRET_KEY` | JWT signing security key | `dev-secret-key-change-in-production...` |
+| `OLLAMA_BASE_URL` | Local Ollama address | `http://localhost:11434` |
+| `OLLAMA_MODEL` | Text analysis model name | `hf.co/kkross/gemma-3-4b-cord19-finetuned-new:latest` |
+| `OLLAMA_NUM_THREAD` | CPU cores assigned to Ollama | `8` |
+| `OLLAMA_NUM_GPU` | GPU blocks assigned to Ollama | `999` |
+| `OLLAMA_KEEP_ALIVE` | Period model is kept in memory | `10m` |
+| `UPLOAD_DIR` | Upload storage directory path | `./uploads` |
+| `MAX_FILE_SIZE_MB` | File size limit | `50` |
 
 ---
 
 ## 📡 API Documentation
 
 ### Authentication
-
-```http
-POST /api/v1/auth/register
-{
-  "email": "user@example.com",
-  "full_name": "John Doe",
-  "password": "securepassword"
-}
-
-POST /api/v1/auth/login
-{
-  "email": "user@example.com",
-  "password": "securepassword"
-}
-
-GET /api/v1/auth/me
-Authorization: Bearer <token>
-```
+- `POST /api/v1/auth/register` - Create user profile.
+- `POST /api/v1/auth/login` - Authenticate user & return JWT token.
+- `GET /api/v1/auth/me` - Retrieve authenticated user profile.
 
 ### Documents
+- `POST /api/v1/documents/upload` - Upload file (multipart).
+- `GET /api/v1/documents` - List files.
+- `GET /api/v1/documents/{id}` - Details with summaries/fields/risks.
+- `DELETE /api/v1/documents/{id}` - Delete document and indices.
+- `POST /api/v1/documents/compare` - Compare multiple policies.
+- `POST /api/v1/documents/{id}/run-summary` - Asynchronously rerun summary.
+- `POST /api/v1/documents/{id}/run-fields` - Asynchronously rerun field extraction.
+- `POST /api/v1/documents/{id}/run-risks` - Asynchronously rerun risk analysis.
+- `GET /api/v1/documents/{id}/export` - Export policy details to styled HTML/PDF.
+- `POST /api/v1/documents/{id}/email` - Send generated PDF report via email.
+- `GET /api/v1/documents/reminders` - Get scheduled notifications.
+- `POST /api/v1/documents/reminders` - Schedule dates for alerts.
+- `PATCH /api/v1/documents/reminders/{id}/dismiss` - Mark reminder dismissed.
 
-```http
-POST   /api/v1/documents/upload     # Upload file (multipart/form-data)
-GET    /api/v1/documents             # List all user documents
-GET    /api/v1/documents/{id}        # Get document with AI results
-DELETE /api/v1/documents/{id}        # Delete document
-```
+### AI & Chat
+- `POST /api/v1/ai/summarize` - Request Gemma summary.
+- `POST /api/v1/ai/extract-fields` - Extract key metadata.
+- `POST /api/v1/ai/risk-analysis` - Identify risky policy details.
+- `POST /api/v1/ai/chat` - Synchronous RAG chatbot search.
+- `POST /api/v1/ai/chat/stream` - SSE streaming RAG chatbot search.
+- `POST /api/v1/ai/translate` - Translate analysis content.
+- `POST /api/v1/ai/claims-checklist` - Generate required steps for a treatment.
+- `GET /api/v1/ai/model-metrics` - Latency and RAG accuracy logs.
+- `GET /api/v1/ai/chat/sessions` - List chat sessions.
+- `POST /api/v1/ai/chat/sessions` - Create chat session.
+- `GET /api/v1/ai/chat/sessions/{id}/messages` - Messages list.
+- `GET /api/v1/ai/chat/history/{document_id}` - Chat history filtered by document.
+- `DELETE /api/v1/ai/chat/sessions/{id}` - Delete session.
 
-### AI Services
-
-```http
-POST /api/v1/ai/summarize           { "document_id": "uuid" }
-POST /api/v1/ai/extract-fields      { "document_id": "uuid" }
-POST /api/v1/ai/risk-analysis       { "document_id": "uuid" }
-```
+### Underwriting Analytics
+- `GET /api/v1/claims/stats` - Underwriting sample splits and benchmark scores.
 
 ---
 
@@ -329,58 +338,12 @@ low/medium/high severity with explanation and recommendation.
 
 ---
 
-## 🚀 VPS Deployment
-
-### System Requirements
-- Ubuntu 20.04+
-- 4GB RAM minimum
-- 20GB disk space
-- Docker + Docker Compose
-
-### Deploy Steps
-
-```bash
-# 1. Install Docker
-curl -fsSL https://get.docker.com | sh
-sudo usermod -aG docker $USER
-
-# 2. Clone project
-git clone <your-repo>
-cd healthcare-ai-project
-
-# 3. Set production environment
-cp .env.example .env
-nano .env  # Set strong passwords and SECRET_KEY
-
-# 4. Deploy
-docker-compose up -d
-
-# 5. Pull AI models (first time only, may take a while)
-docker exec healthcare_ollama ollama pull gemma3:4b
-docker exec healthcare_ollama ollama pull nomic-embed-text
-
-# 6. Check status
-docker-compose ps
-docker-compose logs -f backend
-```
-
-### Memory Optimization for 4GB VPS
-
-The `docker-compose.yml` limits Ollama to 3GB RAM. Llama 3.2 runs within this limit.
-
-To use an even lighter model:
-```bash
-docker exec healthcare_ollama ollama pull llama3.2:1b  # Smaller 1B parameter variant
-```
-
----
-
 ## 🔒 Security Notes
 
-- Change `SECRET_KEY` and `POSTGRES_PASSWORD` in production
-- Enable HTTPS with Let's Encrypt via Certbot
-- The `ALLOWED_ORIGINS` env var controls CORS
-- Uploaded files are stored in isolated user directories
+- Change `SECRET_KEY` and postgres passwords before launching in production.
+- Enable HTTPS with SSL certificates.
+- Configured CORS origins through `ALLOWED_ORIGINS` inside backend environment variables.
+- User directories isolate file access paths securely.
 
 ---
 
