@@ -204,7 +204,7 @@ async def seed_initial_rag_logs(db: AsyncSession, default_user_id: str = None):
 
     logger.info(f"Seeding RAG query evaluation logs for user_id: {user_id}")
     
-    base_time = datetime.now(timezone.utc) - timedelta(days=2)
+    base_time = (datetime.now(timezone.utc) - timedelta(days=2)).replace(tzinfo=None)
     for i, data in enumerate(SEED_DATA):
         log_time = base_time + timedelta(hours=i * 3)
         log = RAGQueryLog(
