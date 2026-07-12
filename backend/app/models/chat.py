@@ -1,12 +1,12 @@
 """Chat session and message database models — compatible with SQLite and PostgreSQL."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 from sqlalchemy import String, Text, ForeignKey, DateTime
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.database import Base
+from app.core.database import Base, utc_now_naive
 
 
 class ChatSession(Base):
@@ -23,12 +23,12 @@ class ChatSession(Base):
     )
     title: Mapped[str] = mapped_column(String(255), default="New Chat", nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc)
+        DateTime, default=utc_now_naive
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
+        default=utc_now_naive,
+        onupdate=utc_now_naive,
     )
 
     # Relationships
@@ -58,7 +58,7 @@ class ChatMessage(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     sources: Mapped[str] = mapped_column(Text, nullable=True)  # JSON-serialized list of sources
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc)
+        DateTime, default=utc_now_naive
     )
 
     # Relationships

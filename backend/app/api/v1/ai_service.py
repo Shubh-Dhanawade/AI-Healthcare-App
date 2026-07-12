@@ -309,7 +309,7 @@ async def query_chatbot(
             title_suggestion = title_suggestion[:37] + "..."
         session.title = title_suggestion or "New Chat"
     
-    session.updated_at = datetime.now(timezone.utc)
+    session.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.flush()
 
     # 2. Fetch user documents (filtering by IDs if provided)
@@ -462,7 +462,7 @@ async def query_chatbot_stream(
             title_suggestion = title_suggestion[:37] + "..."
         session.title = title_suggestion or "New Chat"
     
-    session.updated_at = datetime.now(timezone.utc)
+    session.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.flush()
 
     # 2. Fetch user documents (filtering by IDs if provided)

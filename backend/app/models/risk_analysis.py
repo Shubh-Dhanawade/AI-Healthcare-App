@@ -1,11 +1,11 @@
 """Summary and RiskAnalysis models — SQLite/PostgreSQL compatible."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from sqlalchemy import String, Text, ForeignKey, DateTime
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.database import Base
+from app.core.database import Base, utc_now_naive
 
 
 class Summary(Base):
@@ -30,7 +30,7 @@ class Summary(Base):
     model_used: Mapped[str] = mapped_column(String(100), default="llama3.2")
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc)
+        DateTime, default=utc_now_naive
     )
 
     document: Mapped["Document"] = relationship("Document", back_populates="summary")  # noqa
@@ -56,7 +56,7 @@ class RiskAnalysis(Base):
     recommendation: Mapped[str] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc)
+        DateTime, default=utc_now_naive
     )
 
     document: Mapped["Document"] = relationship("Document", back_populates="risk_analyses")  # noqa

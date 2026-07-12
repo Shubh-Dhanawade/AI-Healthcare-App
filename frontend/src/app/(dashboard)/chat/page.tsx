@@ -152,7 +152,7 @@ function SourceBadges({ sources }: { sources: string[] }) {
           }}
         >
           <FileText className="w-2.5 h-2.5" />
-          {src}
+          {src.replace(/\s*-\s*Page\s*\d+/gi, '')}
         </span>
       ))}
     </div>

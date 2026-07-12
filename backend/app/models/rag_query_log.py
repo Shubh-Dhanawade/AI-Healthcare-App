@@ -1,11 +1,11 @@
 """RAGQueryLog database model — compatible with SQLite and PostgreSQL."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from sqlalchemy import String, Text, ForeignKey, DateTime, Float
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.database import Base
+from app.core.database import Base, utc_now_naive
 
 
 class RAGQueryLog(Base):
@@ -32,7 +32,7 @@ class RAGQueryLog(Base):
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc)
+        DateTime, default=utc_now_naive
     )
 
     # Relationship
