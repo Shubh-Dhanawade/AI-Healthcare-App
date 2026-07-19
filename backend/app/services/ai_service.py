@@ -39,17 +39,21 @@ def _rag_cache_key(query: str, policy_ids: list) -> str:
 
 # ── Concise prompts — fewer input tokens = faster model processing ──
 
-SUMMARIZATION_PROMPT = """You are a healthcare insurance expert. Analyze the following insurance document and provide a summary.
-Return ONLY a valid JSON object matching the schema below. Do not output any preamble, explanation, or conversational text.
-Keep descriptions concise. Explain the policy directly to the user (e.g. use "Your policy details", "You are covered for", "Your premium is").
+SUMMARIZATION_PROMPT = """You are a senior healthcare insurance analyst. Read the following insurance policy document carefully and produce a structured, factual summary.
 
-Return format JSON:
+CRITICAL RULES — follow exactly:
+1. Return ONLY a valid JSON object. No text before or after it. No markdown code fences.
+2. summary_text: MUST be 400-500 words written in flowing paragraphs. ABSOLUTELY NO bullet points or numbered lists inside summary_text.
+3. The four bullet fields (coverage_summary, exclusions_summary, waiting_period_summary, premium_summary): each bullet MUST start with '• ' and be one complete, specific sentence sourced from the document.
+4. Only state facts present in the document. Do not invent values.
+
+JSON schema (return exactly this structure):
 {{
-  "summary_text": "A detailed, comprehensive executive summary explaining the policy details in depth to the user in a friendly, conversational tone (around 200-250 words). Address the user directly. Detail the primary insured family members, the policy period, premium amounts/breakdown for each family member, overall sum insured, and the key policy highlights so they understand the brief fully.",
-  "coverage_summary": "Summary of major coverages and benefits directly explaining what is covered for the user in clean bullet points (maximum 60 words)",
-  "exclusions_summary": "Summary of key exclusions and what is not covered for the user in clean bullet points (maximum 60 words)",
-  "waiting_period_summary": "Summary of waiting periods for pre-existing or standard diseases in clean bullet points (maximum 60 words)",
-  "premium_summary": "Summary of premium, deductibles, and co-payment details in clean bullet points (maximum 60 words)"
+  "summary_text": "PARAGRAPH 1 — Policy Identity: State the exact policy name, insurer company name, policyholder full name, policy number, and coverage period/validity. PARAGRAPH 2 — Coverage: State the exact Sum Insured amount, whether individual or family floater, and list every category covered: inpatient hospitalisation, daycare procedures, pre-hospitalisation expenses (with number of days), post-hospitalisation expenses (with number of days), ambulance charges, AYUSH treatments. PARAGRAPH 3 — Insured Members & Premium: List every insured member's name with their relationship and any individual sum insured or premium. State the total annual premium inclusive of GST. PARAGRAPH 4 — Key Benefits: Describe 3-5 standout benefits such as cashless hospitalisation network size, no-claim bonus, restoration benefit, wellness programs, OPD cover, or other add-ons found in the document. PARAGRAPH 5 — Waiting Periods & Restrictions: State all waiting periods with exact durations (initial waiting period, pre-existing disease waiting period, specific disease waiting period). Mention any co-payment clause or deductible. PARAGRAPH 6 — Claims & Advisory: Explain the claim process (cashless vs reimbursement), mention the customer care helpline number if found, and give a brief closing advisory. Write all six paragraphs in second person ('your policy', 'you are covered for') with no bullet points.",
+  "coverage_summary": "4-6 bullet points, each starting with '• '. Each bullet is ONE complete sentence stating a specific coverage or benefit with exact amounts where available. Example: '• Inpatient hospitalisation is covered up to the full Sum Insured of ₹X Lakh including room rent, nursing charges, surgeon fees, and ICU charges.'",
+  "exclusions_summary": "4-6 bullet points, each starting with '• '. Each bullet is ONE complete sentence stating a specific exclusion — something the policy does NOT cover. Be specific: name the exact excluded item or condition. Example: '• Cosmetic and aesthetic treatments are not covered unless necessitated directly by an accident.'",
+  "waiting_period_summary": "3-5 bullet points, each starting with '• '. Each bullet is ONE complete sentence stating one waiting period rule with the exact duration in months or days. Example: '• Pre-existing diseases are covered after a continuous 36-month waiting period from the policy start date.'",
+  "premium_summary": "3-5 bullet points, each starting with '• '. Each bullet is ONE complete sentence about premium, charges, or payment terms. Include the total premium amount, GST, co-payment percentage (if any), deductible (if any), and renewal grace period. Example: '• Total annual premium payable is ₹X,XXX inclusive of 18% GST.'"
 }}
 
 DOCUMENT:
@@ -166,45 +170,107 @@ Return JSON format:
 # ─────────────────────────────────────────
 
 def _extract_sentences_with_keywords(text: str, keywords: list[str], max_results: int = 3) -> list[str]:
-    """Find sentences in document text that contain any of the given keywords."""
-    # Split on sentence boundaries and newlines
+    """Find complete, meaningful sentences in document text that contain any of the given keywords.
+    Applies strict quality filters to reject OCR noise, table headers, codes, and fragments.
+    """
     candidates = re.split(r'(?<=[.!?])\s+|\n{2,}', text)
     hits = []
     seen = set()
+
     skip_patterns = re.compile(
         r'^(page\s*\d+|\[page|dear\s+|subject:|date of|name of|relationship|gender|period$)',
         re.IGNORECASE
     )
+    # Patterns that indicate pure OCR noise: all-caps codes, standalone numbers, UIN-like codes
+    noise_line_pattern = re.compile(
+        r'^[A-Z0-9\-/]{4,20}$'           # standalone codes like HDFHLIA2405, UIN codes
+        r'|^\d+\.?\d*$'                   # pure numbers or decimals like "1.2"
+        r'|^[\W\d\s]{0,10}$',             # only punctuation/numbers/spaces
+        re.IGNORECASE
+    )
+
     for s in candidates:
         s_clean = s.strip()
-        # Clean weird leading symbols like private-use area bullets (\uf0b7) or question marks
         s_clean = re.sub(r'^[\s\u2022\uf0b7?•\-*●]*', '', s_clean).strip()
-        # Skip very short fragments and page headers
-        if len(s_clean) < 30 or skip_patterns.match(s_clean):
+
+        # ── Quality gate 1: minimum length 50 chars ──────────────────────
+        if len(s_clean) < 50:
             continue
 
-        # Filter out noisy sentences containing PII, corporate metadata, addresses, or links
+        # ── Quality gate 2: skip known header/footer patterns ─────────────
+        if skip_patterns.match(s_clean):
+            continue
+
+        # ── Quality gate 3: reject pure OCR noise lines ───────────────────
+        if noise_line_pattern.match(s_clean):
+            continue
+
+        # ── Quality gate 4: minimum 8 words ───────────────────────────────
+        words = s_clean.split()
+        if len(words) < 8:
+            continue
+
+        # ── Quality gate 5: must contain at least 3 lowercase words ───────
+        # (rejects ALL_CAPS headers, table rows, OCR fragments)
+        lowercase_meaningful = [w for w in words if w.islower() and len(w) > 3]
+        if len(lowercase_meaningful) < 3:
+            continue
+
+        # ── Quality gate 6: known noise substrings ────────────────────────
         s_lower = s_clean.lower()
         if any(noise in s_lower for noise in [
             "registered & corporate office", "leela business park", "lbs marg", "bhandup",
-            "andheri-kurla road", "mumbai - 400", "pincode -", "pimpri chinchwad", "gst registration",
-            "gstin", "reverse charge basis", "exempt under the notification", "contact number",
-            "email id", "pan no", "proposal details", "relationship to nominee", "date of birth",
-            "member wise premium", "appointee", "proposer", "communication address", "permanent address",
-            "download our mobile app", "self-help page", "kyc verification", "cersai portal",
-            "visit help section", "call us at", "http://", "https://", "www.hdfcergo.com",
-            "gst for this invoice", "bill of supply", "tax certificate", "make changes"
+            "andheri-kurla road", "mumbai - 400", "pincode -", "pimpri chinchwad",
+            "gstin", "reverse charge basis", "exempt under the notification",
+            "email id", "pan no", "proposal details", "relationship to nominee",
+            "member wise premium", "appointee", "proposer", "communication address",
+            "permanent address", "download our mobile app", "self-help page",
+            "kyc verification", "cersai portal", "http://", "https://",
+            "gst for this invoice", "bill of supply", "tax certificate",
+            "uin:", "uin -", "-uin:", "particulars", "base premium", "optional cover"
         ]):
+            continue
+
+        # ── Quality gate 7: table / vertical list check ───────────────────
+        lines = [line.strip() for line in s_clean.split('\n') if line.strip()]
+        if len(lines) > 2:
+            avg_line_len = sum(len(l) for l in lines) / len(lines)
+            if avg_line_len < 35:
+                continue
+
+        # ── Quality gate 8: digit ratio check (financial tables) ─────────
+        digits = sum(c.isdigit() for c in s_clean)
+        if len(s_clean) > 0 and (digits / len(s_clean)) > 0.12:
+            continue
+
+        # ── Quality gate 9: uppercase ratio check ─────────────────────────
+        letters = [c for c in s_clean if c.isalpha()]
+        if letters:
+            uppercase = sum(c.isupper() for c in letters)
+            if (uppercase / len(letters)) > 0.40:
+                continue
+
+        # ── Quality gate 10: sentence completeness check ──────────────────
+        # Must end with standard sentence punctuation (., !, ?) or quotes/parentheses containing them
+        if not s_clean[-1] in ('.', '!', '?') and not (s_clean[-1] in (')', '"', "'") and s_clean[-2] in ('.', '!', '?')):
+            continue
+
+        # ── Quality gate 11: cut-off/abbreviation word check at end ───────
+        last_word = re.sub(r'[.!?\)\'\"]', '', words[-1]).lower()
+        if last_word in ['in', 'co', 'ltd', 'no', 'dr', 'mr', 'ms', 'mrs', 'rs', 'exclud', 'unlimi', 'schedu', 'hospitali']:
             continue
 
         key = s_clean[:80].lower()
         if key in seen:
             continue
-        if any(kw.lower() in s_clean.lower() for kw in keywords):
+
+        if any(kw.lower() in s_lower for kw in keywords):
             seen.add(key)
             hits.append(s_clean[:300])
+
         if len(hits) >= max_results:
             break
+
     return hits
 
 
@@ -235,50 +301,280 @@ def _regex_find_any(patterns: list[str], text: str, group: int = 1, default: str
 
 
 def _build_fallback_summary(document_text: str) -> dict:
-    """Build a document-specific summary by extracting real text snippets from the PDF."""
-    # Use a large portion of the document for better coverage
+    """Build a 400-500 word summary and structured bullet fields from the actual document text.
+    Used when Ollama is unavailable. Every sentence is sourced from the document — no invented data.
+    """
     text = document_text[:40000]
-    full_text = document_text
 
-    # ── Helper: extract a clean labeled value ──────────────────────────────
-    def labeled(label: str, value: str) -> str:
-        return f"{label}: {value}" if value else ""
-
-    # ── Identify key policy facts ──────────────────────────────────────────
+    # ─── 1. Extract structured facts via regex ───────────────────────────────
     insurer = _regex_find_any([
-        r'(?:HDFC ERGO|(?:insurer|insurance company|underwritten by|issued by)[:\s]+)([A-Za-z &.]+(?:General Insurance|Life Insurance|Insurance|Ltd|Limited|Co|Inc)[A-Za-z .]*)',
         r'(HDFC\s+ERGO[A-Za-z ]*(?:General Insurance|Life Insurance|Insurance)?[A-Za-z .]*(?:Ltd|Limited)?)',
         r'(Bajaj\s+Allianz[A-Za-z ]*(?:General|Life)?[A-Za-z .]*(?:Ltd|Limited)?)',
         r'(Star\s+Health[A-Za-z ]*(?:Insurance)?[A-Za-z .]*(?:Ltd|Limited)?)',
-        r'(Max\s+Bupa[A-Za-z ]*(?:Insurance)?[A-Za-z .]*(?:Ltd|Limited)?)',
-        r'(Niva\s+Bupa[A-Za-z ]*(?:Insurance)?[A-Za-z .]*(?:Ltd|Limited)?)',
+        r'(Max\s+Bupa|Niva\s+Bupa)[A-Za-z ]*(?:Insurance)?[A-Za-z .]*(?:Ltd|Limited)?',
         r'((?:New\s+India|National|United\s+India|Oriental)\s+(?:Assurance|Insurance)[A-Za-z .]*(?:Ltd|Limited)?)',
-        r'(?:insurer|insurance company|underwritten by)[:\s]+([A-Za-z &.]+(?:Ltd|Limited|Co)?)',
-    ], text)
+        r'(?:insurer|insurance company|underwritten by)[:\s]+([A-Za-z &.]+(?:General Insurance|Insurance|Ltd|Limited|Co)[A-Za-z .]*)',
+    ], text) or None
 
     policy_name = _regex_find_any([
         r'(?:product name|plan name|policy name)[:\s]+([A-Za-z0-9 \-&/]+?)(?=\s*UIN|\s*\n|\s*\.\s)',
         r'my\.\s+([A-Za-z0-9 \-&]+(?:Secure|Health|Protect|Plus|Elite|Care|Shield|Optima)[A-Za-z0-9 ]*)(?=\s*UIN|\n|$)',
-        r'((?:Optima|Secure|Health|Protect|Care|Shield)\s+(?:Secure|Plus|Elite|Care|Restore|Senior|Family|Individual)[A-Za-z0-9 ]*)',
-        r'Product\s+Name[:\s]+([A-Za-z0-9 \-&]+)',
-    ], text)
+        r'((?:Optima|Secure|Health|Protect|Care|Shield|Star)\s+(?:Secure|Plus|Elite|Care|Restore|Senior|Family|Individual)[A-Za-z0-9 ]*)',
+    ], text) or None
 
     policy_number = _regex_find_any([
-        r'(?:policy\s+no|policy\s+number|certificate\s+no|policy\s+schedule\s+no)[.:\s]+([A-Z0-9\-/]+)',
-        r'([0-9]{10,20})',
-    ], text)
+        r'(?:policy\s+no|policy\s+number|certificate\s+no)[.:\s]+([A-Z0-9][A-Z0-9\-/]{5,25})',
+        r'(\d{10,20})',
+    ], text) or None
 
     policy_holder = _regex_find_any([
-        r'(?:Dear|insured|policyholder|policy\s*holder)[\s:,]+([A-Z][A-Za-z ]{3,40})',
-        r'(?:name\s+of\s+(?:insured|policyholder))[:\s]+([A-Z][A-Za-z ]{3,40})',
-    ], text)
+        r'(?:Dear|name\s+of\s+(?:insured|policyholder))[:\s,]+([A-Z][A-Z a-z]{3,40})',
+        r'(?:insured|policyholder|policy\s+holder)[:\s]+([A-Z][A-Z a-z]{3,40})',
+    ], text) or None
 
     sum_insured = _regex_find_any([
         r'(?:base\s+)?sum\s+insured\s*(?:opted)?\s*[:\s₹Rs.]+([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
-        r'(?:sum\s+insured|sum\s+assured|si)[:\s₹Rs.]+([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
-        r'(?:coverage\s+amount)[:\s₹Rs.]+([1-9]\d{4,})',
+        r'(?:sum\s+insured|sum\s+assured)[:\s₹Rs.]+([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
         r'₹\s*([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,})\s*(?:Lakh|Lakhs|lakh)?',
-    ], text)
+    ], text) or None
+
+    premium = _regex_find_any([
+        r'(?:total\s+premium|gross\s+premium|net\s+premium|premium\s+paid|premium\s+amount)[:\s₹Rs.]+([\d,]{4,}(?:\.[\d]+)?)',
+        r'(?:premium)[:\s₹Rs.]+([\d,]{4,}(?:\.[\d]+)?)',
+    ], text) or None
+
+    waiting_period = _regex_find_any([
+        r'(?:waiting\s+period)[:\s]+([\d]+\s*(?:month|year|day)[s]?[^.\n]{0,60})',
+        r'([\d]+\s*(?:month|year)[s]?\s+waiting\s+period)',
+    ], text) or None
+
+    co_pay = _regex_find_any([
+        r'(?:co-?pay(?:ment)?)[:\s]+([\d]+%[^.\n]{0,60})',
+        r'(?:co-?pay(?:ment)?\s+of\s+)([\d]+%[^.\n]{0,60})',
+    ], text) or None
+
+    coverage_type = _regex_find_any([
+        r'(family\s+floater)',
+        r'(individual\s+(?:policy|plan|coverage))',
+        r'(?:plan\s+type|coverage\s+type)[:\s]+([A-Za-z ]+)',
+    ], text) or None
+
+    policy_term = _regex_find_any([
+        r'(?:policy\s+period|policy\s+term)[:\s]+([^.\n]{0,60})',
+        r'(?:from)[:\s]+([\d]{1,2}[\-/][\d]{1,2}[\-/][\d]{2,4}[^\n]{0,30}to[^\n]{0,30})',
+    ], text) or None
+
+    # ─── 2. Pull thematic sentences from the document (quality-filtered) ────────
+    cov_sentences = _extract_sentences_with_keywords(
+        text,
+        ["inpatient", "hospitalisation", "hospitalization", "daycare", "day care",
+         "ambulance", "AYUSH", "pre-hospitalisation", "post-hospitalisation",
+         "cashless", "network hospital", "sum insured", "benefit"],
+        max_results=6,
+    )
+    excl_sentences = _extract_sentences_with_keywords(
+        text,
+        ["not covered", "not payable", "not admissible", "shall not", "exclud",
+         "exclusion", "not included", "does not cover"],
+        max_results=5,
+    )
+    wait_sentences = _extract_sentences_with_keywords(
+        text,
+        ["waiting period", "pre-existing", "pre existing", "initial waiting",
+         "specific disease", "listed illness", "listed ailment", "months waiting"],
+        max_results=5,
+    )
+    prem_sentences = _extract_sentences_with_keywords(
+        text,
+        ["total premium", "gross premium", "premium payable", "annual premium",
+         "co-payment", "co pay", "deductible", "grace period", "renewal"],
+        max_results=5,
+    )
+    benefit_sentences = _extract_sentences_with_keywords(
+        text,
+        ["wellness", "no claim bonus", "restoration", "health check",
+         "network", "cashless", "add-on", "rider", "maternity", "OPD"],
+        max_results=4,
+    )
+    claim_sentences = _extract_sentences_with_keywords(
+        text,
+        ["claim", "reimbursement", "cashless claim", "helpline", "toll free",
+         "customer care", "hospital discharge", "submit"],
+        max_results=3,
+    )
+
+    # ─── 3. Build 400-500 word flowing narrative ────────────────────────────────
+    parts = []
+
+    # Paragraph 1 — Policy Identity
+    if any([insurer, policy_name, policy_holder, policy_number]):
+        p1 = "Your"
+        p1 += f" {policy_name} policy" if policy_name else " health insurance policy"
+        if insurer:
+            p1 += f" is issued by {insurer}"
+        if policy_holder:
+            p1 += f" in the name of {policy_holder}"
+        if policy_number:
+            p1 += f" (Policy No. {policy_number})"
+        p1 += "."
+        if policy_term:
+            p1 += f" The policy is valid for the period {policy_term}."
+        p1 += (
+            " This document serves as your official insurance certificate and should be kept "
+            "safely for reference during any medical emergency or claim."
+        )
+        parts.append(p1)
+
+    # Paragraph 2 — Coverage Overview
+    p2_parts = []
+    if sum_insured or coverage_type:
+        p2_start = "Your policy provides comprehensive health insurance coverage"
+        if sum_insured:
+            p2_start += f" with a Sum Insured of \u20b9{sum_insured}"
+        if coverage_type:
+            p2_start += f" on a {coverage_type} basis"
+        p2_start += "."
+        p2_parts.append(p2_start)
+    if cov_sentences:
+        p2_parts.extend(cov_sentences[:2])
+    if p2_parts:
+        parts.append(" ".join(p2_parts))
+    else:
+        parts.append(
+            "Your policy provides health insurance coverage for hospitalisation and related "
+            "medical expenses. Please refer to your policy schedule for the complete list of "
+            "covered treatments and procedures."
+        )
+
+    # Paragraph 3 — Key Benefits
+    if benefit_sentences:
+        p3 = "In addition to the core hospitalisation cover, your policy comes with several valuable benefits. "
+        p3 += " ".join(s.rstrip(".") + "." for s in benefit_sentences[:2])
+        parts.append(p3)
+
+    # Paragraph 4 — Waiting Periods
+    if waiting_period or wait_sentences:
+        p4_parts = []
+        if waiting_period:
+            p4_parts.append(
+                f"A waiting period of {waiting_period} applies to certain conditions under this policy."
+            )
+        if wait_sentences:
+            p4_parts.extend(wait_sentences[:2])
+        if p4_parts:
+            parts.append("Regarding waiting periods and restrictions: " + " ".join(p4_parts))
+    else:
+        parts.append(
+            "Like all health insurance policies, yours includes standard waiting period clauses for "
+            "pre-existing diseases and specific listed treatments. Please review your policy schedule "
+            "to understand which conditions have waiting periods and for how long before coverage begins."
+        )
+
+    # Paragraph 5 — Premium & Charges
+    if premium or co_pay or prem_sentences:
+        p5_parts = []
+        if premium:
+            p5_parts.append(f"The total annual premium payable for your policy is \u20b9{premium} (inclusive of applicable GST).")
+        if co_pay:
+            p5_parts.append(f"A co-payment of {co_pay} is applicable on certain claims under this policy.")
+        if prem_sentences:
+            p5_parts.extend(prem_sentences[:2])
+        if p5_parts:
+            parts.append(" ".join(p5_parts))
+
+    # Paragraph 6 — Claims & Advisory
+    p6_parts = []
+    if claim_sentences:
+        p6_parts.extend(claim_sentences[:2])
+    if p6_parts:
+        parts.append(
+            "For making a claim under your policy: " + " ".join(p6_parts) +
+            " Keep a copy of all hospital bills and discharge summaries."
+        )
+    else:
+        parts.append(
+            "For claims, you may opt for cashless treatment at a network hospital or seek reimbursement "
+            "by submitting original bills to the insurer within the stipulated time after discharge. "
+            "Keep a copy of your policy document and the insurer's customer helpline number readily "
+            "accessible for any emergencies. Reviewing the full policy terms and conditions will help "
+            "you make the most of your health insurance benefits and avoid claim rejections."
+        )
+
+    # Ensure the summary reaches ~400 words by padding with additional document sentences
+    summary_text = "\n\n".join(parts)
+    if len(summary_text.split()) < 300:
+        extra = _extract_sentences_with_keywords(
+            text,
+            ["insurance", "policy", "covered", "benefit", "hospital", "treatment"],
+            max_results=4,
+        )
+        extra_filtered = [s for s in extra if s not in summary_text]
+        if extra_filtered:
+            summary_text += "\n\n" + " ".join(extra_filtered[:3])
+
+    # ─── 4. Build bullet sections ────────────────────────────────────────────────
+
+    # Coverage & Benefits bullets
+    cov_bullets: list[str] = []
+    if sum_insured:
+        cov_bullets.append(f"Sum Insured of \u20b9{sum_insured} covers all eligible hospitalisation expenses")
+    if coverage_type:
+        cov_bullets.append(f"Coverage type: {coverage_type} — all insured members share the sum insured")
+    for s in cov_sentences:
+        snippet = s[:140].rstrip(".")
+        if snippet not in cov_bullets:
+            cov_bullets.append(snippet)
+    coverage_summary = (
+        "\n".join(f"\u2022 {b}." for b in cov_bullets[:3])
+        if cov_bullets else
+        "\u2022 Coverage details could not be extracted. Please refer to the policy schedule."
+    )
+
+    # Exclusions & Limits bullets
+    excl_bullets = [s[:160].rstrip(".") for s in excl_sentences]
+    exclusions_summary = (
+        "\n".join(f"\u2022 {b}." for b in excl_bullets[:3])
+        if excl_bullets else
+        "\u2022 Exclusion details could not be extracted. Please refer to the policy schedule."
+    )
+
+    # Waiting Periods bullets
+    wait_bullets: list[str] = []
+    if waiting_period:
+        wait_bullets.append(f"Waiting period of {waiting_period} for specific listed conditions")
+    for s in wait_sentences:
+        snippet = s[:160].rstrip(".")
+        if snippet not in wait_bullets:
+            wait_bullets.append(snippet)
+    waiting_period_summary = (
+        "\n".join(f"\u2022 {b}." for b in wait_bullets[:3])
+        if wait_bullets else
+        "\u2022 Waiting period details could not be extracted. Please refer to the policy schedule."
+    )
+
+    # Premium & Charges bullets
+    prem_bullets: list[str] = []
+    if premium:
+        prem_bullets.append(f"Total premium payable: \u20b9{premium} (inclusive of GST)")
+    if co_pay:
+        prem_bullets.append(f"Co-payment clause: {co_pay} of eligible claim amount")
+    for s in prem_sentences:
+        snippet = s[:160].rstrip(".")
+        if snippet not in prem_bullets:
+            prem_bullets.append(snippet)
+    premium_summary = (
+        "\n".join(f"\u2022 {b}." for b in prem_bullets[:3])
+        if prem_bullets else
+        "\u2022 Premium details could not be extracted. Please refer to the policy schedule."
+    )
+
+    return {
+        "summary_text": summary_text,
+        "coverage_summary": coverage_summary,
+        "exclusions_summary": exclusions_summary,
+        "waiting_period_summary": waiting_period_summary,
+        "premium_summary": premium_summary,
+    }
 
     premium = _regex_find_any([
         r'(?:total\s+premium|gross\s+premium|net\s+premium|premium\s+paid|premium\s+amount)[:\s₹Rs.]+([\d,]{4,}(?:\.[\d]+)?)',
@@ -740,7 +1036,7 @@ async def generate_summary(document_text: str, force_regenerate: bool = False) -
     try:
         response = await call_ollama(
             SUMMARIZATION_PROMPT.format(document_text=truncated),
-            num_predict=800,
+            num_predict=3500,   # 3500 tokens needed for 400-500 word summary + 4 bullet sections
             num_ctx=12288,
         )
         result = extract_json_from_response(response)

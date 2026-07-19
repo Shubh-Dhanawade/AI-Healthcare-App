@@ -54,3 +54,7 @@ trl==0.8.1
 datasets==2.19.1
 accelerate==0.29.3
 bitsandbytes==0.43.0
+
+# LangChain components for context-aware summarization
+langchain-core==1.4.9
+langchain-text-splitters==1.1.2

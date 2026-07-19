@@ -186,10 +186,15 @@ Output ONLY valid JSON with this format:
 # Text Chunking
 # ─────────────────────────────────────────
 
-def chunk_text(text: str, chunk_size: int = 500, overlap: int = 100) -> List[str]:
+def chunk_text(text: str, chunk_size: int = 800, overlap: int = 200) -> List[str]:
     """
-    Split text into overlapping chunks of roughly 400-600 characters,
-    preserving section boundaries, headings, and lab tests.
+    Split text into overlapping chunks of roughly 600-900 characters,
+    preserving section boundaries, headings, and clause text.
+
+    chunk_size=800 (was 500): insurance policies have dense single paragraphs;
+    larger chunks ensure a full maternity/coverage clause stays in one block.
+    overlap=200 (was 100): extra overlap keeps clause boundaries intact so
+    cross-paragraph terms are always present in at least one complete chunk.
     """
     if not text:
         return []
@@ -221,8 +226,8 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 100) -> List[str
                 sub_len += len(w) + 1
                 if sub_len >= chunk_size:
                     chunks.append(" ".join(sub_chunk_words))
-                    # Overlap: keep the last ~20% of words
-                    overlap_words = sub_chunk_words[-max(1, len(sub_chunk_words) // 5):]
+                    # Overlap: keep the last ~25% of words (increased from 20%)
+                    overlap_words = sub_chunk_words[-max(1, len(sub_chunk_words) // 4):]
                     sub_chunk_words = list(overlap_words)
                     sub_len = sum(len(x) + 1 for x in sub_chunk_words)
             if sub_chunk_words:
@@ -250,6 +255,7 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 100) -> List[str
         chunks.append("\n\n".join(current_chunk))
         
     return [c.strip() for c in chunks if c.strip()]
+
 
 
 # ─────────────────────────────────────────

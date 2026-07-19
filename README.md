@@ -230,7 +230,6 @@ python -m venv venv
 
 pip install -r requirements.txt
 cp .env.example .env
-# Edit .env -> DATABASE_URL=sqlite+aiosqlite:///./healthcare_ai.db
 
 # Ensure Ollama is running locally and pull models
 ollama serve

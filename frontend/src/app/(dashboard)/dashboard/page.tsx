@@ -1,12 +1,14 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
-import { documentsApi } from '@/lib/apiHelpers';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { documentsApi, remindersApi } from '@/lib/apiHelpers';
 import { Document } from '@/types';
 import { useAuth } from '@/contexts/AuthContext';
 import { FileText, Upload, Shield, Brain, TrendingUp, Clock, CheckCircle, AlertTriangle, Cpu } from 'lucide-react';
 import Link from 'next/link';
 import DocumentStatusBadge from '@/components/documents/DocumentStatusBadge';
+import { useState } from 'react';
+import toast from 'react-hot-toast';
 
 function StatCard({ icon, label, value, color }: { icon: React.ReactNode; label: string; value: string | number; color: string }) {
   return (
@@ -25,6 +27,70 @@ function StatCard({ icon, label, value, color }: { icon: React.ReactNode; label:
 
 export default function DashboardPage() {
   const { user } = useAuth();
+  const queryClient = useQueryClient();
+
+  // Reminders / Alerts queries & states
+  const { data: reminders = [], isLoading: isLoadingReminders, refetch: refetchReminders } = useQuery<any[]>({
+    queryKey: ['reminders'],
+    queryFn: remindersApi.list,
+    enabled: user?.role !== 'admin',
+  });
+  const activeReminders = reminders.filter(r => !r.is_dismissed);
+
+  const [editingReminder, setEditingReminder] = useState<any | null>(null);
+  const [editRenewalDate, setEditRenewalDate] = useState('');
+  const [editPremiumDueDate, setEditPremiumDueDate] = useState('');
+  const [editPremiumAmount, setEditPremiumAmount] = useState('');
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+
+  const getFileNameFromTitle = (title: string) => {
+    return title.replace("Policy Renewal Approaching: ", "").replace("Premium Payment Approaching: ", "");
+  };
+
+  const handleDismissAlert = async (reminderId: string) => {
+    const toastId = toast.loading('Dismissing policy alert...');
+    try {
+      await remindersApi.dismiss(reminderId);
+      toast.success('Alert dismissed successfully!', { id: toastId });
+      refetchReminders();
+      queryClient.invalidateQueries({ queryKey: ['reminders'] });
+    } catch (e: any) {
+      console.error(e);
+      toast.error(e.response?.data?.detail || 'Failed to dismiss alert', { id: toastId });
+    }
+  };
+
+  const handleStartEditAlert = (reminder: any) => {
+    setEditingReminder(reminder);
+    setEditRenewalDate('');
+    setEditPremiumDueDate('');
+    setEditPremiumAmount(reminder.premium_amount ? String(reminder.premium_amount) : '');
+  };
+
+  const handleSaveAlertEdit = async () => {
+    if (!editingReminder) return;
+    setIsSavingEdit(true);
+    const toastId = toast.loading('Updating policy alert dates...');
+    try {
+      await remindersApi.schedule({
+        document_id: editingReminder.document_id,
+        renewal_date: editRenewalDate ? new Date(editRenewalDate).toISOString() : undefined,
+        premium_due_date: editPremiumDueDate ? new Date(editPremiumDueDate).toISOString() : undefined,
+        premium_amount: editPremiumAmount ? parseFloat(editPremiumAmount.replace(/[^\d.]/g, '')) : undefined,
+      });
+      toast.success('Alert dates updated successfully!', { id: toastId });
+      setEditingReminder(null);
+      refetchReminders();
+      queryClient.invalidateQueries({ queryKey: ['reminders'] });
+      queryClient.invalidateQueries({ queryKey: ['document', editingReminder.document_id] });
+    } catch (error: any) {
+      console.error(error);
+      toast.error(error.response?.data?.detail || 'Failed to update alert dates', { id: toastId });
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
   const { data: documents = [], isLoading } = useQuery<Document[]>({
     queryKey: ['documents'],
     queryFn: documentsApi.list,
@@ -233,55 +299,190 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      {/* Recent Documents */}
-      <div className="glass-card p-6">
-        <div className="flex items-center justify-between mb-5">
-          <h2 className="text-lg font-bold flex items-center gap-2">
-            <FileText className="w-5 h-5 text-blue-400" />
-            Recent Documents
-          </h2>
-          <Link href="/documents" className="text-sm text-blue-400 hover:text-blue-300">
-            View all →
-          </Link>
-        </div>
-
-        {isLoading ? (
-          <div className="space-y-3">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="skeleton h-16 w-full" />
-            ))}
-          </div>
-        ) : recentDocs.length === 0 ? (
-          <div className="text-center py-12">
-            <FileText className="w-12 h-12 text-slate-600 mx-auto mb-3" />
-            <p className="text-slate-400">No documents yet.</p>
-            <Link href="/upload" className="btn-primary mt-4 inline-flex">
-              <Upload className="w-4 h-4" /> Upload Your First Document
+      {/* Grid: Recent Documents & Alerts List */}
+      <div className="grid lg:grid-cols-12 gap-6">
+        
+        {/* Recent Documents */}
+        <div className="lg:col-span-7 glass-card p-6">
+          <div className="flex items-center justify-between mb-5">
+            <h2 className="text-lg font-bold flex items-center gap-2">
+              <FileText className="w-5 h-5 text-blue-400" />
+              Recent Documents
+            </h2>
+            <Link href="/documents" className="text-sm text-blue-400 hover:text-blue-300">
+              View all →
             </Link>
           </div>
-        ) : (
-          <div className="space-y-3">
-            {recentDocs.map((doc) => (
-              <Link
-                key={doc.id}
-                href={`/documents/${doc.id}`}
-                className="flex items-center justify-between p-4 rounded-xl transition-all hover:bg-white/5 border border-transparent hover:border-blue-500/20"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-lg flex items-center justify-center"
-                    style={{ background: doc.file_type === 'pdf' ? 'rgba(239,68,68,0.15)' : 'rgba(59,130,246,0.15)' }}>
-                    <FileText className="w-4 h-4" style={{ color: doc.file_type === 'pdf' ? '#f87171' : '#60a5fa' }} />
-                  </div>
-                  <div>
-                    <p className="font-medium text-sm truncate max-w-xs">{doc.original_filename}</p>
-                    <p className="text-xs text-slate-500">{new Date(doc.created_at).toLocaleDateString()}</p>
-                  </div>
-                </div>
-                <DocumentStatusBadge status={doc.status} />
+
+          {isLoading ? (
+            <div className="space-y-3">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="skeleton h-16 w-full" />
+              ))}
+            </div>
+          ) : recentDocs.length === 0 ? (
+            <div className="text-center py-12">
+              <FileText className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+              <p className="text-slate-400">No documents yet.</p>
+              <Link href="/upload" className="btn-primary mt-4 inline-flex">
+                <Upload className="w-4 h-4" /> Upload Your First Document
               </Link>
-            ))}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {recentDocs.map((doc) => (
+                <Link
+                  key={doc.id}
+                  href={`/documents/${doc.id}`}
+                  className="flex items-center justify-between p-4 rounded-xl transition-all hover:bg-white/5 border border-transparent hover:border-blue-500/20"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-lg flex items-center justify-center"
+                      style={{ background: doc.file_type === 'pdf' ? 'rgba(239,68,68,0.15)' : 'rgba(59,130,246,0.15)' }}>
+                      <FileText className="w-4 h-4" style={{ color: doc.file_type === 'pdf' ? '#f87171' : '#60a5fa' }} />
+                    </div>
+                    <div>
+                      <p className="font-medium text-sm truncate max-w-xs">{doc.original_filename}</p>
+                      <p className="text-xs text-slate-500">{new Date(doc.created_at).toLocaleDateString()}</p>
+                    </div>
+                  </div>
+                  <DocumentStatusBadge status={doc.status} />
+                </Link>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Smart Alerts & Policy Renewals List */}
+        <div className="lg:col-span-5 glass-card p-6 flex flex-col h-full">
+          <div className="flex items-center justify-between mb-5">
+            <h2 className="text-lg font-bold flex items-center gap-2">
+              <span className="text-blue-400">🔔</span>
+              Active Policy Alerts
+            </h2>
           </div>
-        )}
+
+          {isLoadingReminders ? (
+            <div className="space-y-3">
+              {[1, 2].map((i) => (
+                <div key={i} className="skeleton h-16 w-full" />
+              ))}
+            </div>
+          ) : activeReminders.length === 0 ? (
+            <div className="text-center py-12 flex-1 flex flex-col justify-center border border-dashed border-slate-800 rounded-xl bg-slate-950/10 min-h-[180px]">
+              <p className="text-slate-500 text-sm">No active alerts scheduled.</p>
+              <p className="text-slate-600 text-xs mt-1">Upload a policy to auto-configure alerts.</p>
+            </div>
+          ) : (
+            <div className="space-y-3 overflow-y-auto max-h-[350px] pr-1">
+              {activeReminders.map((reminder) => (
+                <div
+                  key={reminder.id}
+                  className="p-4 rounded-xl border border-white/5 bg-slate-900/10 space-y-3"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-semibold text-white truncate max-w-[240px]" title={reminder.title}>
+                        {getFileNameFromTitle(reminder.title)}
+                      </p>
+                      <div className="flex items-center gap-2 mt-1.5">
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold border capitalize ${
+                          reminder.reminder_type === 'renewal'
+                            ? 'bg-blue-500/10 text-blue-400 border-blue-500/20'
+                            : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                        }`}>
+                          {reminder.reminder_type}
+                        </span>
+                        {reminder.premium_amount && (
+                          <span className="text-[10px] text-slate-400">
+                            Amount: <strong className="text-slate-200">₹{reminder.premium_amount}</strong>
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-slate-500 mt-1">
+                        Alert Date: {new Date(reminder.reminder_date).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}
+                      </p>
+                    </div>
+
+                    {/* Action buttons */}
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <button
+                        onClick={() => handleStartEditAlert(reminder)}
+                        className="p-1.5 rounded-lg border border-slate-700/50 text-slate-400 hover:text-blue-400 hover:border-blue-500/30 transition-all cursor-pointer bg-slate-950/20"
+                        title="Edit dates & amount"
+                      >
+                        <span className="text-xs">✏️</span>
+                      </button>
+                      <button
+                        onClick={() => handleDismissAlert(reminder.id)}
+                        className="p-1.5 rounded-lg border border-slate-700/50 text-slate-400 hover:text-emerald-400 hover:border-emerald-500/30 transition-all cursor-pointer bg-slate-950/20"
+                        title="Mark as completed / dismiss"
+                      >
+                        <span className="text-xs">✅</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Inline Editor Drawer (only shown for editing reminder) */}
+                  {editingReminder?.id === reminder.id && (
+                    <div className="pt-3 border-t border-slate-800 space-y-3 animate-in slide-in-from-top-1 duration-200">
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[9px] text-slate-500 font-bold uppercase mb-1">Renewal Date</label>
+                          <input
+                            type="date"
+                            value={editRenewalDate}
+                            onChange={(e) => setEditRenewalDate(e.target.value)}
+                            className="form-input text-xs w-full bg-slate-950/40 p-1.5 h-8 rounded-lg"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[9px] text-slate-500 font-bold uppercase mb-1">Premium Due</label>
+                          <input
+                            type="date"
+                            value={editPremiumDueDate}
+                            onChange={(e) => setEditPremiumDueDate(e.target.value)}
+                            className="form-input text-xs w-full bg-slate-950/40 p-1.5 h-8 rounded-lg"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-[9px] text-slate-500 font-bold uppercase mb-1">Premium Amount</label>
+                        <input
+                          type="text"
+                          value={editPremiumAmount}
+                          onChange={(e) => setEditPremiumAmount(e.target.value)}
+                          placeholder="e.g. ₹15,596"
+                          className="form-input text-xs w-full bg-slate-950/40 p-1.5 h-8 rounded-lg"
+                        />
+                      </div>
+                      <div className="flex justify-end gap-2 pt-1">
+                        <button
+                          onClick={() => setEditingReminder(null)}
+                          className="px-2.5 py-1 rounded-lg text-[10px] font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={handleSaveAlertEdit}
+                          disabled={isSavingEdit}
+                          className="px-3 py-1 rounded-lg text-[10px] font-semibold bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white transition-colors flex items-center gap-1"
+                        >
+                          {isSavingEdit ? (
+                            <span className="w-2.5 h-2.5 border border-white/30 border-t-white rounded-full animate-spin" />
+                          ) : (
+                            'Save'
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
       </div>
     </div>
   );

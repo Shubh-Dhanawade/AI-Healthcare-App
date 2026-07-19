@@ -36,6 +36,319 @@ router = APIRouter()
 _analysis_in_progress: set = set()
 
 
+def _parse_date_string(date_str: str) -> Optional[datetime]:
+    import re
+    if not date_str:
+        return None
+    date_str = date_str.strip()
+    
+    # 1. DD/MM/YYYY or DD-MM-YYYY
+    m1 = re.search(r'(\d{1,2})[\-/](\d{1,2})[\-/](\d{4})', date_str)
+    if m1:
+        d, m, y = int(m1.group(1)), int(m1.group(2)), int(m1.group(3))
+        # Handle cases where year is first (YYYY-MM-DD)
+        if d > 1900:
+            y, m, d = d, m, int(m1.group(3))
+        try:
+            return datetime(y, m, d)
+        except ValueError:
+            pass
+
+    # 2. YYYY-MM-DD
+    m2 = re.search(r'(\d{4})[\-/](\d{1,2})[\-/](\d{1,2})', date_str)
+    if m2:
+        y, m, d = int(m2.group(1)), int(m2.group(2)), int(m2.group(3))
+        try:
+            return datetime(y, m, d)
+        except ValueError:
+            pass
+
+    # 3. DD-MMM-YYYY (e.g. 15-Jul-2024 or 15 Jul 2024)
+    months = {
+        'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+        'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
+    }
+    m3 = re.search(r'(\d{1,2})\s*[\-\s/]?\s*([A-Za-z]{3})[a-z]*\s*[\-\s/]?\s*(\d{4})', date_str, re.IGNORECASE)
+    if m3:
+        d = int(m3.group(1))
+        mon_str = m3.group(2).lower()
+        y = int(m3.group(3))
+        if mon_str in months:
+            m = months[mon_str]
+            try:
+                return datetime(y, m, d)
+            except ValueError:
+                pass
+    return None
+
+
+def _parse_premium_amount(prem_str: str) -> Optional[float]:
+    import re
+    if not prem_str:
+        return None
+    # Remove currency symbols, commas, and spaces
+    cleaned = re.sub(r'[^\d.]', '', prem_str)
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
+
+
+async def _auto_schedule_policy_alerts(db, doc, fields_data) -> None:
+    from sqlalchemy import delete
+    from app.models.reminder import PolicyReminder
+    
+    extracted_renewal = None
+    extracted_premium_due = None
+    extracted_premium_val = None
+
+    for field in fields_data:
+        name_lower = field["field_name"].lower()
+        val = field["field_value"]
+        if not val or val == "Not found in document":
+            continue
+        if any(x in name_lower for x in ["renewal date", "expiry date", "valid to", "policy end date", "period of insurance to"]):
+            extracted_renewal = _parse_date_string(val)
+        elif any(x in name_lower for x in ["premium due", "payment due"]):
+            extracted_premium_due = _parse_date_string(val)
+        elif any(x in name_lower for x in ["premium amount", "gross premium", "net premium", "total premium"]):
+            extracted_premium_val = _parse_premium_amount(val)
+
+    # Use renewal date if no separate premium due date
+    target_prem_due = extracted_premium_due or extracted_renewal
+
+    if extracted_renewal:
+        doc.renewal_date = extracted_renewal
+        
+        # Clear existing renewal alerts
+        await db.execute(delete(PolicyReminder).where(
+            PolicyReminder.document_id == doc.id,
+            PolicyReminder.reminder_type == "renewal"
+        ))
+        
+        # Create renewal reminder (7 days prior)
+        trigger_date = extracted_renewal - timedelta(days=7)
+        r1 = PolicyReminder(
+            user_id=doc.user_id,
+            document_id=doc.id,
+            title=f"Policy Renewal Approaching: {doc.original_filename}",
+            reminder_type="renewal",
+            reminder_date=trigger_date,
+            is_dismissed=False
+        )
+        db.add(r1)
+        logger.info(f"[AUTO-ALERT] Scheduled renewal reminder for doc {doc.id} on {trigger_date}")
+
+    if target_prem_due and extracted_premium_val:
+        doc.premium_due_date = target_prem_due
+        
+        # Clear existing premium alerts
+        await db.execute(delete(PolicyReminder).where(
+            PolicyReminder.document_id == doc.id,
+            PolicyReminder.reminder_type == "premium"
+        ))
+        
+        # Create premium reminder (5 days prior)
+        trigger_date = target_prem_due - timedelta(days=5)
+        r2 = PolicyReminder(
+            user_id=doc.user_id,
+            document_id=doc.id,
+            title=f"Premium Payment Approaching: {doc.original_filename}",
+            reminder_type="premium",
+            reminder_date=trigger_date,
+            premium_amount=str(extracted_premium_val),
+            is_dismissed=False
+        )
+        db.add(r2)
+        logger.info(f"[AUTO-ALERT] Scheduled premium reminder for doc {doc.id} on {trigger_date}")
+
+    # Trigger email notification to user
+    try:
+        user = doc.user
+        if user:
+            send_alert_email_notification(
+                user_name=user.full_name or user.email,
+                user_email=user.email,
+                policy_name=doc.original_filename,
+                renewal_date=doc.renewal_date,
+                premium_due_date=doc.premium_due_date,
+                premium_amount=str(extracted_premium_val) if extracted_premium_val else None
+            )
+    except Exception as email_err:
+        logger.error(f"Failed to trigger auto email notification for reminder: {email_err}")
+
+
+def send_alert_email_notification(
+    user_name: str,
+    user_email: str,
+    policy_name: str,
+    renewal_date: Optional[datetime],
+    premium_due_date: Optional[datetime],
+    premium_amount: Optional[str]
+) -> None:
+    """Send or log a localized policy alert configuration email notification to the registered user."""
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    import smtplib
+    import os
+    import uuid
+    from loguru import logger
+
+    # 1. Format dates
+    renewal_str = renewal_date.strftime('%Y-%m-%d') if renewal_date else "Not set"
+    premium_due_str = premium_due_date.strftime('%Y-%m-%d') if premium_due_date else "Not set"
+    premium_val_str = premium_amount if premium_amount else "Not set"
+
+    # 2. Build email body HTML
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <style>
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                background-color: #f8fafc;
+                margin: 0;
+                padding: 30px;
+                color: #1e293b;
+            }}
+            .card {{
+                max-width: 580px;
+                margin: 0 auto;
+                background: #ffffff;
+                border-radius: 12px;
+                border: 1px solid #e2e8f0;
+                box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05);
+                overflow: hidden;
+            }}
+            .header {{
+                background: linear-gradient(135deg, #1e3a8a, #3b82f6);
+                padding: 30px 20px;
+                text-align: center;
+                color: #ffffff;
+            }}
+            .header h2 {{ margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.025em; }}
+            .body {{ padding: 30px 25px; }}
+            .greeting {{ font-size: 16px; font-weight: 600; color: #0f172a; margin-bottom: 12px; }}
+            .text {{ font-size: 14px; line-height: 1.6; color: #475569; margin-bottom: 25px; }}
+            .details-box {{
+                background-color: #f1f5f9;
+                border-radius: 8px;
+                padding: 20px;
+                margin-bottom: 25px;
+                border: 1px solid #e2e8f0;
+            }}
+            .detail-row {{
+                display: flex;
+                justify-content: space-between;
+                font-size: 13px;
+                padding: 8px 0;
+                border-bottom: 1px dashed #cbd5e1;
+            }}
+            .detail-row:last-child {{ border-bottom: none; }}
+            .detail-label {{ color: #64748b; font-weight: 500; }}
+            .detail-value {{ color: #0f172a; font-weight: 600; }}
+            .footer {{
+                background-color: #f8fafc;
+                padding: 20px;
+                text-align: center;
+                font-size: 11px;
+                color: #94a3b8;
+                border-top: 1px solid #e2e8f0;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <div class="header">
+                <h2>Policy Reminder Configured ⏰</h2>
+            </div>
+            <div class="body">
+                <div class="greeting">Dear {user_name},</div>
+                <div class="text">
+                    This is an automated notification to confirm that smart renewal and premium alerts have been successfully set up for your insurance policy. The system will monitor deadlines and alert you prior to the due dates.
+                </div>
+                <div class="details-box">
+                    <div class="detail-row">
+                        <span class="detail-label">Policy Name:</span>
+                        <span class="detail-value">{policy_name}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Renewal Date:</span>
+                        <span class="detail-value">{renewal_str}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Premium Due Date:</span>
+                        <span class="detail-value">{premium_due_str}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Premium Amount:</span>
+                        <span class="detail-value">{premium_val_str}</span>
+                    </div>
+                </div>
+                <div class="text" style="font-size: 12px; color: #64748b; background-color: #eff6ff; border: 1px solid #bfdbfe; padding: 12px; border-radius: 8px;">
+                    ℹ️ <strong>Reminder triggers:</strong> Renewal notifications will trigger 7 days prior, and premium notifications will trigger 5 days prior.
+                </div>
+            </div>
+            <div class="footer">
+                This is an auto-generated notification. Please do not reply to this email.<br>
+                &copy; HealthPolicyLens Corp.
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+
+    # 3. Setup email structure
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = f"[HealthPolicyLens] Active Alert Configured: {policy_name}"
+    msg["From"] = "noreply@healthpolicylens.local"
+    msg["To"] = user_email
+    
+    text_fallback = (
+        f"Dear {user_name},\n\n"
+        f"Your policy alert has been configured for {policy_name}.\n"
+        f"Renewal Date: {renewal_str}\n"
+        f"Premium Due Date: {premium_due_str}\n"
+        f"Premium Amount: {premium_val_str}\n\n"
+        f"Best regards,\nHealthPolicyLens Team"
+    )
+    part1 = MIMEText(text_fallback, "plain")
+    part2 = MIMEText(html_content, "html")
+    msg.attach(part1)
+    msg.attach(part2)
+    
+    # 4. Try sending SMTP or write to local debug folder
+    sent_successfully = False
+    try:
+        smtp_server = os.getenv("SMTP_SERVER")
+        smtp_port = int(os.getenv("SMTP_PORT", "587"))
+        smtp_user = os.getenv("SMTP_USER")
+        smtp_password = os.getenv("SMTP_PASSWORD")
+        
+        if smtp_server and smtp_user and smtp_password:
+            with smtplib.SMTP(smtp_server, smtp_port) as server:
+                server.starttls()
+                server.login(smtp_user, smtp_password)
+                server.sendmail(msg["From"], msg["To"], msg.as_string())
+            sent_successfully = True
+            logger.info(f"📧 Notification email successfully sent via SMTP to {user_email}")
+    except Exception as e:
+        logger.error(f"Failed to send alert notification email via SMTP: {e}")
+        
+    if not sent_successfully:
+        debug_dir = "./logs/sent_emails"
+        os.makedirs(debug_dir, exist_ok=True)
+        debug_filepath = f"{debug_dir}/alert_notif_{uuid.uuid4().hex[:6]}.html"
+        try:
+            with open(debug_filepath, "w", encoding="utf-8") as f:
+                f.write(html_content)
+            logger.info(f"💾 Logged outgoing alert email locally to: {debug_filepath}")
+        except Exception as io_err:
+            logger.error(f"Failed to write alert email debug log: {io_err}")
+
+
 async def _run_fields_background(doc_id: str, force_regenerate: bool = False) -> None:
     """Server-side asyncio task: Extract Fields only. Launched via create_task()."""
     from app.core.database import AsyncSessionLocal
@@ -77,11 +390,19 @@ async def _run_fields_background(doc_id: str, force_regenerate: bool = False) ->
                     field_category=field.get("field_category"),
                 ))
 
-            # Update document status
-            result = await db.execute(select(Document).where(Document.id == doc_id))
+            # Update document status & auto alerts
+            result = await db.execute(
+                select(Document)
+                .options(selectinload(Document.user))
+                .where(Document.id == doc_id)
+            )
             doc = result.scalar_one_or_none()
-            if doc and doc.status not in ("completed",):
-                doc.status = "completed"
+            if doc:
+                if doc.status not in ("completed",):
+                    doc.status = "completed"
+                
+                # Auto schedule alerts based on extracted fields
+                await _auto_schedule_policy_alerts(db, doc, fields_data)
 
             await db.commit()
             logger.info(f"[BG-FIELDS] Done for {doc_id} — {len(fields_data)} fields saved")
@@ -363,6 +684,260 @@ async def upload_document(
     return DocumentResponse.model_validate(doc)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Multi-image upload endpoint
+# ─────────────────────────────────────────────────────────────────────────────
+
+ALLOWED_IMAGE_MIME_TYPES = {
+    "image/jpeg", "image/jpg", "image/png", "image/tiff", "image/webp"
+}
+
+
+async def process_multi_image_background(doc_id: str, image_paths: list[str]) -> None:
+    """
+    Background task for multi-image bundle documents.
+
+    Phase 1: Extract text from each image concurrently via OCR,
+             concatenate in page order → store in Document.extracted_text.
+    Phase 2: Same as single-file: chunking + embeddings + summary + fields + risks.
+    """
+    import asyncio
+    from app.core.database import AsyncSessionLocal
+    from app.services.ocr_service import extract_document_text, clean_extracted_text
+
+    async with AsyncSessionLocal() as db:
+        try:
+            result = await db.execute(select(Document).where(Document.id == doc_id))
+            doc = result.scalar_one_or_none()
+            if not doc:
+                return
+
+            doc.status = "processing"
+            await db.commit()
+
+            # --- Phase 1: Concurrent OCR across all pages -----------------
+            async def _ocr_one(path: str, page_num: int):
+                loop = asyncio.get_event_loop()
+                from app.services.ocr_service import extract_text_from_image
+                raw, method, _ = await loop.run_in_executor(None, extract_text_from_image, path)
+                cleaned = clean_extracted_text(raw)
+                return page_num, cleaned, method
+
+            tasks = [_ocr_one(p, i + 1) for i, p in enumerate(image_paths)]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            page_texts = []
+            methods_used = []
+            for r in results:
+                if isinstance(r, Exception):
+                    logger.warning(f"[MULTI-IMG] OCR failed for one page: {r}")
+                    continue
+                page_num, text, method = r
+                page_texts.append((page_num, text))
+                methods_used.append(method)
+
+            # Sort by original page order and concatenate
+            page_texts.sort(key=lambda x: x[0])
+            combined_text = "\n\n".join(
+                f"[Page {pn}]\n{txt}" for pn, txt in page_texts if txt.strip()
+            )
+
+            if not combined_text.strip():
+                combined_text = (
+                    "Could not extract text from the uploaded images. "
+                    "Please ensure images are clear and well-lit."
+                )
+
+            extraction_method = methods_used[0] if methods_used else "unavailable"
+            doc.extracted_text = combined_text
+            doc.extraction_method = extraction_method
+            doc.page_count = len(image_paths)
+            doc.status = "text_extracted"
+            await db.commit()
+            logger.info(
+                f"[MULTI-IMG] Phase 1 done for {doc_id}: "
+                f"{len(combined_text)} chars from {len(image_paths)} images"
+            )
+
+        except Exception as e:
+            logger.error(f"[MULTI-IMG] Phase 1 failed for {doc_id}: {e}")
+            async with AsyncSessionLocal() as err_db:
+                res = await err_db.execute(select(Document).where(Document.id == doc_id))
+                d = res.scalar_one_or_none()
+                if d:
+                    d.status = "failed"
+                    await err_db.commit()
+            return
+
+    # --- Phase 2: identical to single-file pipeline ----------------------
+    text = combined_text  # captured from above
+
+    async def _run_embeddings():
+        async with AsyncSessionLocal() as db2:
+            try:
+                from app.services.rag_service import generate_document_chunks
+                await generate_document_chunks(doc_id, text, db2)
+                await db2.commit()
+                logger.info(f"[MULTI-IMG] Chunking & FAISS done for {doc_id}")
+            except Exception as e:
+                logger.error(f"[MULTI-IMG] Chunking/embedding failed for {doc_id}: {e}")
+
+    async def _run_summary():
+        async with AsyncSessionLocal() as db3:
+            try:
+                from app.services.summary_service import generate_and_store_summary
+                await generate_and_store_summary(db3, doc_id, text)
+                await db3.commit()
+                logger.info(f"[MULTI-IMG] AI summary done for {doc_id}")
+            except Exception as e:
+                logger.error(f"[MULTI-IMG] Auto-summarization failed for {doc_id}: {e}")
+
+    import asyncio as _asyncio
+    await _asyncio.gather(_run_embeddings(), _run_summary())
+
+    # Auto-launch fields + risks as detached tasks
+    _analysis_in_progress.add(f"fields:{doc_id}")
+    _analysis_in_progress.add(f"risks:{doc_id}")
+    _asyncio.create_task(_run_fields_background(doc_id))
+    _asyncio.create_task(_run_risks_background(doc_id))
+    logger.info(f"[MULTI-IMG] Field extraction + risk analysis tasks launched for {doc_id}")
+
+    async with AsyncSessionLocal() as db_final:
+        try:
+            res = await db_final.execute(select(Document).where(Document.id == doc_id))
+            d = res.scalar_one_or_none()
+            if d:
+                d.status = "completed"
+                await db_final.commit()
+            logger.info(f"[MULTI-IMG] Document {doc_id} fully processed (status=completed)")
+        except Exception as e:
+            logger.error(f"[MULTI-IMG] Failed to update final status for {doc_id}: {e}")
+
+
+@router.post(
+    "/upload-images",
+    response_model=DocumentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_multiple_images(
+    background_tasks: BackgroundTasks,
+    files: List[UploadFile] = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Upload multiple images of a single insurance report as one unified document.
+
+    All images are OCR-processed concurrently and their text is concatenated
+    in submission order (Page 1, Page 2, …).  The combined document then goes
+    through the full auto-analysis pipeline (chunking, summary, fields, risks).
+    """
+    import hashlib
+
+    if not files or len(files) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No files provided.",
+        )
+
+    if len(files) > 50:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Too many images. Maximum 50 images per bundle.",
+        )
+
+    # Validate all files are images
+    for f in files:
+        ct = f.content_type or ""
+        if ct not in ALLOWED_IMAGE_MIME_TYPES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"File '{f.filename}' is not a supported image type. "
+                    "Allowed: JPG, PNG, TIFF, WEBP. Use the standard upload for PDFs."
+                ),
+            )
+
+    # Read all files and validate total size
+    file_contents: list[tuple[str, str, bytes]] = []  # (filename, content_type, data)
+    total_size = 0
+    for f in files:
+        content = await f.read()
+        total_size += len(content)
+        if total_size > MAX_FILE_SIZE * 50:  # generous limit: 50 × single limit
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Total upload size exceeds the allowed limit.",
+            )
+        file_contents.append((f.filename or "image.jpg", f.content_type or "image/jpeg", content))
+
+    # Create user upload directory
+    user_upload_dir = FilePath(settings.UPLOAD_DIR) / str(current_user.id)
+    user_upload_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save each image to disk, collect paths
+    saved_paths: list[str] = []
+    primary_filename = file_contents[0][0]  # Use first image's name as document name
+    combined_hash_input = b""
+
+    for orig_name, mime_type, data in file_contents:
+        ext = FilePath(orig_name).suffix.lower() or ".jpg"
+        stored_name = f"{uuid.uuid4()}{ext}"
+        fpath = str(user_upload_dir / stored_name)
+        with open(fpath, "wb") as fh:
+            fh.write(data)
+        saved_paths.append(fpath)
+        combined_hash_input += data
+
+    # Combined hash = hash of all image bytes concatenated
+    combined_hash = hashlib.sha256(combined_hash_input).hexdigest()
+
+    # Check for duplicate bundle
+    existing = await db.execute(
+        select(Document).where(
+            Document.user_id == current_user.id,
+            Document.file_hash == combined_hash,
+        )
+    )
+    existing_doc = existing.scalar_one_or_none()
+    if existing_doc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This exact set of images has already been uploaded as a document.",
+        )
+
+    # Derive a friendly document name:
+    # If original filename has an extension, strip it; append page count info
+    base_name = FilePath(primary_filename).stem
+    bundle_name = f"{base_name} ({len(files)}-page bundle)"
+
+    # Create a single Document record (status=uploaded; background task fills text)
+    doc = Document(
+        user_id=current_user.id,
+        original_filename=bundle_name,
+        stored_filename=FilePath(saved_paths[0]).name,  # primary image filename
+        file_path=saved_paths[0],                       # primary image path
+        file_type="image",
+        file_size_bytes=total_size,
+        mime_type="image/bundle",
+        status="uploaded",
+        file_hash=combined_hash,
+        page_count=len(files),
+    )
+    db.add(doc)
+    await db.flush()
+    await db.refresh(doc)
+
+    # Kick off background OCR + full analysis pipeline
+    background_tasks.add_task(process_multi_image_background, doc.id, saved_paths)
+
+    logger.info(
+        f"Multi-image bundle created: doc_id={doc.id}, pages={len(files)}, "
+        f"user={current_user.id}"
+    )
+    return DocumentResponse.model_validate(doc)
+
+
 @router.get("", response_model=List[DocumentResponse])
 async def list_documents(
     db: AsyncSession = Depends(get_db),
@@ -420,8 +995,6 @@ async def get_reminders(
         }
         for r in reminders
     ]
-
-
 @router.post("/reminders")
 async def schedule_reminder(
     request: ScheduleReminderRequest,
@@ -468,6 +1041,20 @@ async def schedule_reminder(
         db.add(r2)
         
     await db.commit()
+
+    # Trigger email notification to user
+    try:
+        send_alert_email_notification(
+            user_name=current_user.full_name or current_user.email,
+            user_email=current_user.email,
+            policy_name=doc.original_filename,
+            renewal_date=doc.renewal_date,
+            premium_due_date=doc.premium_due_date,
+            premium_amount=request.premium_amount
+        )
+    except Exception as email_err:
+        logger.error(f"Failed to trigger email notification for reminder: {email_err}")
+
     return {"message": "Policy dates and reminders successfully scheduled"}
 
 
@@ -828,53 +1415,7 @@ async def get_reminders(
     ]
 
 
-@router.post("/reminders")
-async def schedule_reminder(
-    request: ScheduleReminderRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Schedule policy premium and renewal notifications."""
-    result = await db.execute(
-        select(Document).where(
-            Document.id == request.document_id,
-            Document.user_id == current_user.id
-        )
-    )
-    doc = result.scalar_one_or_none()
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
-        
-    # Update document dates
-    if request.renewal_date:
-        doc.renewal_date = request.renewal_date
-        # Create reminder alert
-        # Trigger 7 days prior
-        trigger_date = request.renewal_date - timedelta(days=7)
-        r1 = PolicyReminder(
-            user_id=current_user.id,
-            document_id=doc.id,
-            title=f"Policy Renewal Approaching: {doc.original_filename}",
-            reminder_type="renewal",
-            reminder_date=trigger_date
-        )
-        db.add(r1)
-        
-    if request.premium_due_date:
-        doc.premium_due_date = request.premium_due_date
-        trigger_date = request.premium_due_date - timedelta(days=5)
-        r2 = PolicyReminder(
-            user_id=current_user.id,
-            document_id=doc.id,
-            title=f"Premium Payment Approaching: {doc.original_filename}",
-            reminder_type="premium",
-            reminder_date=trigger_date,
-            premium_amount=request.premium_amount
-        )
-        db.add(r2)
-        
-    await db.commit()
-    return {"message": "Policy dates and reminders successfully scheduled"}
+
 
 
 @router.patch("/reminders/{reminder_id}/dismiss")

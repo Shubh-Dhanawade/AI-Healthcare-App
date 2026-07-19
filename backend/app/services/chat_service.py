@@ -22,10 +22,12 @@ from app.services.ai_service import (
 
 
 # ─────────────────────────────────────────
-# Similarity threshold — lowered to capture more relevant chunks.
-# Higher values (0.38+) were causing all chunks to be filtered out.
+# Similarity threshold — lowered to 0.05 so keyword-boosted chunks are not
+# filtered out before the re-ranking pass in vector_store has a chance to elevate them.
+# The old 0.10 threshold was discarding maternity/rare-term chunks that had
+# low raw cosine scores but contain the exact keywords the user asked about.
 # ─────────────────────────────────────────
-SIMILARITY_THRESHOLD = 0.10
+SIMILARITY_THRESHOLD = 0.05
 
 
 def _text_search_fallback(query: str, policies: List[Dict[str, Any]], top_k: int = 4) -> List[Dict[str, Any]]:
@@ -99,9 +101,10 @@ async def run_chat_query(
         logger.info(f"Cache hit for query: '{search_query}'")
         return cached_response
         
-    # 4. RAG Retrieval using FAISS
+    # 4. RAG Retrieval using FAISS (+ keyword boost re-ranking inside search_vector_store)
     is_comparison = _is_comparison_query(search_query) and len(policies) > 1
-    top_k = 6 if is_comparison else 5
+    # Fetch 8 candidates per doc (was 5) — vector_store applies keyword boost and returns best top_k
+    top_k = 8 if is_comparison else 6
     
     retrieval_start = time.time()
     retrieved_chunks = await search_vector_store(db, search_query, policies, top_k=top_k)
@@ -248,9 +251,10 @@ async def run_chat_query_stream(
             yield word + " "
         return
         
-    # 4. RAG Retrieval using FAISS
+    # 4. RAG Retrieval using FAISS (+ keyword boost re-ranking inside search_vector_store)
     is_comparison = _is_comparison_query(search_query) and len(policies) > 1
-    top_k = 6 if is_comparison else 5
+    # Fetch 8 candidates per doc (was 5) — vector_store applies keyword boost and returns best top_k
+    top_k = 8 if is_comparison else 6
     
     retrieval_start = time.time()
     retrieved_chunks = await search_vector_store(db, search_query, policies, top_k=top_k)
@@ -378,6 +382,11 @@ async def run_chat_query_stream(
             asyncio.create_task(_log_rag_eval_background())
 
     except Exception as e:
-        logger.error(f"Streaming failed: {e}")
-        fallback_msg = "\n❌ Failed to generate streamed response. Local Ollama server may be overloaded."
+        error_str = str(e).lower()
+        if "timeout" in error_str or "connect" in error_str or "read" in error_str:
+            logger.error(f"Streaming timed out (model may have been cold-loading): {e}")
+            fallback_msg = "\n⏳ The AI model is loading into memory — this takes ~20 seconds on first use. Please **send your message again** and it will respond instantly."
+        else:
+            logger.error(f"Streaming failed: {e}")
+            fallback_msg = "\n❌ Failed to generate a response. Please try again in a moment."
         yield fallback_msg
