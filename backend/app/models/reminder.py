@@ -1,11 +1,11 @@
 """PolicyReminder database model for scheduling notifications."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from sqlalchemy import String, ForeignKey, DateTime, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.database import Base
+from app.core.database import Base, utc_now_naive
 
 
 class PolicyReminder(Base):
@@ -24,11 +24,11 @@ class PolicyReminder(Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     reminder_type: Mapped[str] = mapped_column(String(50), default="renewal", nullable=False)  # renewal | premium
     reminder_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    premium_amount: Mapped[str] = mapped_column(String(100), nullable=True)
+    premium_amount: Mapped[str] = mapped_column(String(255), nullable=True)
     is_dismissed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc)
+        DateTime, default=utc_now_naive
     )
 
     # Relationships

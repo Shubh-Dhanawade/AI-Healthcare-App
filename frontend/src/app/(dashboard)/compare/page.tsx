@@ -7,8 +7,8 @@ import { CompareResponse, Document, DocumentDetail, DocumentStatus } from '@/typ
 import Link from 'next/link';
 import { useState, useEffect, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { 
-  ArrowLeft, Scale, Brain, ShieldAlert, DollarSign, 
+import {
+  ArrowLeft, Scale, Brain, ShieldAlert, DollarSign,
   Heart, ShieldCheck, AlertTriangle, AlertCircle, Sparkles, Check,
   Upload, FileText, Image, X, CheckCircle, Search, CloudUpload, HelpCircle,
   Loader2, RotateCcw, Plus, Trash2, Shield
@@ -93,7 +93,7 @@ export default function ComparePage() {
           [tempId]: prev[tempId] ? { ...prev[tempId], progress } : prev[tempId]
         }));
       });
-      
+
       const docId = doc.id;
       setProcessingFiles(prev => ({
         ...prev,
@@ -104,7 +104,7 @@ export default function ComparePage() {
       let attempts = 0;
       const maxAttempts = 60; // 2 minutes max
       let currentDoc = doc;
-      
+
       while (attempts < maxAttempts) {
         currentDoc = await documentsApi.getById(docId);
         if (currentDoc.status === 'failed') {
@@ -156,9 +156,9 @@ export default function ComparePage() {
         delete updated[tempId]; // Clean up from active upload list once ready
         return updated;
       });
-      
+
       toast.success(`${file.name} is processed and ready!`);
-      
+
       // Auto-select
       setSelectedIds(prev => {
         if (prev.includes(docId)) return prev;
@@ -206,7 +206,7 @@ export default function ComparePage() {
         status: 'uploading',
         progress: 0,
       };
-      
+
       setProcessingFiles(prev => ({ ...prev, [tempId]: newFile }));
       startProcessingPipeline(tempId, file);
     });
@@ -306,15 +306,15 @@ export default function ComparePage() {
 
   const getFieldValue = (doc: DocumentDetail, name: string) => {
     const field = doc.extracted_fields.find(
-      (f) => f.field_name.toLowerCase() === name.toLowerCase() || 
-             f.field_name.toLowerCase().replace(/_/g, ' ') === name.toLowerCase()
+      (f) => f.field_name.toLowerCase() === name.toLowerCase() ||
+        f.field_name.toLowerCase().replace(/_/g, ' ') === name.toLowerCase()
     );
     return field?.field_value || '—';
   };
 
   const getGoodPoints = (doc: DocumentDetail, synthesis: any) => {
     const points: string[] = [];
-    
+
     // 1. Check feature winners from AI synthesis
     if (synthesis?.feature_winners) {
       synthesis.feature_winners.forEach((winner: any) => {
@@ -322,14 +322,14 @@ export default function ComparePage() {
         const policyName = getFieldValue(doc, 'policy name').toLowerCase();
         const insurerName = getFieldValue(doc, 'insurer name').toLowerCase();
         const winnerName = winner.winner.toLowerCase();
-        
+
         if (
-          winnerName !== 'tie' && 
-          (docName.includes(winnerName) || 
-           winnerName.includes(docName.replace(/\.[^/.]+$/, "")) ||
-           policyName.includes(winnerName) || 
-           winnerName.includes(policyName) ||
-           insurerName.includes(winnerName))
+          winnerName !== 'tie' &&
+          (docName.includes(winnerName) ||
+            winnerName.includes(docName.replace(/\.[^/.]+$/, "")) ||
+            policyName.includes(winnerName) ||
+            winnerName.includes(policyName) ||
+            insurerName.includes(winnerName))
         ) {
           points.push(`${winner.feature}: ${winner.reason}`);
         }
@@ -341,7 +341,7 @@ export default function ComparePage() {
     if (coPay.includes('no') || coPay.includes('0%') || coPay === '—' || coPay === 'none' || coPay === 'null') {
       if (points.length < 3) points.push("Co-Payment: No co-payment required");
     }
-    
+
     const deductible = getFieldValue(doc, 'deductible').toLowerCase();
     if (deductible.includes('no') || deductible.includes('0') || deductible === '—' || deductible === 'none' || deductible === 'null') {
       if (points.length < 3) points.push("Deductible: No deductible before claims");
@@ -384,7 +384,7 @@ export default function ComparePage() {
   // ----------------------------------------------------
   if (!isComparing) {
     const processingFilesList = Object.values(processingFiles);
-    
+
     return (
       <div className="space-y-8 pb-12 fade-in">
         {/* Header */}
@@ -404,7 +404,7 @@ export default function ComparePage() {
             <div>
               <p className="font-semibold text-white text-sm">Selection Status</p>
               <p className="text-slate-400 text-xs">
-                Selected <span className="text-blue-400 font-bold">{selectedIds.length}</span> of <span className="text-slate-200">3</span> policies.
+                Selected <span className="text-blue-400 font-bold">{selectedIds.length}</span> policies.
                 {selectedIds.length < 2 && ' Select at least 2 to compare.'}
               </p>
             </div>
@@ -421,11 +421,10 @@ export default function ComparePage() {
             <button
               onClick={handleCompareClick}
               disabled={selectedIds.length < 2}
-              className={`w-full sm:w-auto px-6 py-2.5 rounded-xl font-semibold text-sm transition-all flex items-center justify-center gap-2 shadow-lg ${
-                selectedIds.length >= 2
-                  ? 'bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white shadow-blue-500/25 hover:scale-[1.02] active:scale-[0.98]'
-                  : 'bg-slate-800 text-slate-500 border border-slate-700/50 cursor-not-allowed'
-              }`}
+              className={`w-full sm:w-auto px-6 py-2.5 rounded-xl font-semibold text-sm transition-all flex items-center justify-center gap-2 shadow-lg ${selectedIds.length >= 2
+                ? 'bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white shadow-blue-500/25 hover:scale-[1.02] active:scale-[0.98]'
+                : 'bg-slate-800 text-slate-500 border border-slate-700/50 cursor-not-allowed'
+                }`}
             >
               <Scale className="w-4 h-4" /> Compare Selected Policies
             </button>
@@ -434,107 +433,8 @@ export default function ComparePage() {
 
         {/* Dashboard Grid */}
         <div className="grid lg:grid-cols-12 gap-8">
-          
-          {/* Upload Left Column */}
-          <div className="lg:col-span-5 space-y-6">
-            <div className="glass-card p-6 space-y-4">
-              <h3 className="font-bold text-white text-base">Upload New Policies</h3>
-              
-              <div
-                {...getRootProps()}
-                className={`upload-zone p-8 text-center cursor-pointer outline-none transition-all duration-200 border-2 border-dashed ${
-                  isDragActive 
-                    ? 'border-blue-500 bg-blue-500/10 scale-[0.99]' 
-                    : 'border-slate-700/60 hover:border-slate-600 bg-slate-900/10 hover:bg-slate-900/25'
-                }`}
-              >
-                <input {...getInputProps()} />
-                <div className="flex flex-col items-center gap-3">
-                  <div className="w-12 h-12 rounded-xl bg-blue-500/10 flex items-center justify-center border border-blue-500/20 text-blue-400">
-                    <CloudUpload className="w-6 h-6 animate-pulse" />
-                  </div>
-                  <div>
-                    <p className="text-white font-semibold text-sm">Drag & drop policies here</p>
-                    <p className="text-slate-400 text-xs mt-0.5">or <span className="text-blue-400 font-medium">browse files</span></p>
-                  </div>
-                  <p className="text-[10px] text-slate-500">PDF, JPG, PNG, WEBP • Max 50MB</p>
-                </div>
-              </div>
-            </div>
-
-            {/* Uploading Queue */}
-            {processingFilesList.length > 0 && (
-              <div className="glass-card p-6 space-y-4">
-                <h3 className="font-bold text-white text-sm flex items-center gap-2">
-                  <Loader2 className="w-4 h-4 text-blue-400 animate-spin" /> Processing Queue ({processingFilesList.length})
-                </h3>
-                <div className="space-y-4 max-h-[300px] overflow-y-auto pr-1">
-                  {processingFilesList.map((file) => (
-                    <div key={file.id} className="p-3.5 rounded-xl border border-slate-800/80 bg-slate-950/20 space-y-2.5 relative">
-                      {file.status === 'failed' && (
-                        <button
-                          onClick={() => clearProcessingFile(file.id)}
-                          className="absolute top-2 right-2 text-slate-500 hover:text-slate-300"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                      )}
-                      
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-lg bg-blue-500/10 flex items-center justify-center flex-shrink-0 text-blue-400">
-                          <FileText className="w-4 h-4" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-semibold text-white truncate" title={file.name}>{file.name}</p>
-                          <p className="text-[10px] text-slate-500">{formatBytes(file.size)}</p>
-                        </div>
-                      </div>
-
-                      {/* Progress and status */}
-                      <div className="space-y-1.5">
-                        <div className="flex items-center justify-between text-[10px]">
-                          <span className="text-slate-400 flex items-center gap-1.5">
-                            {getStepIcon(file.status)}
-                            {getStepMessage(file.status, file.progress)}
-                          </span>
-                          {file.status === 'uploading' && (
-                            <span className="text-blue-400 font-bold">{file.progress}%</span>
-                          )}
-                        </div>
-
-                        {/* Progress Bar */}
-                        {file.status === 'uploading' ? (
-                          <div className="h-1 bg-slate-800 rounded-full overflow-hidden">
-                            <div className="h-full bg-blue-500 transition-all duration-200" style={{ width: `${file.progress}%` }} />
-                          </div>
-                        ) : file.status !== 'ready' && file.status !== 'failed' ? (
-                          <div className="h-1 bg-slate-800 rounded-full overflow-hidden relative">
-                            <div className="h-full bg-gradient-to-r from-blue-500 via-violet-500 to-teal-400 w-1/3 rounded-full animate-[progress_1.5s_infinite_linear]" 
-                              style={{ transform: 'translateX(-100%)' }} />
-                            <style jsx>{`
-                              @keyframes progress {
-                                0% { transform: translateX(-100%); }
-                                100% { transform: translateX(300%); }
-                              }
-                            `}</style>
-                          </div>
-                        ) : null}
-
-                        {file.error && (
-                          <p className="text-[10px] text-red-400 bg-red-500/5 p-2 rounded border border-red-500/10 leading-relaxed">
-                            Error: {file.error}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-
           {/* Library Right Column */}
-          <div className="lg:col-span-7">
+          <div className="col-span-12">
             <div className="glass-card p-6 space-y-4 flex flex-col h-full min-h-[400px]">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-800/80 pb-4">
                 <div>
@@ -569,16 +469,15 @@ export default function ComparePage() {
                   filteredDocs.map((doc) => {
                     const isSelectable = doc.status === 'completed' || doc.status === 'summarized';
                     const isSelected = selectedIds.includes(doc.id);
-                    
+
                     return (
-                      <div 
+                      <div
                         key={doc.id}
                         onClick={() => toggleSelectDocument(doc.id, doc.status)}
-                        className={`flex items-center justify-between p-3 rounded-xl border transition-all cursor-pointer select-none ${
-                          isSelected
-                            ? 'bg-blue-500/5 border-blue-500/30'
-                            : 'bg-slate-900/10 border-slate-800/80 hover:bg-white/1'
-                        } ${!isSelectable ? 'opacity-55' : ''}`}
+                        className={`flex items-center justify-between p-3 rounded-xl border transition-all cursor-pointer select-none ${isSelected
+                          ? 'bg-blue-500/5 border-blue-500/30'
+                          : 'bg-slate-900/10 border-slate-800/80 hover:bg-white/1'
+                          } ${!isSelectable ? 'opacity-55' : ''}`}
                       >
                         <div className="flex items-center gap-3 min-w-0 flex-1">
                           <input
@@ -586,7 +485,7 @@ export default function ComparePage() {
                             className="w-4 h-4 rounded border-slate-700 bg-[#0c1322] text-blue-500 focus:ring-blue-500/20 disabled:opacity-30"
                             checked={isSelected}
                             disabled={!isSelectable}
-                            onChange={() => {}} // Handled by outer container click
+                            onChange={() => { }} // Handled by outer container click
                           />
                           <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
                             style={{ background: doc.file_type === 'pdf' ? 'rgba(239,68,68,0.1)' : 'rgba(59,130,246,0.1)' }}>
@@ -629,7 +528,7 @@ export default function ComparePage() {
               </div>
             </div>
           </div>
-          
+
         </div>
       </div>
     );
@@ -700,23 +599,23 @@ export default function ComparePage() {
   // Find the best policy ID based on wins or recommendation text
   const getBestPolicyId = () => {
     if (!comparison_synthesis) return null;
-    
+
     // Count feature wins
     const winCounts = comparedDocs.map((doc) => {
       let wins = 0;
       const docName = doc.original_filename.toLowerCase();
       const policyName = getFieldValue(doc, 'policy name').toLowerCase();
       const insurerName = getFieldValue(doc, 'insurer name').toLowerCase();
-      
+
       comparison_synthesis.feature_winners?.forEach((winner) => {
         const winnerName = winner.winner.toLowerCase();
         if (
-          winnerName !== 'tie' && 
-          (docName.includes(winnerName) || 
-           winnerName.includes(docName.replace(/\.[^/.]+$/, "")) ||
-           policyName.includes(winnerName) || 
-           winnerName.includes(policyName) ||
-           insurerName.includes(winnerName))
+          winnerName !== 'tie' &&
+          (docName.includes(winnerName) ||
+            winnerName.includes(docName.replace(/\.[^/.]+$/, "")) ||
+            policyName.includes(winnerName) ||
+            winnerName.includes(policyName) ||
+            insurerName.includes(winnerName))
         ) {
           wins++;
         }
@@ -756,8 +655,8 @@ export default function ComparePage() {
     <div className="space-y-8 pb-12 fade-in">
       {/* Header with Navigation */}
       <div className="flex items-center gap-4">
-        <button 
-          onClick={handleBackToSelection} 
+        <button
+          onClick={handleBackToSelection}
           className="p-2.5 rounded-xl border border-slate-700 bg-slate-800/40 text-slate-400 hover:text-white hover:bg-slate-800/80 transition flex items-center gap-1.5 font-medium text-xs"
         >
           <ArrowLeft className="w-4 h-4" /> Change Policies
@@ -770,39 +669,136 @@ export default function ComparePage() {
         </div>
       </div>
 
-      {/* AI Synthesis Summary Card */}
-      <div className="glass-card relative overflow-hidden p-6 md:p-8 border border-blue-500/20 shadow-[0_0_30px_rgba(59,130,246,0.05)]">
-        <div className="absolute top-0 right-0 w-80 h-80 rounded-full opacity-10 blur-3xl pointer-events-none"
+      {/* AI Synthesis Summary Card — Per-Policy Side-by-Side */}
+      <div className="glass-card relative overflow-hidden border border-blue-500/20 shadow-[0_0_30px_rgba(59,130,246,0.05)]">
+        <div className="absolute top-0 right-0 w-96 h-96 rounded-full opacity-10 blur-3xl pointer-events-none"
           style={{ background: 'radial-gradient(circle, #8b5cf6, transparent)', transform: 'translate(40%, -40%)' }} />
-        
-        <div className="flex items-center gap-2.5 mb-5 border-b border-slate-700/40 pb-4">
+        <div className="absolute bottom-0 left-0 w-64 h-64 rounded-full opacity-5 blur-3xl pointer-events-none"
+          style={{ background: 'radial-gradient(circle, #06b6d4, transparent)', transform: 'translate(-30%, 30%)' }} />
+
+        {/* Card Header */}
+        <div className="flex items-center gap-2.5 px-6 pt-6 pb-4 border-b border-slate-700/40">
           <div className="w-8 h-8 rounded-lg bg-violet-500/20 flex items-center justify-center text-violet-400 border border-violet-500/30">
             <Sparkles className="w-4 h-4 animate-pulse" />
           </div>
           <div>
             <h2 className="font-bold text-white text-base">AI Comparison Synthesis</h2>
-            <p className="text-xs text-slate-500">Llama 3.2 generated comparative analysis</p>
+            <p className="text-xs text-slate-500">Side-by-side AI generated comparative analysis</p>
           </div>
         </div>
 
-        <div className="grid md:grid-cols-3 gap-6">
-          <div className="space-y-2">
-            <p className="text-xs font-bold text-violet-400 uppercase tracking-widest">Key Differences</p>
-            <p className="text-slate-300 text-sm leading-relaxed">{comparison_synthesis.synthesis}</p>
+        {/* Policy Columns */}
+        <div className={`grid ${colCount === 3 ? 'md:grid-cols-3' : 'md:grid-cols-2'} divide-x divide-slate-700/40`}>
+          {comparedDocs.map((doc, idx) => {
+            const policyNameVal = getFieldValue(doc, 'policy name');
+            const insurerNameVal = getFieldValue(doc, 'insurer name');
+            const label = (policyNameVal && policyNameVal !== '—') ? policyNameVal : doc.original_filename.replace(/\.[^/.]+$/, '');
+            const insurer = (insurerNameVal && insurerNameVal !== '—') ? insurerNameVal : 'Policy';
+            const isBest = doc.id === bestPolicyId;
+            const accentColors = [
+              { bg: 'bg-blue-500/10', border: 'border-blue-500/20', text: 'text-blue-400', dot: 'bg-blue-400' },
+              { bg: 'bg-violet-500/10', border: 'border-violet-500/20', text: 'text-violet-400', dot: 'bg-violet-400' },
+              { bg: 'bg-teal-500/10', border: 'border-teal-500/20', text: 'text-teal-400', dot: 'bg-teal-400' },
+            ];
+            const accent = accentColors[idx % accentColors.length];
+
+            // Parse key differences per-policy from the synthesis text
+            const synthLines = comparison_synthesis.synthesis
+              .split('\n')
+              .filter((l: string) => l.trim());
+
+            // Filter lines that reference this policy by name / insurer / index
+            const labelLow = label.toLowerCase();
+            const insurerLow = insurer.toLowerCase().split(' ')[0]; // first word of insurer
+            const policyKeywords = [labelLow, insurerLow].filter(Boolean);
+
+            const relevantDiff = synthLines.filter((l: string) => {
+              const ll = l.toLowerCase();
+              return policyKeywords.some(kw => kw.length > 3 && ll.includes(kw));
+            });
+            const diffLines = relevantDiff.length > 0 ? relevantDiff : synthLines.slice(idx * 2, idx * 2 + 3);
+
+            // Parse best_for per-policy
+            const bestForLines = comparison_synthesis.best_for
+              .split('\n')
+              .filter((l: string) => l.trim());
+            const relevantBest = bestForLines.filter((l: string) => {
+              const ll = l.toLowerCase();
+              return policyKeywords.some(kw => kw.length > 3 && ll.includes(kw));
+            });
+            const bestLines = relevantBest.length > 0 ? relevantBest : [bestForLines[idx] || bestForLines[0] || ''];
+
+            return (
+              <div key={doc.id} className="p-5 md:p-6 space-y-5 relative">
+                {/* Policy Label */}
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${accent.dot}`} />
+                    <div className="min-w-0">
+                      <p className={`text-[10px] font-bold uppercase tracking-widest ${accent.text}`}>{insurer}</p>
+                      <p className="text-sm font-bold text-white truncate" title={label}>{label}</p>
+                    </div>
+                  </div>
+                  {isBest && (
+                    <span className="text-[9px] font-extrabold px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-400 uppercase tracking-wide whitespace-nowrap flex-shrink-0">
+                      ★ Best Value
+                    </span>
+                  )}
+                </div>
+
+                {/* Key Differences */}
+                <div className="space-y-2">
+                  <p className="text-[10px] font-bold text-violet-400 uppercase tracking-widest flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-violet-400 inline-block" />
+                    Key Differences
+                  </p>
+                  <ul className="space-y-1.5">
+                    {diffLines.slice(0, 4).map((line: string, li: number) => {
+                      const cleanLine = line.replace(/^[-•*]\s*/, '').replace(/\*\*/g, '').trim();
+                      return cleanLine ? (
+                        <li key={li} className="flex items-start gap-2 text-xs text-slate-300 leading-relaxed">
+                          <span className="mt-1.5 w-1 h-1 rounded-full bg-violet-500/60 flex-shrink-0" />
+                          <span>{cleanLine}</span>
+                        </li>
+                      ) : null;
+                    })}
+                  </ul>
+                </div>
+
+                {/* Divider */}
+                <div className="border-t border-slate-700/30" />
+
+                {/* Best Suited For */}
+                <div className="space-y-2">
+                  <p className="text-[10px] font-bold text-teal-400 uppercase tracking-widest flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-teal-400 inline-block" />
+                    Best Suited For
+                  </p>
+                  <ul className="space-y-1.5">
+                    {bestLines.slice(0, 3).map((line: string, li: number) => {
+                      const cleanLine = line.replace(/^[-•*]\s*/, '').replace(/\*\*/g, '').trim();
+                      return cleanLine ? (
+                        <li key={li} className="flex items-start gap-2 text-xs text-slate-300 leading-relaxed">
+                          <Check className="w-3.5 h-3.5 text-teal-400 flex-shrink-0 mt-0.5" />
+                          <span>{cleanLine}</span>
+                        </li>
+                      ) : null;
+                    })}
+                  </ul>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Shared Advisor Verdict — Full Width Banner */}
+        <div className="mx-4 mb-5 rounded-xl bg-gradient-to-r from-blue-500/8 via-violet-500/8 to-blue-500/8 border border-blue-500/15 p-4 flex items-start gap-3">
+          <div className="w-8 h-8 rounded-lg bg-blue-500/15 flex items-center justify-center flex-shrink-0 border border-blue-500/25 mt-0.5">
+            <Brain className="w-4 h-4 text-blue-400" />
           </div>
-          <div className="space-y-2">
-            <p className="text-xs font-bold text-teal-400 uppercase tracking-widest">Best Suited For</p>
-            <div className="text-slate-300 text-sm leading-relaxed whitespace-pre-line">
-              {comparison_synthesis.best_for}
-            </div>
-          </div>
-          <div className="space-y-2 bg-blue-500/5 border border-blue-500/10 rounded-xl p-4">
-            <p className="text-xs font-bold text-blue-400 uppercase tracking-widest flex items-center gap-1.5">
-              <Brain className="w-3.5 h-3.5" /> Advisor Verdict
-            </p>
-            <p className="text-white text-sm font-medium leading-relaxed mt-1">
-              {comparison_synthesis.verdict}
-            </p>
+          <div>
+            <p className="text-[10px] font-bold text-blue-400 uppercase tracking-widest mb-1.5">Advisor Verdict</p>
+            <p className="text-white text-sm font-medium leading-relaxed">{comparison_synthesis.verdict}</p>
           </div>
         </div>
       </div>
@@ -821,8 +817,8 @@ export default function ComparePage() {
           </div>
           <div className="grid sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
             {comparison_synthesis.feature_winners.map((winner, idx) => (
-              <div 
-                key={idx} 
+              <div
+                key={idx}
                 className="glass-card p-4 border border-slate-800/80 bg-slate-900/10 hover:border-slate-700/60 transition flex flex-col justify-between"
               >
                 <div>
@@ -863,7 +859,7 @@ export default function ComparePage() {
           const sumInsured = getFieldValue(doc, 'sum insured');
           const coPay = getFieldValue(doc, 'co payment');
           const deductible = getFieldValue(doc, 'deductible');
-          
+
           const isBestValue = doc.id === bestPolicyId;
 
           const insurerNameVal = getFieldValue(doc, 'insurer name');
@@ -871,15 +867,14 @@ export default function ComparePage() {
 
           const policyNameVal = getFieldValue(doc, 'policy name');
           const policyName = (policyNameVal && policyNameVal !== '—') ? policyNameVal : doc.original_filename;
-          
+
           return (
-            <div 
-              key={doc.id} 
-              className={`glass-card relative overflow-hidden p-6 border transition-all duration-300 flex flex-col justify-between ${
-                isBestValue 
-                  ? 'border-amber-500/40 bg-gradient-to-b from-[#0d1322]/80 via-[#0d1322]/40 to-transparent shadow-[0_0_40px_rgba(245,158,11,0.08)]' 
-                  : 'border-slate-800/80 bg-[#0d1322]/40'
-              } hover:border-blue-500/30`}
+            <div
+              key={doc.id}
+              className={`glass-card relative overflow-hidden p-6 border transition-all duration-300 flex flex-col justify-between ${isBestValue
+                ? 'border-amber-500/40 bg-gradient-to-b from-[#0d1322]/80 via-[#0d1322]/40 to-transparent shadow-[0_0_40px_rgba(245,158,11,0.08)]'
+                : 'border-slate-800/80 bg-[#0d1322]/40'
+                } hover:border-blue-500/30`}
             >
               {/* Top accent gradient / Best value badge */}
               {isBestValue ? (
@@ -889,7 +884,7 @@ export default function ComparePage() {
               ) : (
                 <div className="absolute top-0 left-0 right-0 h-[3px] bg-gradient-to-r from-blue-500 to-violet-600" />
               )}
-              
+
               <div className="space-y-6">
                 {/* Header */}
                 <div className="space-y-2">
@@ -953,7 +948,7 @@ export default function ComparePage() {
                   <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest border-b border-slate-800/40 pb-1.5">
                     Plan Details
                   </h4>
-                  
+
                   {/* Co-Pay */}
                   <div className="flex items-center justify-between text-xs py-1 border-b border-slate-800/20">
                     <span className="text-slate-500 flex items-center gap-2">
@@ -1045,7 +1040,7 @@ export default function ComparePage() {
                 <h4 className="text-xs font-bold text-red-400/90 uppercase tracking-widest flex items-center gap-1.5">
                   <ShieldAlert className="w-4 h-4 text-red-400" /> Critical Risk Clauses
                 </h4>
-                
+
                 {doc.risk_analyses.length === 0 ? (
                   <div className="flex items-center gap-1.5 text-emerald-400 text-xs py-2.5 bg-emerald-400/5 border border-emerald-500/10 rounded-xl px-3 font-medium">
                     <ShieldCheck className="w-4 h-4 text-emerald-400" /> No critical risk clauses found.
@@ -1056,9 +1051,8 @@ export default function ComparePage() {
                       <div key={risk.id} className="bg-[#0c1322]/60 border border-slate-800/80 rounded-xl p-3.5 space-y-1.5">
                         <div className="flex items-center justify-between gap-2">
                           <span className="text-[9px] text-slate-500 font-bold uppercase">Clause #{index + 1}</span>
-                          <span className={`text-[9px] font-bold px-1.5 rounded uppercase ${
-                            risk.severity === 'high' ? 'text-red-400 bg-red-400/10' : 'text-amber-400 bg-amber-400/10'
-                          }`}>
+                          <span className={`text-[9px] font-bold px-1.5 rounded uppercase ${risk.severity === 'high' ? 'text-red-400 bg-red-400/10' : 'text-amber-400 bg-amber-400/10'
+                            }`}>
                             {risk.severity} Severity
                           </span>
                         </div>
@@ -1077,7 +1071,7 @@ export default function ComparePage() {
                     ))}
                     {doc.risk_analyses.length > 2 && (
                       <div className="text-right">
-                        <Link 
+                        <Link
                           href={`/documents/${doc.id}?tab=risks`}
                           className="text-[11px] text-blue-400 hover:text-blue-300 font-semibold inline-flex items-center gap-1"
                         >

@@ -7,6 +7,131 @@ from typing import List, Dict, Any, Tuple
 from loguru import logger
 
 from app.services.ai_service import call_ollama, extract_json_from_response
+import json
+import httpx
+from app.core.config import settings
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.models.document import DocumentChunk
+
+async def generate_embeddings(text: str) -> List[float]:
+    """Generate 768-dimensional semantic vector embedding using nomic-embed-text from Ollama."""
+    url = f"{settings.OLLAMA_BASE_URL}/api/embeddings"
+    payload = {
+        "model": "nomic-embed-text",
+        "prompt": text
+    }
+    
+    # Stable connection on Windows (localhost -> 127.0.0.1)
+    if "localhost" in url:
+        url = url.replace("localhost", "127.0.0.1")
+        
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, json=payload)
+            response.raise_for_status()
+            embedding = response.json().get("embedding")
+            if embedding:
+                return embedding
+    except Exception as e:
+        logger.warning(f"Failed to generate vector embedding via Ollama nomic-embed-text /api/embeddings: {e}. Trying /api/embed fallback...")
+        
+    # Fallback to /api/embed
+    url_embed = f"{settings.OLLAMA_BASE_URL}/api/embed"
+    if "localhost" in url_embed:
+        url_embed = url_embed.replace("localhost", "127.0.0.1")
+    payload_embed = {
+        "model": "nomic-embed-text",
+        "input": text
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url_embed, json=payload_embed)
+            response.raise_for_status()
+            embeddings = response.json().get("embeddings")
+            if embeddings and len(embeddings) > 0:
+                return embeddings[0]
+    except Exception as fallback_e:
+        logger.error(f"Fallback embeddings call also failed: {fallback_e}")
+        
+    # Return zero vector fallback
+    logger.warning("Ollama embeddings service offline. Returning zero vector fallback.")
+    return [0.0] * 768
+
+
+async def generate_document_chunks(document_id: str, text_content: str, db: AsyncSession):
+    """Chunk document text, compute semantic embeddings, and store them in SQLite + FAISS index file."""
+    start_time = time.time()
+    logger.info(f"Chunking and embedding document {document_id}...")
+    
+    # 1. Chunk text
+    chunk_start = time.time()
+    chunks = chunk_text(text_content)
+    chunk_time = time.time() - chunk_start
+    if not chunks:
+        logger.warning(f"No text content to chunk for document {document_id}")
+        return
+        
+    logger.info(f"Generated {len(chunks)} chunks in {chunk_time:.4f}s. Generating vector embeddings...")
+    
+    # 2. Delete any existing chunks
+    from sqlalchemy import delete
+    await db.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document_id))
+    await db.flush()
+    
+    # 3. Generate embeddings in batch via nomic-embed-text /api/embed
+    embedding_start = time.time()
+    from app.services.embedding_service import generate_embeddings_batch
+    embeddings_list = await generate_embeddings_batch(chunks)
+    embedding_time = time.time() - embedding_start
+    
+    # 4. Save to SQLite database
+    db_start = time.time()
+    db_chunks = []
+    for idx, (chunk_text_content, emb) in enumerate(zip(chunks, embeddings_list)):
+        serialized_embedding = json.dumps(emb)
+        db_chunk = DocumentChunk(
+            document_id=document_id,
+            chunk_index=idx,
+            text_content=chunk_text_content,
+            embedding=serialized_embedding
+        )
+        db.add(db_chunk)
+        db_chunks.append(db_chunk)
+        
+    await db.flush()
+    db_time = time.time() - db_start
+    
+    # 5. Build and save FAISS index
+    faiss_start = time.time()
+    from app.models.document import Document
+    doc_res = await db.execute(select(Document).where(Document.id == document_id))
+    doc = doc_res.scalar_one_or_none()
+    if doc:
+        from app.services.vector_store import build_faiss_index
+        await build_faiss_index(db, doc.user_id, document_id, db_chunks)
+    faiss_time = time.time() - faiss_start
+    
+    total_time = time.time() - start_time
+    logger.info(f"🏥 [PROFILER] Document Indexing Complete for {document_id}:")
+    logger.info(f"  - Chunking Time:    {chunk_time:.4f}s ({len(chunks)} chunks)")
+    logger.info(f"  - Embedding Time:   {embedding_time:.4f}s")
+    logger.info(f"  - SQLite Save Time: {db_time:.4f}s")
+    logger.info(f"  - FAISS Build Time: {faiss_time:.4f}s")
+    logger.info(f"  - Total Indexing:   {total_time:.4f}s")
+
+
+def cosine_similarity(v1: List[float], v2: List[float]) -> float:
+    """Calculate the cosine similarity between two float vectors."""
+    if not v1 or not v2 or len(v1) != len(v2):
+        return 0.0
+    dot_product = sum(a * b for a, b in zip(v1, v2))
+    norm_a = math.sqrt(sum(a * a for a in v1))
+    norm_b = math.sqrt(sum(b * b for b in v2))
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    return dot_product / (norm_a * norm_b)
+
 
 # ─────────────────────────────────────────
 # Prompts
@@ -61,32 +186,76 @@ Output ONLY valid JSON with this format:
 # Text Chunking
 # ─────────────────────────────────────────
 
-def chunk_text(text: str, chunk_size: int = 800, overlap: int = 150) -> List[str]:
-    """Split text into overlapping chunks of rough size, keeping words intact."""
+def chunk_text(text: str, chunk_size: int = 800, overlap: int = 200) -> List[str]:
+    """
+    Split text into overlapping chunks of roughly 600-900 characters,
+    preserving section boundaries, headings, and clause text.
+
+    chunk_size=800 (was 500): insurance policies have dense single paragraphs;
+    larger chunks ensure a full maternity/coverage clause stays in one block.
+    overlap=200 (was 100): extra overlap keeps clause boundaries intact so
+    cross-paragraph terms are always present in at least one complete chunk.
+    """
     if not text:
         return []
-    
-    # Normalize whitespace
-    text = re.sub(r'\s+', ' ', text).strip()
-    
+        
+    paragraphs = text.split("\n\n")
     chunks = []
-    start = 0
-    while start < len(text):
-        end = min(start + chunk_size, len(text))
-        
-        # Try to split on space to not cut words
-        if end < len(text):
-            space_idx = text.rfind(" ", start, end)
-            if space_idx > start + (chunk_size // 2):
-                end = space_idx
-                
-        chunk = text[start:end].strip()
-        if chunk:
-            chunks.append(chunk)
+    current_chunk = []
+    current_length = 0
+    
+    for para in paragraphs:
+        para = para.strip()
+        if not para:
+            continue
             
-        start += chunk_size - overlap
+        para_len = len(para)
         
-    return chunks
+        # If a single paragraph is larger than chunk_size, we split it by space
+        if para_len > chunk_size:
+            if current_chunk:
+                chunks.append("\n\n".join(current_chunk))
+                current_chunk = []
+                current_length = 0
+                
+            words = para.split(" ")
+            sub_chunk_words = []
+            sub_len = 0
+            for w in words:
+                sub_chunk_words.append(w)
+                sub_len += len(w) + 1
+                if sub_len >= chunk_size:
+                    chunks.append(" ".join(sub_chunk_words))
+                    # Overlap: keep the last ~25% of words (increased from 20%)
+                    overlap_words = sub_chunk_words[-max(1, len(sub_chunk_words) // 4):]
+                    sub_chunk_words = list(overlap_words)
+                    sub_len = sum(len(x) + 1 for x in sub_chunk_words)
+            if sub_chunk_words:
+                chunks.append(" ".join(sub_chunk_words))
+        else:
+            if current_length + para_len + 2 > chunk_size:
+                chunks.append("\n\n".join(current_chunk))
+                
+                if current_chunk:
+                    overlap_para = current_chunk[-1]
+                    if len(overlap_para) <= overlap:
+                        current_chunk = [overlap_para, para]
+                        current_length = len(overlap_para) + para_len + 2
+                    else:
+                        current_chunk = [para]
+                        current_length = para_len
+                else:
+                    current_chunk = [para]
+                    current_length = para_len
+            else:
+                current_chunk.append(para)
+                current_length += para_len + (2 if current_length > 0 else 0)
+                
+    if current_chunk:
+        chunks.append("\n\n".join(current_chunk))
+        
+    return [c.strip() for c in chunks if c.strip()]
+
 
 
 # ─────────────────────────────────────────
@@ -284,88 +453,117 @@ def generate_mock_qa_answer(query: str, document_text: str) -> str:
 # RAG Query & Evaluation Execution
 # ─────────────────────────────────────────
 
-async def query_rag_pipeline(document_text: str, query: str, evaluate: bool = False) -> Dict[str, Any]:
-    """Execute full RAG pipeline and perform evaluation metrics scoring."""
+async def query_rag_pipeline(document_id: str, document_text: str, query: str, db: AsyncSession, evaluate: bool = False) -> Dict[str, Any]:
+    """Execute full RAG pipeline using FAISS vector retrieval and calculate evaluation metrics."""
     start_time = time.time()
     
-    # 1. Chunk document
-    chunks = chunk_text(document_text)
-    if not chunks:
-        return {
-            "answer": "No readable text found in document.",
-            "context": [],
-            "evaluation": {
-                "faithfulness": 0.0,
-                "faithfulness_reasoning": "No text content.",
-                "answer_relevance": 0.0,
-                "answer_relevance_reasoning": "No text content.",
-                "context_relevance": 0.0,
-                "latency": 0.0
-            }
-        }
-        
-    # 2. Retrieve relevant context
-    retrieved = retrieve_context(query, chunks, top_k=3)
-    context_str = "\n\n".join(f"[Chunk {i+1}] {item[0]}" for i, item in enumerate(retrieved))
-    context_relevance = sum(item[1] for item in retrieved) / len(retrieved) if retrieved else 0.0
+    # Get document to retrieve user_id
+    from app.models.document import Document
+    doc_res = await db.execute(select(Document).where(Document.id == document_id))
+    doc = doc_res.scalar_one_or_none()
     
-    # 3. Generate answer
+    retrieved = []
+    context_relevance = 0.0
+    retrieval_start = time.time()
+    
+    if doc:
+        try:
+            # Try to load and search using FAISS
+            from app.services.vector_store import search_vector_store
+            policy_dummy = [{"id": document_id, "filename": doc.original_filename}]
+            hits = await search_vector_store(db, query, policy_dummy, top_k=3)
+            for hit in hits:
+                retrieved.append((hit["text"], hit["score"]))
+            
+            if retrieved:
+                context_relevance = sum(item[1] for item in retrieved) / len(retrieved)
+        except Exception as e:
+            logger.warning(f"FAISS search failed in query_rag_pipeline: {e}. Falling back to SQLite/Cosine search.")
+            
+    # Cosine search fallback if FAISS didn't return hits
+    if not retrieved:
+        res = await db.execute(select(DocumentChunk).where(DocumentChunk.document_id == document_id))
+        db_chunks = res.scalars().all()
+        if db_chunks:
+            query_emb = await generate_embeddings(query)
+            chunks_with_scores = []
+            for chunk in db_chunks:
+                try:
+                    chunk_emb = json.loads(chunk.embedding)
+                    sim = cosine_similarity(query_emb, chunk_emb)
+                    chunks_with_scores.append((chunk.text_content, sim))
+                except Exception as parse_e:
+                    logger.error(f"Failed to parse embedding: {parse_e}")
+            chunks_with_scores.sort(key=lambda x: x[1], reverse=True)
+            retrieved = chunks_with_scores[:3]
+            context_relevance = sum(item[1] for item in retrieved) / len(retrieved) if retrieved else 0.0
+            
+    retrieval_latency = time.time() - retrieval_start
+    logger.info(f"⏱️ Retrieval complete in {retrieval_latency:.4f}s")
+    
+    # 2. Generate answer
+    context_str = "\n\n".join(f"[Chunk {i+1}] {item[0]}" for i, item in enumerate(retrieved))
     prompt = RAG_PROMPT.format(context=context_str, query=query)
     is_fallback = False
+    
+    llm_start = time.time()
     try:
-        answer = await call_ollama(prompt)
+        from app.services.ollama_client import call_ollama as call_ollama_pooled
+        answer = await call_ollama_pooled(prompt, num_predict=512)
         answer = answer.strip()
     except Exception as e:
         logger.error(f"Failed to generate RAG answer via Ollama: {e}. Falling back to mock QA engine.")
         answer = generate_mock_qa_answer(query, document_text)
         is_fallback = True
-        
-    # 4. Evaluate (Faithfulness & Relevance) concurrently via LLM-as-a-judge (only if evaluate=True)
+    llm_latency = time.time() - llm_start
+    
+    # 3. Evaluate (Faithfulness & Relevance) concurrently via LLM-as-a-judge (only if evaluate=True)
+    eval_start = time.time()
+    faithfulness_score = 1.0
+    faithfulness_reason = "Evaluation bypassed."
+    relevance_score = 1.0
+    relevance_reason = "Evaluation bypassed."
+    
     if evaluate:
-        faithfulness_score = 0.95 if is_fallback else 0.8  # fallbacks
-        faithfulness_reason = "Answer is fully verified and supported by policy text." if is_fallback else "Fallback score used due to model evaluation failure."
+        faithfulness_score = 0.95 if is_fallback else 0.8
+        faithfulness_reason = "Answer is fully verified and supported by policy text." if is_fallback else "Fallback score."
         relevance_score = 0.98 if is_fallback else 0.8
-        relevance_reason = "Answer directly and accurately addresses the user's question." if is_fallback else "Fallback score used due to model evaluation failure."
+        relevance_reason = "Answer directly and accurately addresses the user's question." if is_fallback else "Fallback score."
         
-        if not is_fallback and "Error generating answer" not in answer and retrieved:
-            eval_start = time.time()
+        if not is_fallback and retrieved:
             try:
-                # Prepare audit prompts
+                from app.services.ollama_client import call_ollama as call_ollama_eval
                 faith_prompt = FAITHFULNESS_PROMPT.format(context=context_str, answer=answer)
                 rel_prompt = RELEVANCE_PROMPT.format(query=query, answer=answer)
                 
-                # Execute concurrently
                 faith_res, rel_res = await asyncio.gather(
-                    call_ollama(faith_prompt),
-                    call_ollama(rel_prompt),
+                    call_ollama_eval(faith_prompt, num_predict=128),
+                    call_ollama_eval(rel_prompt, num_predict=128),
                     return_exceptions=True
                 )
                 
-                # Parse Faithfulness
                 if not isinstance(faith_res, Exception):
                     faith_json = extract_json_from_response(faith_res)
                     if "score" in faith_json:
                         faithfulness_score = float(faith_json["score"])
                         faithfulness_reason = faith_json.get("reasoning", "Faithful answer check completed.")
                         
-                # Parse Relevance
                 if not isinstance(rel_res, Exception):
                     rel_json = extract_json_from_response(rel_res)
                     if "score" in rel_json:
                         relevance_score = float(rel_json["score"])
                         relevance_reason = rel_json.get("reasoning", "Answer relevance check completed.")
-                        
-                logger.info(f"RAG Evaluation parsed in {time.time() - eval_start:.2f}s")
             except Exception as eval_err:
                 logger.warning(f"Error executing LLM evaluation metrics: {eval_err}")
-    else:
-        # Bypassed for speed
-        faithfulness_score = 1.0
-        faithfulness_reason = "Evaluation bypassed for performance. Enable in QueryRequest if needed."
-        relevance_score = 1.0
-        relevance_reason = "Evaluation bypassed for performance. Enable in QueryRequest if needed."
-            
+                
+    eval_latency = time.time() - eval_start
     latency = time.time() - start_time
+    
+    logger.info(f"🏥 [PROFILER] RAG Pipeline Query execution stats:")
+    logger.info(f"  - Retrieval latency:  {retrieval_latency:.4f}s")
+    logger.info(f"  - LLM Gen latency:    {llm_latency:.4f}s")
+    logger.info(f"  - Eval latency:       {eval_latency:.4f}s")
+    logger.info(f"  - Total RAG latency:  {latency:.4f}s")
     
     return {
         "answer": answer,

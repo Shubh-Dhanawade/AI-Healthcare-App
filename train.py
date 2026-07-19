@@ -3,11 +3,10 @@ from datasets import load_dataset
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
-    BitsAndBytesConfig,
-    TrainingArguments
+    BitsAndBytesConfig
 )
 from peft import LoraConfig, get_peft_model
-from trl import SFTTrainer
+from trl import SFTTrainer, SFTConfig
 import os
 
 def main():
@@ -74,7 +73,7 @@ def main():
     print(f"✅ Loaded and preprocessed {len(dataset)} training examples.")
     
     # 6. Setup Trainer
-    training_args = TrainingArguments(
+    training_args = SFTConfig(
         output_dir=output_dir,
         per_device_train_batch_size=2,
         gradient_accumulation_steps=4,
@@ -85,15 +84,15 @@ def main():
         bf16=torch.cuda.is_bf16_supported() if torch.cuda.is_available() else False,
         optim="paged_adamw_8bit" if torch.cuda.is_available() else "adamw_torch",
         save_strategy="steps",
-        save_steps=25
+        save_steps=25,
+        dataset_text_field="text",
+        max_length=2048
     )
     
     trainer = SFTTrainer(
         model=model,
         train_dataset=dataset,
-        dataset_text_field="text",
-        max_seq_length=2048,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         args=training_args
     )
     

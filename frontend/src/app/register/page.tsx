@@ -25,6 +25,15 @@ export default function RegisterPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!email.trim() || !fullName.trim() || !password) {
+      toast.error('Please fill in all fields');
+      return;
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      toast.error('Please enter a valid email address');
+      return;
+    }
     if (password.length < 8) {
       toast.error('Password must be at least 8 characters');
       return;
@@ -33,7 +42,7 @@ export default function RegisterPage() {
     try {
       const res = await authApi.register({ email, full_name: fullName, password });
       login(res.access_token, res.user);
-      toast.success(`Welcome to HealthAI, ${res.user.full_name}!`);
+      toast.success(`Welcome to HealthPolicyLens, ${res.user.full_name}!`);
       router.replace('/dashboard');
     } catch (err: any) {
       toast.error(err.response?.data?.detail || 'Registration failed. Please try again.');
@@ -44,21 +53,25 @@ export default function RegisterPage() {
 
   return (
     <div className="hero-bg min-h-screen flex items-center justify-center px-4 py-10">
-      <div className="fixed inset-0 overflow-hidden pointer-events-none">
+      {/* Background orbs — z-0 so they stay behind all content */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none" style={{ zIndex: 0 }}>
         <div className="absolute top-1/3 right-1/4 w-96 h-96 rounded-full opacity-10 blur-3xl"
           style={{ background: 'radial-gradient(circle, #8b5cf6, transparent)' }} />
         <div className="absolute bottom-1/3 left-1/4 w-96 h-96 rounded-full opacity-10 blur-3xl"
           style={{ background: 'radial-gradient(circle, #14b8a6, transparent)' }} />
       </div>
 
-      <div className="relative w-full max-w-md fade-in">
+      {/* Content — z-10 so it always renders above background */}
+      <div className="relative w-full max-w-md fade-in" style={{ zIndex: 10 }}>
         <div className="text-center mb-8">
-          <div className="inline-flex w-16 h-16 rounded-2xl items-center justify-center mb-4"
-            style={{ background: 'linear-gradient(135deg, #3b82f6, #8b5cf6)' }}>
+          <div
+            className="inline-flex w-16 h-16 rounded-2xl items-center justify-center mb-4"
+            style={{ background: 'linear-gradient(135deg, #3b82f6, #8b5cf6)' }}
+          >
             <Activity className="w-8 h-8 text-white" />
           </div>
           <h1 className="text-3xl font-black gradient-text">Create Account</h1>
-          <p className="text-slate-400 mt-1">Join HealthAI — it&apos;s free</p>
+          <p className="text-slate-400 mt-2">Join HealthPolicyLens &mdash; it&apos;s free</p>
         </div>
 
         <div className="glass-card p-8">

@@ -21,7 +21,7 @@ const chatWithAI = async (req, res) => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'llama3',
+          model: process.env.OLLAMA_MODEL || 'gemma3:4b',
           prompt: `You are an AI Healthcare Assistant. The user says: ${message}`,
           stream: false,
         }),

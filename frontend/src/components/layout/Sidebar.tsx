@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
-  Activity, LayoutDashboard, FileText, Upload, Shield, Settings, LogOut, Scale, MessageSquare,
+  Activity, LayoutDashboard, FileText, Upload, Shield, Settings, LogOut, Scale, MessageSquare, LineChart,
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -13,6 +13,11 @@ const navItems = [
   { href: '/documents', label: 'Documents', icon: FileText },
   { href: '/compare', label: 'Compare Policies', icon: Scale },
   { href: '/chat', label: 'Conversational AI', icon: MessageSquare },
+];
+
+const adminItems = [
+  { href: '/analytics', label: 'Claims Analytics', icon: Shield },
+  { href: '/model-metrics', label: 'Model Metrics', icon: LineChart },
 ];
 
 export default function Sidebar() {
@@ -28,32 +33,60 @@ export default function Sidebar() {
           <Activity className="w-5 h-5 text-white" />
         </div>
         <div>
-          <p className="font-bold text-white text-sm">HealthAI</p>
+          <p className="font-bold text-white text-sm">HealthPolicyLens</p>
           <p className="text-xs text-slate-500">Insurance Intel</p>
         </div>
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 px-3 py-4 space-y-1">
-        <p className="px-3 text-xs font-semibold text-slate-600 uppercase tracking-wider mb-3">Menu</p>
-        {navItems.map(({ href, label, icon: Icon }) => {
-          const isActive = pathname === href || pathname.startsWith(`${href}/`);
-          return (
-            <Link
-              key={href}
-              href={href}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                isActive
-                  ? 'text-white'
-                  : 'text-slate-400 hover:text-white hover:bg-white/5'
-              }`}
-              style={isActive ? { background: 'linear-gradient(135deg, rgba(59,130,246,0.2), rgba(139,92,246,0.15))', border: '1px solid rgba(59,130,246,0.3)' } : {}}
-            >
-              <Icon className="w-4 h-4" />
-              {label}
-            </Link>
-          );
-        })}
+      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+        {user?.role !== 'admin' && (
+          <>
+            <p className="px-3 text-xs font-semibold text-slate-600 uppercase tracking-wider mb-3">Menu</p>
+            {navItems.map(({ href, label, icon: Icon }) => {
+              const isActive = pathname === href || pathname.startsWith(`${href}/`);
+              return (
+                <Link
+                  key={href}
+                  href={href}
+                  className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                    isActive
+                      ? 'text-white'
+                      : 'text-slate-400 hover:text-white hover:bg-white/5'
+                  }`}
+                  style={isActive ? { background: 'linear-gradient(135deg, rgba(59,130,246,0.2), rgba(139,92,246,0.15))', border: '1px solid rgba(59,130,246,0.3)' } : {}}
+                >
+                  <Icon className="w-4 h-4" />
+                  {label}
+                </Link>
+              );
+            })}
+          </>
+        )}
+
+        {user?.role === 'admin' && (
+          <div className="space-y-1">
+            <p className="px-3 text-xs font-semibold text-slate-600 uppercase tracking-wider mb-3">Admin Panel</p>
+            {adminItems.map(({ href, label, icon: Icon }) => {
+              const isActive = pathname === href || pathname.startsWith(`${href}/`);
+              return (
+                <Link
+                  key={href}
+                  href={href}
+                  className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                    isActive
+                      ? 'text-white'
+                      : 'text-slate-400 hover:text-white hover:bg-white/5'
+                  }`}
+                  style={isActive ? { background: 'linear-gradient(135deg, rgba(59,130,246,0.2), rgba(139,92,246,0.15))', border: '1px solid rgba(59,130,246,0.3)' } : {}}
+                >
+                  <Icon className="w-4 h-4" />
+                  {label}
+                </Link>
+              );
+            })}
+          </div>
+        )}
       </nav>
 
       {/* User + Logout */}
