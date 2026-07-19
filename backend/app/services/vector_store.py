@@ -103,6 +103,28 @@ async def load_faiss_index(db: AsyncSession, user_id: str, doc_id: str) -> faiss
     CacheManager.set_faiss_index(doc_id, index)
     return index
 
+def _keyword_boost_score(chunk_text: str, query: str, base_score: float) -> float:
+    """
+    Boost a chunk's similarity score when it contains exact words from the query.
+    This ensures specific terms like 'maternity', 'deductible', or 'co-payment'
+    rank highly even when their vector cosine score is modest.
+    """
+    query_words = set(
+        w.lower() for w in re.findall(r'\w+', query)
+        if len(w) > 3  # Skip short stop words
+    )
+    if not query_words:
+        return base_score
+    chunk_lower = chunk_text.lower()
+    # Count how many distinct query keywords appear in this chunk
+    matched = sum(1 for w in query_words if w in chunk_lower)
+    if matched == 0:
+        return base_score
+    # +0.3 per matched keyword, capped at +0.6 total boost
+    boost = min(0.6, matched * 0.3)
+    return base_score + boost
+
+
 async def search_vector_store(
     db: AsyncSession,
     query: str,
@@ -111,6 +133,11 @@ async def search_vector_store(
 ) -> List[Dict[str, Any]]:
     """
     Search vector store for top matching chunks across multiple policy documents.
+    Pipeline:
+      1. FAISS cosine similarity search (retrieves top_k * 2 candidates)
+      2. Keyword boost re-ranking (boosts chunks with exact query terms by +0.3)
+      3. Returns top_k results after re-ranking
+
     Returns: List of dicts containing chunk text, source document filename, page, and similarity score.
     """
     if not policies:
@@ -139,12 +166,12 @@ async def search_vector_store(
             # 1. Load index
             index = await load_faiss_index(db, doc.user_id, doc_id)
             
-            # 2. Search index
-            k = min(top_k, index.ntotal)
-            if k <= 0:
+            # 2. Retrieve more candidates than needed (top_k * 2) for re-ranking
+            fetch_k = min(top_k * 2, index.ntotal)
+            if fetch_k <= 0:
                 continue
                 
-            distances, indices = index.search(query_vec, k)
+            distances, indices = index.search(query_vec, fetch_k)
             
             # 3. Retrieve chunk text contents from SQLite
             chunk_indices = [int(idx) for idx in indices[0] if idx >= 0]
@@ -157,27 +184,56 @@ async def search_vector_store(
             )
             db_chunks = chunk_res.scalars().all()
             chunk_map = {c.chunk_index: c.text_content for c in db_chunks}
+
+            # ── Auto re-index stale documents (chunked with old 500-char size) ──
+            if db_chunks:
+                avg_chunk_len = sum(len(c.text_content) for c in db_chunks) / len(db_chunks)
+                if avg_chunk_len < 700 and doc.extracted_text:
+                    logger.info(
+                        f"📦 Document {doc_id} has stale small chunks (avg {avg_chunk_len:.0f} chars < 700). "
+                        f"Scheduling background re-index with new chunk_size=800..."
+                    )
+                    async def _reindex_background(d_id=doc_id, d_text=doc.extracted_text):
+                        try:
+                            from app.core.database import AsyncSessionLocal
+                            from app.services.rag_service import generate_document_chunks
+                            async with AsyncSessionLocal() as bg_db:
+                                await generate_document_chunks(d_id, d_text, bg_db)
+                                await bg_db.commit()
+                            # Evict stale FAISS index from cache so next query uses new index
+                            CacheManager.evict_faiss_index(d_id)
+                            logger.info(f"✅ Background re-index complete for {d_id}")
+                        except Exception as re_err:
+                            logger.error(f"Background re-index failed for {d_id}: {re_err}")
+                    import asyncio
+                    asyncio.create_task(_reindex_background())
             
-            # 4. Map similarity scores (FAISS FlatIP outputs inner product, which is cosine similarity for normalized vectors)
+            # 4. Apply keyword boost re-ranking
             for score, chunk_idx in zip(distances[0], indices[0]):
                 chunk_idx = int(chunk_idx)
                 if chunk_idx in chunk_map:
+                    chunk_text_content = chunk_map[chunk_idx]
                     # Parse page number if present in chunk text, e.g. "[Page 1]"
                     page_num = 1
-                    match = re.search(r"\[Page (\d+)\]", chunk_map[chunk_idx])
+                    match = re.search(r"\[Page (\d+)\]", chunk_text_content)
                     if match:
                         page_num = int(match.group(1))
+
+                    # Apply keyword boost to raw cosine score
+                    boosted_score = _keyword_boost_score(chunk_text_content, query, float(score))
                         
                     all_hits.append({
-                        "text": chunk_map[chunk_idx],
+                        "text": chunk_text_content,
                         "source": filename,
                         "page": page_num,
-                        "score": float(score),
+                        "score": boosted_score,
+                        "raw_score": float(score),
                         "document_id": doc_id
                     })
         except Exception as e:
             logger.error(f"Error searching FAISS index for document {doc_id}: {e}")
             
-    # Sort hits from all documents descending by similarity score
+    # Sort all hits descending by boosted score, return top top_k
     all_hits.sort(key=lambda x: x["score"], reverse=True)
-    return all_hits
+    return all_hits[:top_k]
+

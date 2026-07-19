@@ -25,9 +25,10 @@ def get_httpx_client() -> httpx.AsyncClient:
         _client_instance = httpx.AsyncClient(
             base_url=base_url,
             limits=limits,
-            # 300s timeout: GPU inference is fast but streaming long responses takes time.
-            # 180s was too short for CPU fallback causing mid-stream disconnects.
-            timeout=httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0),
+            # connect=60s: handles cold model load (~20s) on first request after idle.
+            # read=300s: long enough for full streaming responses even on CPU fallback.
+            # pool=30s: prevents pool exhaustion during concurrent AI pipeline tasks.
+            timeout=httpx.Timeout(connect=60.0, read=300.0, write=30.0, pool=30.0),
         )
         logger.info(f"🔌 Shared HTTPX Client initialized for Ollama at {base_url}")
     return _client_instance
@@ -48,7 +49,10 @@ def parse_keep_alive(val: str):
 
 
 async def warmup_model(model: Optional[str] = None) -> None:
-    """Keep the model resident in VRAM by sending a dummy fast-completion prompt."""
+    """Keep the model resident in VRAM by sending a dummy fast-completion prompt.
+    Uses keep_alive=-1 so the model stays loaded indefinitely — eliminates the
+    ~20s cold-start penalty that causes streaming timeouts during first chat query.
+    """
     model_name = model or settings.OLLAMA_MODEL
     logger.info(f"🔥 Warming up model {model_name}...")
     try:
@@ -57,7 +61,8 @@ async def warmup_model(model: Optional[str] = None) -> None:
             "model": model_name,
             "messages": [{"role": "user", "content": "hi"}],
             "stream": False,
-            "keep_alive": parse_keep_alive(settings.OLLAMA_KEEP_ALIVE),
+            # keep_alive=-1: model stays loaded indefinitely, no idle eviction.
+            "keep_alive": -1,
             "options": {
                 "num_predict": 1,
                 "num_ctx": 128,
@@ -67,7 +72,7 @@ async def warmup_model(model: Optional[str] = None) -> None:
             },
         }
         await client.post("/api/chat", json=payload)
-        logger.info("✅ Ollama model is now loaded and resident in VRAM.")
+        logger.info("✅ Ollama model is now loaded and permanently resident in VRAM.")
     except Exception as e:
         logger.warning(f"Ollama model warmup skipped: {e}")
 
@@ -157,6 +162,7 @@ async def call_ollama_stream(
     - num_ctx reduced 2048→1024: halves prefill time, key for fast first-token delivery
     - num_predict reduced 380→250: chat answers should be concise; prevents runaway generation
     - num_gpu: 999 forces all layers to GPU
+    - keep_alive=-1: keeps model permanently in VRAM after first load, avoids cold-start
     - use_mmap REMOVED: mmap conflicts with Vulkan GPU backend and causes slow cold-loads
     """
     client = get_httpx_client()
@@ -166,7 +172,9 @@ async def call_ollama_stream(
         "model": model_name,
         "messages": [{"role": "user", "content": prompt}],
         "stream": True,
-        "keep_alive": parse_keep_alive(settings.OLLAMA_KEEP_ALIVE),
+        # keep_alive=-1: model stays loaded in VRAM indefinitely after first use.
+        # This prevents the ~20s cold-load penalty on every chat request after idle.
+        "keep_alive": -1,
         "options": {
             "temperature": 0,           # Greedy for maximum speed
             "num_predict": num_predict,

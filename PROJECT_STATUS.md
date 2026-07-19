@@ -99,20 +99,34 @@ The system is fully containerized using **Docker Compose** and structured as fol
 - **Timeline**:
   - Document status updates: `uploaded` ➔ `processing` (Extracting Text) ➔ `text_extracted` (Launches background worker) ➔ `completed`.
   - Once status changes to `text_extracted`, the frontend auto-triggers three concurrent backend tasks:
-    1. **Summary generation** (brief 80-word executive summary).
-    2. **Field extraction** (policy details).
-    3. **Risk Analysis** (clause warnings).
+    1. **Summary generation** — structured 5-field AI summary (400–500 word flowing narrative + 4 bullet-point sub-sections).
+    2. **Field extraction** — policy details (insurer, premium, deductibles, etc.).
+    3. **Risk Analysis** — clause warnings with severity ratings.
   - Progress messages and spinners are displayed in real-time. Manual rerun buttons are hidden until status is `completed` or `failed`.
 
-### 5. 🤖 Structured Key Field Extraction
+### 5. 📝 Structured AI Summary Generation
+- **Implementation Status**: Fully Complete
+- **Backend Service**: [ai_service.py](file:///d:/Imp/VScode/Projects/HealthCare/AI-Healthcare-App/backend/app/services/ai_service.py)
+- **Frontend Page**: [[id]/page.tsx](file:///d:/Imp/VScode/Projects/HealthCare/AI-Healthcare-App/frontend/src/app/%28dashboard%29/documents/%5Bid%5D/page.tsx)
+- **Summary Format** (5-Field Structured Output):
+  - **`summary_text`** — A comprehensive **400–500 word flowing narrative** written in a warm, professional tone addressed directly to the user (e.g., "Your policy details", "You are covered for"). Structured into 6 clear prose paragraphs: *(1) Introduction — insured name and plan, (2) Coverage Overview, (3) Family & Premium Details, (4) Key Benefits, (5) Waiting Periods & Restrictions, (6) Closing Advisory.* **No bullet points** — clean flowing paragraphs only.
+  - **`coverage_summary`** — Key coverages and benefits in **bullet points** (each starting with `•`). One complete benefit per point. Max 80 words.
+  - **`exclusions_summary`** — Key policy exclusions in **bullet points** (each starting with `•`). One complete exclusion per point. Max 80 words.
+  - **`waiting_period_summary`** — Waiting period rules in **bullet points** (each starting with `•`). One complete rule per point. Max 80 words.
+  - **`premium_summary`** — Premium, deductible, and co-payment details in **bullet points** (each starting with `•`). One complete item per point. Max 80 words.
+- **LLM Prompting**: Uses a strict JSON-only prompt (`SUMMARIZATION_PROMPT`) with Gemma 3 (4B). The model is instructed to return a valid JSON object with exactly these 5 keys — no markdown wrappers, no preamble, no extra keys.
+- **Storage**: All 5 fields are saved into the `summaries` database table (one record per document, enforced by `UNIQUE` constraint on `document_id`).
+- **Translation Support**: Each of the 5 fields can be independently translated to a target language via the Google Translate API fallback → Ollama translation chain.
+
+### 6. 🤖 Structured Key Field Extraction
 - **Implementation Status**: Fully Complete
 - **Backend Service**: [ai_service.py](file:///d:/Imp/VScode/Projects/HealthCare/AI-Healthcare-App/backend/app/services/ai_service.py)
 - **Details**:
   - Prompts Gemma 3 (4B) to extract key parameters from policy text as structured JSON.
-  - Extracted fields: `Insurer Name`, `Policy Name`, `Policy Number`, `Sum Insured`, `Premium Amount`, `Deductible`, `Co-payment`, `Waiting Periods`, `Coverage Type`, and `Network Hospitals`.
+  - Extracted fields: `Insurer Name`, `Policy Name`, `Policy Number`, `Sum Insured`, `Premium Amount`, `Deductible`, `Co-payment`, `Waiting Periods`, `Coverage Type`, `Policy Term`, `Network Hospitals`, `Pre-existing Coverage`, `Maternity Coverage`, `Room Rent Limit`, and `Claim Process`.
   - Saves records directly into the `extracted_fields` database table for programmatic listing and comparison.
 
-### 6. ⚠️ Policy Clause Risk Detection
+### 7. ⚠️ Policy Clause Risk Detection
 - **Implementation Status**: Fully Complete
 - **Backend Service**: [ai_service.py](file:///d:/Imp/VScode/Projects/HealthCare/AI-Healthcare-App/backend/app/services/ai_service.py)
 - **Details**:
@@ -120,7 +134,7 @@ The system is fully containerized using **Docker Compose** and structured as fol
   - Rates risk severity (`Low`, `Medium`, `High`).
   - Limits explanation and recommendation text to 30 words per item for faster execution. Saves data to the `risk_analyses` table.
 
-### 7. 💬 Conversational Chat & Streaming RAG
+### 8. 💬 Conversational Chat & Streaming RAG
 - **Implementation Status**: Fully Complete
 - **Backend Routes**: `/ai/chat`, `/ai/chat/stream`, `/chat/sessions`
 - **Backend Service**: [rag_service.py](file:///d:/Imp/VScode/Projects/HealthCare/AI-Healthcare-App/backend/app/services/rag_service.py)
@@ -134,7 +148,7 @@ The system is fully containerized using **Docker Compose** and structured as fol
   - **No-LLM Fallback Engine**: If Ollama or the embedding service is unreachable, a smart fallback system tokenizes queries, parses keyword triggers, and extracts relevant sentences from the policy text or returns realistic fallback definitions (deductibles, co-pays).
   - **Persistent Session Storage**: Stores chat history in `chat_sessions` and `chat_messages` tables. Supports listing, deleting, creating, and switching active chat threads.
 
-### 8. 📊 Side-by-Side Policy Comparator
+### 9. 📊 Side-by-Side Policy Comparator
 - **Implementation Status**: Fully Complete
 - **Backend Endpoint**: `/api/v1/documents/compare`
 - **Frontend Page**: [compare/page.tsx](file:///d:/Imp/VScode/Projects/HealthCare/AI-Healthcare-App/frontend/src/app/%28dashboard%29/compare/page.tsx)
@@ -143,7 +157,7 @@ The system is fully containerized using **Docker Compose** and structured as fol
   - Displays a tabular matrix comparing sum insured, premium, co-pay, deductibles, waiting periods, and exclusions.
   - Uses Gemma 3 (4B) to generate a synthesized summary recommending which policy is "best for" specific situations and a final comparison verdict.
 
-### 9. ⏰ Policy Renewal & Premium Payment Reminders
+### 10. ⏰ Policy Renewal & Premium Payment Reminders
 - **Implementation Status**: Fully Complete
 - **Backend Endpoint**: `/api/v1/documents/reminders`
 - **Details**:
@@ -151,7 +165,7 @@ The system is fully containerized using **Docker Compose** and structured as fol
   - Dynamically calculates alerts: renewal notifications trigger **7 days prior**; premium notifications trigger **5 days prior**.
   - Notifications are listed in the user dashboard and can be dismissed via API PATCH.
 
-### 10. 📈 Claims Underwriting Analytics & Explainable AI (XAI)
+### 11. 📈 Claims Underwriting Analytics & Explainable AI (XAI)
 - **Implementation Status**: Fully Complete
 - **Pipeline Script**: [train_and_analyze.py](file:///d:/Imp/VScode/Projects/HealthCare/AI-Healthcare-App/data_science_analysis/train_and_analyze.py)
 - **Backend Route**: `/api/v1/claims/stats`
@@ -165,18 +179,18 @@ The system is fully containerized using **Docker Compose** and structured as fol
     - **SHAP Summary Plot**: Global feature impact attribution.
     - **LIME Explainer**: Local prediction feature attribution for individual claims.
 
-### 11. 🌏 Document Translation
+### 12. 🌏 Document Translation
 - **Implementation Status**: Fully Complete
 - **Backend Route**: `/api/v1/ai/translate`
-- **Details**: Translates generated summaries or extracted fields into target languages. Uses the free Google Translate web API as the primary engine for fast, highly accurate, keyless translation, falling back to local Ollama (Gemma 3) if offline.
+- **Details**: Translates each of the 5 summary fields independently into a target language. Uses the free Google Translate web API as the primary engine for fast, highly accurate, keyless translation, falling back to local Ollama (Gemma 3) if offline. Each field is translated in parallel using `Promise.all` on the frontend.
 
 
-### 12. 📋 Claims Checklist Generator
+### 13. 📋 Claims Checklist Generator
 - **Implementation Status**: Fully Complete
 - **Backend Route**: `/api/v1/ai/claims-checklist`
 - **Details**: Generates custom required documents and steps for a specific treatment type based on the terms and exceptions extracted from the policy text.
 
-### 13. 📊 RAG Evaluation & System Metrics
+### 14. 📊 RAG Evaluation & System Metrics
 - **Implementation Status**: Fully Complete
 - **Backend Route**: `/api/v1/ai/model-metrics`
 - **Details**:
@@ -184,7 +198,7 @@ The system is fully containerized using **Docker Compose** and structured as fol
   - Evaluates every RAG search query on three indexes: **Faithfulness** (is the answer grounded in the context?), **Answer Relevance** (does it address the query?), and **Context Relevance** (does retrieval match the question?).
   - Logs latency and accuracy scores into the database `rag_query_logs` for visualization.
 
-### 14. 📤 PDF Report Export & Email
+### 15. 📤 PDF Report Export & Email
 - **Implementation Status**: Fully Complete
 - **Backend Endpoint**: `/api/v1/documents/{id}/export` & `/api/v1/documents/{id}/email`
 - **Details**:
@@ -239,13 +253,14 @@ Models are declared in [backend/app/models/](file:///d:/Imp/VScode/Projects/Heal
 | Column | Type | Constraints | Description |
 |---|---|---|---|
 | `id` | VARCHAR(36) | Primary Key (UUID) | Unique summary ID |
-| `document_id` | VARCHAR(36) | Foreign Key (`documents.id`) | Linked document |
-| `summary_text` | TEXT | NOT NULL | Executive brief |
-| `coverage_summary` | TEXT | Nullable | Coverage highlights |
-| `exclusions_summary`| TEXT | Nullable | Exclusions bulleted list |
-| `waiting_period_summary`| TEXT | Nullable | Waiting periods brief |
-| `premium_summary` | TEXT | Nullable | Premium costs/taxes summary |
+| `document_id` | VARCHAR(36) | Foreign Key (`documents.id`), Unique | Linked document (one summary per doc) |
+| `summary_text` | TEXT | NOT NULL | 400–500 word flowing narrative — no bullet points |
+| `coverage_summary` | TEXT | Nullable | Coverage highlights in `•` bullet points (max 80 words) |
+| `exclusions_summary`| TEXT | Nullable | Exclusions in `•` bullet points (max 80 words) |
+| `waiting_period_summary`| TEXT | Nullable | Waiting period rules in `•` bullet points (max 80 words) |
+| `premium_summary` | TEXT | Nullable | Premium / deductible / co-pay in `•` bullet points (max 80 words) |
 | `model_used` | VARCHAR(100) | NOT NULL | Name of LLM used for extraction |
+| `created_at` | TIMESTAMP | Default: UTC Now | Generation timestamp |
 
 ### 5. `RiskAnalysis` (Table: `risk_analyses`)
 | Column | Type | Constraints | Description |

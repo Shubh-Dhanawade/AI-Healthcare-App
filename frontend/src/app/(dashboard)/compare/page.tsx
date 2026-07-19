@@ -404,7 +404,7 @@ export default function ComparePage() {
             <div>
               <p className="font-semibold text-white text-sm">Selection Status</p>
               <p className="text-slate-400 text-xs">
-                Selected <span className="text-blue-400 font-bold">{selectedIds.length}</span> of <span className="text-slate-200">3</span> policies.
+                Selected <span className="text-blue-400 font-bold">{selectedIds.length}</span> policies.
                 {selectedIds.length < 2 && ' Select at least 2 to compare.'}
               </p>
             </div>

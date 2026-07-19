@@ -48,6 +48,12 @@ class CacheManager:
             logger.info(f"🧹 FAISS index for document {doc_id} removed from cache.")
 
     @staticmethod
+    def evict_faiss_index(doc_id: str) -> None:
+        """Alias for clear_faiss_index — evicts a stale FAISS index after re-indexing."""
+        CacheManager.clear_faiss_index(doc_id)
+
+
+    @staticmethod
     def get_document_text(doc_id: str) -> Optional[str]:
         """Retrieve cached document text."""
         return _document_text_cache.get(doc_id)
