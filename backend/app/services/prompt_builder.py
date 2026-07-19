@@ -17,6 +17,8 @@ def build_chat_prompt(
     """Build an optimized prompt for RAG Chat."""
     
     # 1. Format the retrieved chunks context
+    # Truncation raised to 1200 chars (was 600): insurance clauses can be 700-900 chars;
+    # the old limit was cutting maternity/coverage details before the key sentence.
     context_lines = []
     if is_comparison:
         by_source: Dict[str, List[str]] = {}
@@ -27,12 +29,11 @@ def build_chat_prompt(
         for src, texts in by_source.items():
             context_lines.append(f"=== {src} ===")
             for t in texts:
-                # Truncate context per block to save tokens
-                context_lines.append(t[:400])
+                context_lines.append(t[:600])  # Comparison keeps shorter per-source to stay token-safe
             context_lines.append("")
     else:
         for c in retrieved_chunks:
-            context_lines.append(f"[{c['source']} - Page {c.get('page', 1)}]\n{c['text'][:600]}")
+            context_lines.append(f"[{c['source']} - Page {c.get('page', 1)}]\n{c['text'][:1200]}")
             
     context_block = "\n---\n".join(context_lines) if context_lines else "No relevant policy details found in indexed chunks — use the stored summaries below to answer."
     
@@ -94,17 +95,17 @@ def build_chat_prompt(
             f"You are HealthPolicyLens, a knowledgeable and friendly healthcare insurance assistant helping {user_name}.\n"
             "\n"
             "Instructions:\n"
-            "1. Answer the user's query clearly and concisely using the POLICY CONTEXT and STORED POLICY SUMMARIES below.\n"
-            "2. ALWAYS try to extract relevant information from the context first. The context contains direct excerpts from the policy document.\n"
-            "3. If the user asks about premium, coverage, waiting periods, exclusions, or any policy term — search the context carefully and provide the answer found there.\n"
-            "4. If the user is asking for clarification or a follow-up question, also use the PREVIOUS CONVERSATION.\n"
-            "5. Do NOT include any inline references, page numbers, or source citations (such as 'Reference: ...', 'Page X', 'In filename.pdf - Page Y') inside your response text. Citations are automatically appended in a separate section below your response, so any inline citations are redundant.\n"
-            "6. Only if the information is truly absent from both the context AND summaries, say: 'I could not find that specific detail in the document.'\n"
+            "1. Answer the user's query using the POLICY CONTEXT blocks below. Each block is a direct excerpt from the policy document.\n"
+            "2. READ EVERY CONTEXT BLOCK carefully before answering. The answer may appear in any block, not just the first one.\n"
+            "3. If the user asks about a specific topic (e.g. maternity, deductible, room rent, co-payment, waiting period) — search ALL context blocks for that exact word or any related synonym. Even if it appears only once in one block, report it.\n"
+            "4. NEVER say the topic is 'not mentioned' or 'not covered' unless you have read through every context block above and found zero relevant text AND the stored summaries also have no mention.\n"
+            "5. If the information is genuinely absent from BOTH context AND summaries, say: 'I could not find that specific detail in the provided document excerpts. You may refer to the full policy document for this information.'\n"
+            "6. Do NOT include any inline references, page numbers, or source citations inside your response text.\n"
             "7. Do NOT output 'ASSISTANT:', 'USER:', or 'context:' labels in your response.\n"
             "8. Never output curly braces in your answer.\n"
             "\n"
             f"STORED POLICY SUMMARIES:\n{summaries_block}\n\n"
-            f"POLICY CONTEXT (direct document excerpts):\n{context_block}\n\n"
+            f"POLICY CONTEXT (direct document excerpts — read all blocks):\n{context_block}\n\n"
             f"PREVIOUS CONVERSATION:\n{history_str}\n\n"
             f"User Query: {query}\n"
             "\n"
@@ -112,3 +113,4 @@ def build_chat_prompt(
         )
         
     return prompt
+

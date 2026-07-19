@@ -47,6 +47,21 @@ export const documentsApi = {
     return res.data;
   },
 
+  /** Upload multiple image files as a single unified document (multi-image bundle). */
+  uploadImages: async (files: File[], onProgress?: (p: number) => void) => {
+    const formData = new FormData();
+    files.forEach((f) => formData.append('files', f));
+    const res = await apiClient.post('/documents/upload-images', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      onUploadProgress: (e) => {
+        if (onProgress && e.total) {
+          onProgress(Math.round((e.loaded * 100) / e.total));
+        }
+      },
+    });
+    return res.data;
+  },
+
   list: async () => {
     const res = await apiClient.get('/documents');
     return res.data;

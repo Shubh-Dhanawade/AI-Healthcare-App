@@ -1,14 +1,15 @@
 'use client';
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { documentsApi, aiApi, exportApi } from '@/lib/apiHelpers';
+import { documentsApi, aiApi, exportApi, remindersApi } from '@/lib/apiHelpers';
 import { DocumentDetail, RiskAnalysis } from '@/types';
 import { useParams, useRouter } from 'next/navigation';
 import toast from 'react-hot-toast';
 import {
   ArrowLeft, Brain, Shield, FileText, Search, RefreshCw,
   AlertTriangle, Info, ChevronDown, ChevronUp,
-  Send, MessageSquare, List, Loader2, Download, Mail
+  Send, MessageSquare, List, Loader2, Download, Mail,
+  Volume2, VolumeX
 } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import DocumentStatusBadge from '@/components/documents/DocumentStatusBadge';
@@ -347,7 +348,7 @@ export default function DocumentDetailPage() {
   const docId = params.id as string;
   const router = useRouter();
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<'summary' | 'fields' | 'risks' | 'query'>('summary');
+  const [activeTab, setActiveTab] = useState<'summary' | 'fields' | 'risks' | 'checklist' | 'query'>('summary');
   const [queryInput, setQueryInput] = useState('');
   const [isQuerying, setIsQuerying] = useState(false);
   const [chatHistory, setChatHistory] = useState<any[]>([]);
@@ -359,6 +360,17 @@ export default function DocumentDetailPage() {
   const [emailInput, setEmailInput] = useState('');
   const [sendingEmail, setSendingEmail] = useState(false);
   const [showExportDropdown, setShowExportDropdown] = useState(false);
+
+  // Claims Checklist states
+  const [treatmentTypeInput, setTreatmentTypeInput] = useState('');
+  const [checklistData, setChecklistData] = useState<any>(null);
+  const [isGeneratingChecklist, setIsGeneratingChecklist] = useState(false);
+
+  // Reminders / Alerts states
+  const [renewalDate, setRenewalDate] = useState('');
+  const [premiumDueDate, setPremiumDueDate] = useState('');
+  const [premiumAmount, setPremiumAmount] = useState('');
+  const [isSavingReminders, setIsSavingReminders] = useState(false);
 
   const handleDownload = async () => {
     if (!doc) return;
@@ -505,24 +517,117 @@ export default function DocumentDetailPage() {
     exclusions_summary?: string;
     waiting_period_summary?: string;
     premium_summary?: string;
+    extracted_fields?: any[];
+    risk_analyses?: any[];
+    checklistData?: any;
   }>>({});
   const [isTranslating, setIsTranslating] = useState(false);
+  const [speakingTab, setSpeakingTab] = useState<'summary' | 'fields' | 'risks' | 'checklist' | null>(null);
+
+  const safeTranslate = async (text: string | undefined, lang: string) => {
+    if (!text || !text.trim()) return { translated_text: '' };
+    try {
+      return await aiApi.translate(text, lang);
+    } catch (err) {
+      console.error('Translation error for text:', text, err);
+      return { translated_text: text };
+    }
+  };
 
   const handleLanguageChange = async (lang: string) => {
     setSelectedLanguage(lang);
-    if (lang === 'English' || !doc?.summary) return;
+    if (lang === 'English' || !doc) return;
     if (translations[lang]) return;
     setIsTranslating(true);
-    const toastId = toast.loading(`Translating summary to ${lang}...`);
+    const toastId = toast.loading(`Translating page content to ${lang}...`);
     try {
       const summary = doc.summary;
-      const [tText, tCoverage, tExclusions, tWaiting, tPremium] = await Promise.all([
-        summary.summary_text ? aiApi.translate(summary.summary_text, lang) : Promise.resolve({ translated_text: '' }),
-        summary.coverage_summary ? aiApi.translate(summary.coverage_summary, lang) : Promise.resolve({ translated_text: '' }),
-        summary.exclusions_summary ? aiApi.translate(summary.exclusions_summary, lang) : Promise.resolve({ translated_text: '' }),
-        summary.waiting_period_summary ? aiApi.translate(summary.waiting_period_summary, lang) : Promise.resolve({ translated_text: '' }),
-        summary.premium_summary ? aiApi.translate(summary.premium_summary, lang) : Promise.resolve({ translated_text: '' }),
+      const summaryPromises = summary ? [
+        safeTranslate(summary.summary_text, lang),
+        safeTranslate(summary.coverage_summary, lang),
+        safeTranslate(summary.exclusions_summary, lang),
+        safeTranslate(summary.waiting_period_summary, lang),
+        safeTranslate(summary.premium_summary, lang),
+      ] : Array(5).fill(Promise.resolve({ translated_text: '' }));
+
+      const fieldsPromises = (doc.extracted_fields || []).flatMap(f => [
+        safeTranslate(f.field_name, lang),
+        safeTranslate(f.field_value, lang),
       ]);
+
+      const risksPromises = (doc.risk_analyses || []).flatMap(r => [
+        safeTranslate(r.clause_text, lang),
+        safeTranslate(r.explanation, lang),
+        safeTranslate(r.recommendation, lang),
+      ]);
+
+      const checklistPromises = checklistData ? [
+        safeTranslate(checklistData.estimated_approval_days, lang),
+        ...checklistData.checklist.flatMap((item: any) => [
+          safeTranslate(item.document_name, lang),
+          safeTranslate(item.importance, lang),
+          safeTranslate(item.description, lang)
+        ]),
+        ...checklistData.claim_steps.map((step: string) => safeTranslate(step, lang))
+      ] : [];
+
+      const results = await Promise.all([
+        ...summaryPromises,
+        ...fieldsPromises,
+        ...risksPromises,
+        ...checklistPromises
+      ]);
+
+      let ptr = 0;
+      const tText = results[ptr++];
+      const tCoverage = results[ptr++];
+      const tExclusions = results[ptr++];
+      const tWaiting = results[ptr++];
+      const tPremium = results[ptr++];
+
+      const translatedFields = (doc.extracted_fields || []).map(f => {
+        const name = f.field_name ? results[ptr++].translated_text : f.field_name;
+        const val = f.field_value ? results[ptr++].translated_text : f.field_value;
+        return {
+          ...f,
+          field_name: name || f.field_name,
+          field_value: val || f.field_value
+        };
+      });
+
+      const translatedRisks = (doc.risk_analyses || []).map(r => {
+        const clause = r.clause_text ? results[ptr++].translated_text : r.clause_text;
+        const expl = r.explanation ? results[ptr++].translated_text : r.explanation;
+        const rec = r.recommendation ? results[ptr++].translated_text : r.recommendation;
+        return {
+          ...r,
+          clause_text: clause || r.clause_text,
+          explanation: expl || r.explanation,
+          recommendation: rec || r.recommendation
+        };
+      });
+
+      let translatedChecklist = null;
+      if (checklistData) {
+        const estTimeline = results[ptr++].translated_text;
+        const items = [];
+        for (let i = 0; i < checklistData.checklist.length; i++) {
+          const docName = results[ptr++].translated_text;
+          const imp = results[ptr++].translated_text;
+          const desc = results[ptr++].translated_text;
+          items.push({ document_name: docName, importance: imp, description: desc });
+        }
+        const steps = [];
+        for (let i = 0; i < checklistData.claim_steps.length; i++) {
+          steps.push(results[ptr++].translated_text);
+        }
+        translatedChecklist = {
+          checklist: items,
+          claim_steps: steps,
+          estimated_approval_days: estTimeline,
+        };
+      }
+
       setTranslations(prev => ({
         ...prev,
         [lang]: {
@@ -531,17 +636,189 @@ export default function DocumentDetailPage() {
           exclusions_summary: tExclusions.translated_text || undefined,
           waiting_period_summary: tWaiting.translated_text || undefined,
           premium_summary: tPremium.translated_text || undefined,
+          extracted_fields: translatedFields,
+          risk_analyses: translatedRisks,
+          checklistData: translatedChecklist
         }
       }));
-      toast.success(`Translated summary to ${lang}!`, { id: toastId });
+      toast.success(`Translated page content to ${lang}!`, { id: toastId });
     } catch (error) {
       console.error(error);
-      toast.error(`Failed to translate summary. Please check if Ollama is running.`, { id: toastId });
+      toast.error(`Failed to translate. Please check if Ollama is running.`, { id: toastId });
       setSelectedLanguage('English');
     } finally {
       setIsTranslating(false);
     }
   };
+
+  const speakText = (text: string, lang: string, onStop?: () => void) => {
+    if (typeof window === 'undefined' || !window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    if (!text) return;
+    const utterance = new SpeechSynthesisUtterance(text);
+    let langCode = 'en-US';
+    if (lang === 'Hindi') langCode = 'hi-IN';
+    else if (lang === 'Marathi') langCode = 'mr-IN';
+    utterance.lang = langCode;
+    const voices = window.speechSynthesis.getVoices();
+    const matchingVoice = voices.find(v => v.lang.startsWith(langCode) || v.lang.includes(langCode.replace('-', '_')));
+    if (matchingVoice) utterance.voice = matchingVoice;
+    utterance.rate = 1.0;
+    utterance.pitch = 1.0;
+    if (onStop) { utterance.onend = onStop; utterance.onerror = onStop; }
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const getSummarySpeakText = (displayedSummary: any, lang: string) => {
+    if (!displayedSummary) return '';
+    let text = '';
+    if (lang === 'Hindi') {
+      text += `दस्तावेज़ का सारांश: ${displayedSummary.summary_text || ''}\n\n`;
+      if (displayedSummary.coverage_summary) text += `कवरेज और लाभ: ${displayedSummary.coverage_summary}\n\n`;
+      if (displayedSummary.exclusions_summary) text += `बहिष्करण और सीमाएं: ${displayedSummary.exclusions_summary}\n\n`;
+      if (displayedSummary.waiting_period_summary) text += `प्रतीक्षा अवधि: ${displayedSummary.waiting_period_summary}\n\n`;
+      if (displayedSummary.premium_summary) text += `प्रीमियम और शुल्क: ${displayedSummary.premium_summary}\n\n`;
+    } else if (lang === 'Marathi') {
+      text += `दस्तएवजाचा सारांश: ${displayedSummary.summary_text || ''}\n\n`;
+      if (displayedSummary.coverage_summary) text += `कव्हरेज आणि फायदे: ${displayedSummary.coverage_summary}\n\n`;
+      if (displayedSummary.exclusions_summary) text += `वगळलेले मुद्दे आणि मर्यादा: ${displayedSummary.exclusions_summary}\n\n`;
+      if (displayedSummary.waiting_period_summary) text += `प्रतीक्षा कालावधी: ${displayedSummary.waiting_period_summary}\n\n`;
+      if (displayedSummary.premium_summary) text += `प्रीमियम आणि शुल्क: ${displayedSummary.premium_summary}\n\n`;
+    } else {
+      text += `Document Summary: ${displayedSummary.summary_text || ''}\n\n`;
+      if (displayedSummary.coverage_summary) text += `Coverage and Benefits: ${displayedSummary.coverage_summary}\n\n`;
+      if (displayedSummary.exclusions_summary) text += `Exclusions and Limits: ${displayedSummary.exclusions_summary}\n\n`;
+      if (displayedSummary.waiting_period_summary) text += `Waiting Periods: ${displayedSummary.waiting_period_summary}\n\n`;
+      if (displayedSummary.premium_summary) text += `Premium and Charges: ${displayedSummary.premium_summary}\n\n`;
+    }
+    return text;
+  };
+
+  const getFieldsSpeakText = (fields: any[], lang: string) => {
+    if (!fields || fields.length === 0) return '';
+    let text = '';
+    if (lang === 'Hindi') {
+      text += `निकालने गए फ़ील्ड विवरण निम्नानुसार हैं:\n`;
+      fields.forEach(f => { text += `${f.field_name}: ${f.field_value || 'लागू नहीं'}.\n`; });
+    } else if (lang === 'Marathi') {
+      text += `काढून घेतलेले फील्ड तपशील खालीलप्रमाणे आहेत:\n`;
+      fields.forEach(f => { text += `${f.field_name}: ${f.field_value || 'लागू नाही'}.\n`; });
+    } else {
+      text += `Here are the extracted fields:\n`;
+      fields.forEach(f => { text += `${f.field_name}: ${f.field_value || 'Not available'}.\n`; });
+    }
+    return text;
+  };
+
+  const getRisksSpeakText = (risks: any[], lang: string) => {
+    if (!risks || risks.length === 0) return '';
+    let text = '';
+    if (lang === 'Hindi') {
+      text += `जोखिम विश्लेषण विवरण निम्नानुसार हैं:\n`;
+      risks.forEach((r, idx) => {
+        text += `जोखिम ${idx + 1}: प्रकार ${r.risk_type.replace(/_/g, ' ')}, गंभीरता ${r.severity}.\n`;
+        if (r.clause_text) text += `दस्तावेज़ खंड: ${r.clause_text}.\n`;
+        if (r.explanation) text += `स्पष्टीकरण: ${r.explanation}.\n`;
+        if (r.recommendation) text += `सिफारिश: ${r.recommendation}.\n`;
+      });
+    } else if (lang === 'Marathi') {
+      text += `धोका विश्लेषण तपशील खालीलप्रमाणे आहेत:\n`;
+      risks.forEach((r, idx) => {
+        text += `धोका ${idx + 1}: प्रकार ${r.risk_type.replace(/_/g, ' ')}, तीव्रता ${r.severity}.\n`;
+        if (r.clause_text) text += `दस्तएवज खंड: ${r.clause_text}.\n`;
+        if (r.explanation) text += `स्पष्टीकरण: ${r.explanation}.\n`;
+        if (r.recommendation) text += `शिफारस: ${r.recommendation}.\n`;
+      });
+    } else {
+      text += `Here is the risk analysis:\n`;
+      risks.forEach((r, idx) => {
+        text += `Risk ${idx + 1}: Type ${r.risk_type.replace(/_/g, ' ')}, Severity ${r.severity}.\n`;
+        if (r.clause_text) text += `Clause text: ${r.clause_text}.\n`;
+        if (r.explanation) text += `Explanation: ${r.explanation}.\n`;
+        if (r.recommendation) text += `Recommendation: ${r.recommendation}.\n`;
+      });
+    }
+    return text;
+  };
+
+  const getChecklistSpeakText = (data: any, lang: string) => {
+    if (!data) return '';
+    let text = '';
+    if (lang === 'Hindi') {
+      text += `चिकित्सा उपचार के लिए दावे की चेकलिस्ट निम्नानुसार है:\n`;
+      text += `अनुमानित दावा स्वीकृति समयरेखा: ${data.estimated_approval_days}.\n\n`;
+      text += `आवश्यक दस्तावेज:\n`;
+      (data.checklist || []).forEach((item: any) => {
+        text += `दस्तावेज: ${item.document_name}. महत्व: ${item.importance}. निर्देश: ${item.description}.\n`;
+      });
+      text += `\nचरण-दर-चरण दावा प्रक्रिया दिशानिर्देश:\n`;
+      (data.claim_steps || []).forEach((step: string, idx: number) => {
+        text += `चरण ${idx + 1}: ${step}.\n`;
+      });
+    } else if (lang === 'Marathi') {
+      text += `वैद्यकीय उपचारांसाठी दाव्याची चेकलिस्ट खालीलप्रमाणे आहे:\n`;
+      text += `अंदाजित दावा मंजुरीची मुदत: ${data.estimated_approval_days}.\n\n`;
+      text += `आवश्यक कागदपत्रे:\n`;
+      (data.checklist || []).forEach((item: any) => {
+        text += `कागदपत्र: ${item.document_name}. महत्त्व: ${item.importance}. सूचना: ${item.description}.\n`;
+      });
+      text += `\nचरण-दर-चरण दावा प्रक्रिया मार्गदर्शक तत्त्वे:\n`;
+      (data.claim_steps || []).forEach((step: string, idx: number) => {
+        text += `चरण ${idx + 1}: ${step}.\n`;
+      });
+    } else {
+      text += `Here is your claim checklist for treatment.\n`;
+      text += `Estimated claim approval timeline is ${data.estimated_approval_days}.\n\n`;
+      text += `Required claims documents:\n`;
+      (data.checklist || []).forEach((item: any) => {
+        text += `Document: ${item.document_name}. Importance: ${item.importance}. Instructions: ${item.description}.\n`;
+      });
+      text += `\nStep-by-step claim guidelines:\n`;
+      (data.claim_steps || []).forEach((step: string, idx: number) => {
+        text += `Step ${idx + 1}: ${step}.\n`;
+      });
+    }
+    return text;
+  };
+
+  const handlePlaySpeech = (tab: 'summary' | 'fields' | 'risks' | 'checklist') => {
+    if (!doc) return;
+    if (speakingTab === tab) {
+      if (typeof window !== 'undefined' && window.speechSynthesis) window.speechSynthesis.cancel();
+      setSpeakingTab(null);
+      return;
+    }
+    let textToSpeak = '';
+    if (tab === 'summary') {
+      textToSpeak = getSummarySpeakText(displayedSummary, selectedLanguage);
+    } else if (tab === 'fields') {
+      const currentFields = selectedLanguage === 'English'
+        ? doc.extracted_fields
+        : (translations[selectedLanguage]?.extracted_fields || doc.extracted_fields);
+      textToSpeak = getFieldsSpeakText(currentFields, selectedLanguage);
+    } else if (tab === 'risks') {
+      const currentRisks = selectedLanguage === 'English'
+        ? doc.risk_analyses
+        : (translations[selectedLanguage]?.risk_analyses || doc.risk_analyses);
+      textToSpeak = getRisksSpeakText(currentRisks, selectedLanguage);
+    } else if (tab === 'checklist') {
+      const currentChecklist = selectedLanguage === 'English'
+        ? checklistData
+        : (translations[selectedLanguage]?.checklistData || checklistData);
+      textToSpeak = getChecklistSpeakText(currentChecklist, selectedLanguage);
+    }
+    if (!textToSpeak) return;
+    setSpeakingTab(tab);
+    speakText(textToSpeak, selectedLanguage, () => { setSpeakingTab(null); });
+  };
+
+  useEffect(() => {
+    return () => {
+      if (typeof window !== 'undefined' && window.speechSynthesis) window.speechSynthesis.cancel();
+    };
+  }, []);
+
+
 
   // Poll while document is processing OR while AI analysis results are still being generated
   const { data: doc, isLoading, refetch } = useQuery<DocumentDetail>({
@@ -584,6 +861,142 @@ export default function DocumentDetailPage() {
     },
     onError: (err: any) => toast.error(err.response?.data?.detail || 'Failed to start risk analysis'),
   });
+
+
+  // Client side date parsing helpers
+  const parseClientDate = (str: string): string | null => {
+    if (!str) return null;
+    const m1 = str.match(/(\d{1,2})[\-\/](\d{1,2})[\-\/](\d{4})/);
+    if (m1) {
+      let d = parseInt(m1[1]);
+      let m = parseInt(m1[2]);
+      let y = parseInt(m1[3]);
+      if (d > 1900) { y = d; d = parseInt(m1[3]); }
+      try {
+        return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      } catch(e) {}
+    }
+    const m2 = str.match(/(\d{4})[\-\/](\d{1,2})[\-\/](\d{1,2})/);
+    if (m2) {
+      let y = parseInt(m2[1]);
+      let m = parseInt(m2[2]);
+      let d = parseInt(m2[3]);
+      try {
+        return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      } catch(e) {}
+    }
+    const months: Record<string, number> = {
+      jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+      jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12
+    };
+    const m3 = str.match(/(\d{1,2})\s*[\-\s\/]?\s*([A-Za-z]{3})[a-z]*\s*[\-\s\/]?\s*(\d{4})/i);
+    if (m3) {
+      const d = parseInt(m3[1]);
+      const m = months[m3[2].toLowerCase()];
+      const y = parseInt(m3[3]);
+      if (m !== undefined) {
+        try {
+          return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+        } catch(e) {}
+      }
+    }
+    return null;
+  };
+
+  const parseClientDateFromPeriod = (str: string): string | null => {
+    if (!str) return null;
+    const parts = str.toLowerCase().split(/\bto\b/);
+    if (parts.length > 1) {
+      return parseClientDate(parts[parts.length - 1].trim());
+    }
+    return parseClientDate(str);
+  };
+
+  // Reminders states auto loader
+  useEffect(() => {
+    if (doc) {
+      let rDate = '';
+      let pDate = '';
+      let pAmount = '';
+
+      if (doc.renewal_date) {
+        rDate = new Date(doc.renewal_date).toISOString().split('T')[0];
+      } else {
+        const renewalField = doc.extracted_fields?.find(f => {
+          const name = f.field_name.toLowerCase();
+          return name.includes('renewal') || name.includes('expiry') || name.includes('valid to') || name.includes('end date') || name.includes('to date');
+        });
+        if (renewalField?.field_value) {
+          rDate = parseClientDate(renewalField.field_value) || '';
+        } else {
+          const periodField = doc.extracted_fields?.find(f => f.field_name.toLowerCase().includes('period') || f.field_name.toLowerCase().includes('term'));
+          if (periodField?.field_value) {
+            rDate = parseClientDateFromPeriod(periodField.field_value) || '';
+          }
+        }
+      }
+
+      if (doc.premium_due_date) {
+        pDate = new Date(doc.premium_due_date).toISOString().split('T')[0];
+      } else {
+        const dueField = doc.extracted_fields?.find(f => f.field_name.toLowerCase().includes('due date') || f.field_name.toLowerCase().includes('payment due'));
+        if (dueField?.field_value) {
+          pDate = parseClientDate(dueField.field_value) || '';
+        } else if (rDate) {
+          pDate = rDate;
+        }
+      }
+
+      const premField = doc.extracted_fields?.find(f => {
+        const name = f.field_name.toLowerCase();
+        return name.includes('premium') && !name.includes('due') && !name.includes('frequency');
+      });
+      if (premField?.field_value) {
+        pAmount = premField.field_value;
+      }
+
+      if (rDate) setRenewalDate(rDate);
+      if (pDate) setPremiumDueDate(pDate);
+      if (pAmount) setPremiumAmount(pAmount);
+    }
+  }, [doc]);
+
+  const handleSaveReminders = async () => {
+    setIsSavingReminders(true);
+    const toastId = toast.loading('Scheduling policy alerts...');
+    try {
+      await remindersApi.schedule({
+        document_id: docId,
+        renewal_date: renewalDate ? new Date(renewalDate).toISOString() : undefined,
+        premium_due_date: premiumDueDate ? new Date(premiumDueDate).toISOString() : undefined,
+        premium_amount: premiumAmount ? parseFloat(premiumAmount.replace(/[^\d.]/g, '')) : undefined,
+      });
+      toast.success('Smart renewal and premium alerts scheduled successfully!', { id: toastId });
+      queryClient.invalidateQueries({ queryKey: ['reminders'] });
+      queryClient.invalidateQueries({ queryKey: ['document', docId] });
+    } catch (error: any) {
+      console.error(error);
+      toast.error(error.response?.data?.detail || 'Failed to schedule alerts', { id: toastId });
+    } finally {
+      setIsSavingReminders(false);
+    }
+  };
+
+  const handleGenerateChecklist = async () => {
+    if (!treatmentTypeInput) return;
+    setIsGeneratingChecklist(true);
+    const toastId = toast.loading(`Generating claims checklist for ${treatmentTypeInput}...`);
+    try {
+      const data = await aiApi.claimsChecklist(docId, treatmentTypeInput);
+      setChecklistData(data);
+      toast.success('Checklist generated successfully!', { id: toastId });
+    } catch (error: any) {
+      console.error(error);
+      toast.error(error.response?.data?.detail || 'Failed to generate claims checklist. Check if Ollama is running.', { id: toastId });
+    } finally {
+      setIsGeneratingChecklist(false);
+    }
+  };
 
 
   const handleSendQuery = async (queryText?: string) => {
@@ -738,10 +1151,15 @@ export default function DocumentDetailPage() {
       : translations[selectedLanguage] || doc.summary) as any
     : null;
 
+  const displayedChecklist = selectedLanguage === 'English'
+    ? checklistData
+    : (translations[selectedLanguage]?.checklistData || checklistData);
+
   const tabs = [
     { id: 'summary', label: 'AI Summary', icon: <Brain className="w-4 h-4" />, count: doc.summary ? 1 : 0 },
     { id: 'fields', label: 'Extracted Fields', icon: <Search className="w-4 h-4" />, count: doc.extracted_fields.length },
     { id: 'risks', label: 'Risk Analysis', icon: <Shield className="w-4 h-4" />, count: doc.risk_analyses.length },
+    { id: 'checklist', label: 'Claims Checklist', icon: <List className="w-4 h-4" />, count: checklistData ? 1 : 0 },
     { id: 'query', label: 'Chat to AI', icon: <MessageSquare className="w-4 h-4" />, count: chatHistory.length },
   ] as const;
 
@@ -932,6 +1350,61 @@ export default function DocumentDetailPage() {
         </div>
       )}
 
+      {/* Policy Reminders & Alerts Scheduler */}
+      {canRunAI && (
+        <div className="glass-card p-5 border border-white/5 space-y-4">
+          <h2 className="font-semibold text-sm text-slate-300 flex items-center gap-2">
+            <span className="text-blue-400">⏰</span> Smart Renewal & Premium Alerts
+          </h2>
+          <p className="text-xs text-slate-400">
+            Set dates for your policy renewal and premium payments. The system will automatically calculate and trigger renewal alerts 7 days prior, and premium reminders 5 days prior.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-end">
+            <div>
+              <label className="block text-[10px] text-slate-500 font-bold uppercase tracking-wider mb-1.5">Renewal Date</label>
+              <input
+                type="date"
+                value={renewalDate}
+                onChange={(e) => setRenewalDate(e.target.value)}
+                className="form-input text-xs w-full bg-slate-950/40"
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] text-slate-500 font-bold uppercase tracking-wider mb-1.5">Premium Due Date</label>
+              <input
+                type="date"
+                value={premiumDueDate}
+                onChange={(e) => setPremiumDueDate(e.target.value)}
+                className="form-input text-xs w-full bg-slate-950/40"
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] text-slate-500 font-bold uppercase tracking-wider mb-1.5">Premium Amount</label>
+              <input
+                type="text"
+                placeholder="e.g. ₹15,596"
+                value={premiumAmount}
+                onChange={(e) => setPremiumAmount(e.target.value)}
+                className="form-input text-xs w-full bg-slate-950/40"
+              />
+            </div>
+            <div className="sm:col-span-3 flex justify-end">
+              <button
+                onClick={handleSaveReminders}
+                disabled={isSavingReminders}
+                className="btn-primary text-xs py-2 px-4 flex items-center gap-1.5"
+              >
+                {isSavingReminders ? (
+                  <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                ) : (
+                  'Save Alert Dates'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Risk Overview (if analyzed) */}
       {doc.risk_analyses.length > 0 && (
         <div className="grid grid-cols-3 gap-3">
@@ -998,6 +1471,29 @@ export default function DocumentDetailPage() {
                     </div>
                     {/* Export, Share and Language Actions */}
                     <div className="flex items-center gap-2 relative" data-html2canvas-ignore="true">
+                      {/* Text to Speech Button */}
+                      <button
+                        onClick={() => handlePlaySpeech('summary')}
+                        className={`btn-secondary text-xs py-2 px-3 flex items-center gap-1.5 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer border ${
+                          speakingTab === 'summary' 
+                            ? 'border-red-500/30 text-red-400 bg-red-500/5' 
+                            : 'border-blue-500/30 text-blue-400'
+                        }`}
+                        title={speakingTab === 'summary' ? 'Stop read aloud' : 'Read aloud summary'}
+                      >
+                        {speakingTab === 'summary' ? (
+                          <>
+                            <VolumeX className="w-3.5 h-3.5 animate-pulse" />
+                            <span>Stop Speech</span>
+                          </>
+                        ) : (
+                          <>
+                            <Volume2 className="w-3.5 h-3.5" />
+                            <span>Listen</span>
+                          </>
+                        )}
+                      </button>
+
                       {/* Language Selector */}
                       <div className="flex items-center gap-1.5 bg-slate-950/60 border border-slate-700/40 rounded-xl px-2.5 py-1.5 mr-2">
                         <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Language:</span>
@@ -1070,7 +1566,7 @@ export default function DocumentDetailPage() {
                     </div>
                   </div>
 
-                  <div className="bg-slate-950/40 border border-white/5 rounded-xl p-4 relative overflow-hidden">
+                  <div className="bg-slate-950/40 border border-white/5 rounded-xl p-5 relative overflow-hidden">
                     {isTranslating && (
                       <div className="absolute inset-0 bg-[#0a0f1e]/60 backdrop-blur-sm flex items-center justify-center z-10 transition-all">
                         <div className="flex items-center gap-2">
@@ -1079,9 +1575,11 @@ export default function DocumentDetailPage() {
                         </div>
                       </div>
                     )}
-                    <p className="text-slate-200 text-sm leading-relaxed whitespace-pre-wrap">
-                      {displayedSummary?.summary_text}
-                    </p>
+                    <div className="space-y-3 text-slate-200 text-sm leading-relaxed">
+                      {(displayedSummary?.summary_text || '').split(/\n{2,}|\n(?=\S)/).filter(Boolean).map((para: string, i: number) => (
+                        <p key={i} className="leading-7 text-slate-200">{para.trim()}</p>
+                      ))}
+                    </div>
                   </div>
 
                   {/* Detailed Policy Breakdowns */}
@@ -1089,18 +1587,29 @@ export default function DocumentDetailPage() {
                     <h3 className="text-xs font-bold text-slate-400 tracking-wider uppercase">Policy Details & Exclusions</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {[
-                        { label: '✅ Coverage & Benefits', value: displayedSummary.coverage_summary, color: '#10b981', border: 'border-emerald-500/10', bg: 'bg-emerald-500/5' },
-                        { label: '❌ Exclusions & Limits', value: displayedSummary.exclusions_summary, color: '#ef4444', border: 'border-red-500/10', bg: 'bg-red-500/5' },
-                        { label: '⏰ Waiting Periods', value: displayedSummary.waiting_period_summary, color: '#f59e0b', border: 'border-amber-500/10', bg: 'bg-amber-500/5' },
-                        { label: '💰 Premium & Charges', value: displayedSummary.premium_summary, color: '#3b82f6', border: 'border-blue-500/10', bg: 'bg-blue-500/5' },
-                      ].filter(s => s.value).map((section) => (
-                        <div key={section.label} className={`p-4 rounded-xl border ${section.border} ${section.bg}`}>
-                          <h4 className="font-bold text-xs uppercase tracking-wider mb-2.5" style={{ color: section.color }}>{section.label}</h4>
-                          <div className="text-slate-300 text-xs leading-relaxed space-y-2 whitespace-pre-wrap">
-                            {section.value}
+                        { label: '✅ Coverage & Benefits', value: displayedSummary.coverage_summary, color: '#10b981', border: 'border-emerald-500/20', bg: 'bg-emerald-500/5', dotColor: 'bg-emerald-400' },
+                        { label: '❌ Exclusions & Limits', value: displayedSummary.exclusions_summary, color: '#ef4444', border: 'border-red-500/20', bg: 'bg-red-500/5', dotColor: 'bg-red-400' },
+                        { label: '⏰ Waiting Periods', value: displayedSummary.waiting_period_summary, color: '#f59e0b', border: 'border-amber-500/20', bg: 'bg-amber-500/5', dotColor: 'bg-amber-400' },
+                        { label: '💰 Premium & Charges', value: displayedSummary.premium_summary, color: '#3b82f6', border: 'border-blue-500/20', bg: 'bg-blue-500/5', dotColor: 'bg-blue-400' },
+                      ].filter(s => s.value).map((section) => {
+                        const bullets = (section.value || '')
+                          .split(/\n/)
+                          .map((line: string) => line.replace(/^[•\-*\s\u2022\uf0b7]+/, '').trim())
+                          .filter((line: string) => line.length > 0);
+                        return (
+                          <div key={section.label} className={`p-4 rounded-xl border ${section.border} ${section.bg}`}>
+                            <h4 className="font-bold text-xs uppercase tracking-wider mb-3" style={{ color: section.color }}>{section.label}</h4>
+                            <ul className="space-y-2">
+                              {bullets.map((bullet: string, idx: number) => (
+                                <li key={idx} className="flex items-start gap-2 text-xs text-slate-200 leading-relaxed">
+                                  <span className={`mt-1.5 w-1.5 h-1.5 rounded-full flex-shrink-0 ${section.dotColor}`} />
+                                  <span>{bullet}</span>
+                                </li>
+                              ))}
+                            </ul>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
 
@@ -1143,44 +1652,93 @@ export default function DocumentDetailPage() {
 
           {/* Fields Tab */}
           {activeTab === 'fields' && (
-            <div className="glass-card overflow-hidden">
-              {doc.extracted_fields.length === 0 ? (
-                <div className="text-center py-12">
-                  <FileText className="w-12 h-12 text-slate-600 mx-auto mb-3" />
-                  <p className="text-slate-400">No fields extracted yet. Click "Extract Fields".</p>
+            <div className="space-y-4 animate-in fade-in duration-200">
+              {doc.extracted_fields.length > 0 && (
+                <div className="flex justify-between items-center bg-slate-900/40 border border-white/5 rounded-xl px-5 py-3 gap-4">
+                  <p className="text-xs text-slate-400 font-medium">
+                    {selectedLanguage === 'English'
+                      ? 'Extracted key fields from your policy document.'
+                      : `पॉलिसी दस्तावेज़ से निकाले गए प्रमुख फ़ील्ड (${selectedLanguage})`}
+                  </p>
+                  <button
+                    onClick={() => handlePlaySpeech('fields')}
+                    className={`btn-secondary text-xs py-2 px-3.5 flex items-center gap-1.5 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer border flex-shrink-0 ${
+                      speakingTab === 'fields'
+                        ? 'border-red-500/30 text-red-400 bg-red-500/5'
+                        : 'border-blue-500/30 text-blue-400'
+                    }`}
+                    title={speakingTab === 'fields' ? 'Stop read aloud' : 'Read aloud fields'}
+                  >
+                    {speakingTab === 'fields' ? (
+                      <>
+                        <VolumeX className="w-3.5 h-3.5 animate-pulse" />
+                        <span>Stop Speech</span>
+                      </>
+                    ) : (
+                      <>
+                        <Volume2 className="w-3.5 h-3.5" />
+                        <span>Listen to Fields</span>
+                      </>
+                    )}
+                  </button>
                 </div>
-              ) : (
-                <table className="w-full">
-                  <thead>
-                    <tr className="border-b border-slate-700/50">
-                      <th className="text-left px-6 py-3 text-xs font-semibold text-slate-400 uppercase">Field</th>
-                      <th className="text-left px-6 py-3 text-xs font-semibold text-slate-400 uppercase">Value</th>
-                      <th className="text-left px-6 py-3 text-xs font-semibold text-slate-400 uppercase hidden md:table-cell">Category</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-700/30">
-                    {doc.extracted_fields.map((field) => (
-                      <tr key={field.id} className="hover:bg-white/3">
-                        <td className="px-6 py-4 text-sm font-medium text-slate-300">{field.field_name}</td>
-                        <td className="px-6 py-4 text-sm text-white">{field.field_value || '—'}</td>
-                        <td className="px-6 py-4 hidden md:table-cell">
-                          {field.field_category && (
-                            <span className="text-xs px-2 py-1 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 capitalize">
-                              {field.field_category.replace(/_/g, ' ')}
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
               )}
+
+              <div className="glass-card overflow-hidden relative">
+                {isTranslating && (
+                  <div className="absolute inset-0 bg-[#0a0f1e]/60 backdrop-blur-sm flex items-center justify-center z-10 transition-all">
+                    <div className="flex items-center gap-2">
+                      <span className="w-5 h-5 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
+                      <span className="text-xs text-slate-400">Translating fields to {selectedLanguage}...</span>
+                    </div>
+                  </div>
+                )}
+                {doc.extracted_fields.length === 0 ? (
+                  <div className="text-center py-12">
+                    <FileText className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+                    <p className="text-slate-400">No fields extracted yet. Click "Extract Fields".</p>
+                  </div>
+                ) : (
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-slate-700/50">
+                        <th className="text-left px-6 py-3 text-xs font-semibold text-slate-400 uppercase">Field</th>
+                        <th className="text-left px-6 py-3 text-xs font-semibold text-slate-400 uppercase">Value</th>
+                        <th className="text-left px-6 py-3 text-xs font-semibold text-slate-400 uppercase hidden md:table-cell">Category</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-700/30">
+                      {(selectedLanguage === 'English' ? doc.extracted_fields : (translations[selectedLanguage]?.extracted_fields || doc.extracted_fields)).map((field) => (
+                        <tr key={field.id} className="hover:bg-white/3">
+                          <td className="px-6 py-4 text-sm font-medium text-slate-300">{field.field_name}</td>
+                          <td className="px-6 py-4 text-sm text-white">{field.field_value || '—'}</td>
+                          <td className="px-6 py-4 hidden md:table-cell">
+                            {field.field_category && (
+                              <span className="text-xs px-2 py-1 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 capitalize">
+                                {field.field_category.replace(/_/g, ' ')}
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
             </div>
           )}
 
           {/* Risks Tab */}
           {activeTab === 'risks' && (
-            <div className="space-y-3">
+            <div className="space-y-3 animate-in fade-in duration-200 relative">
+              {isTranslating && (
+                <div className="absolute inset-0 bg-[#0a0f1e]/60 backdrop-blur-sm flex items-center justify-center z-10 transition-all rounded-xl">
+                  <div className="flex items-center gap-2">
+                    <span className="w-5 h-5 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
+                    <span className="text-xs text-slate-400">Translating risks to {selectedLanguage}...</span>
+                  </div>
+                </div>
+              )}
               {doc.risk_analyses.length === 0 ? (
                 <div className="text-center py-12 glass-card">
                   <Shield className="w-12 h-12 text-slate-600 mx-auto mb-3" />
@@ -1188,12 +1746,196 @@ export default function DocumentDetailPage() {
                 </div>
               ) : (
                 <>
-                  {doc.risk_analyses
-                    .sort((a, b) => ({ high: 0, medium: 1, low: 2 }[a.severity] - { high: 0, medium: 1, low: 2 }[b.severity]))
+                  <div className="flex justify-between items-center bg-slate-900/40 border border-white/5 rounded-xl px-5 py-3 gap-4">
+                    <p className="text-xs text-slate-400 font-medium">
+                      {selectedLanguage === 'English'
+                        ? 'Analyzed risk terms and potential high-exposure clauses.'
+                        : `जोखिम शर्तों और संभावित उच्च-जोखिम वाले खंडों का विश्लेषण (${selectedLanguage})`}
+                    </p>
+                    <button
+                      onClick={() => handlePlaySpeech('risks')}
+                      className={`btn-secondary text-xs py-2 px-3.5 flex items-center gap-1.5 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer border flex-shrink-0 ${
+                        speakingTab === 'risks'
+                          ? 'border-red-500/30 text-red-400 bg-red-500/5'
+                          : 'border-blue-500/30 text-blue-400'
+                      }`}
+                      title={speakingTab === 'risks' ? 'Stop read aloud' : 'Read aloud risks'}
+                    >
+                      {speakingTab === 'risks' ? (
+                        <>
+                          <VolumeX className="w-3.5 h-3.5 animate-pulse" />
+                          <span>Stop Speech</span>
+                        </>
+                      ) : (
+                        <>
+                          <Volume2 className="w-3.5 h-3.5" />
+                          <span>Listen to Risks</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  {(selectedLanguage === 'English' ? doc.risk_analyses : (translations[selectedLanguage]?.risk_analyses || doc.risk_analyses))
+                    .sort((a, b) => {
+                      const severityWeight = { high: 0, medium: 1, low: 2 };
+                      const aVal = severityWeight[a.severity as keyof typeof severityWeight] ?? 3;
+                      const bVal = severityWeight[b.severity as keyof typeof severityWeight] ?? 3;
+                      return aVal - bVal;
+                    })
                     .map((risk) => (
                       <RiskCard key={risk.id} risk={risk} />
                     ))}
                 </>
+              )}
+            </div>
+          )}
+
+          {/* Claims Checklist Tab */}
+          {activeTab === 'checklist' && (
+            <div className="glass-card p-6 border border-white/5 space-y-6 animate-in fade-in duration-200 relative">
+              {isTranslating && (
+                <div className="absolute inset-0 bg-[#0a0f1e]/60 backdrop-blur-sm flex items-center justify-center z-10 transition-all rounded-xl">
+                  <div className="flex items-center gap-2">
+                    <span className="w-5 h-5 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
+                    <span className="text-xs text-slate-400">Translating claims checklist to {selectedLanguage}...</span>
+                  </div>
+                </div>
+              )}
+              
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-700/40 pb-4">
+                <div>
+                  <h3 className="font-bold text-sm text-white flex items-center gap-2">
+                    <List className="w-4 h-4 text-blue-400" /> Dynamic Claims Documentation Checklist
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Generate the exact list of documents and steps required to submit a claim for a specific treatment.
+                  </p>
+                </div>
+                
+                {/* Speech Button for Checklist (Narrator) */}
+                {checklistData && (
+                  <button
+                    onClick={() => handlePlaySpeech('checklist')}
+                    className={`btn-secondary text-xs py-2 px-3.5 flex items-center gap-1.5 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer border flex-shrink-0 ${
+                      speakingTab === 'checklist'
+                        ? 'border-red-500/30 text-red-400 bg-red-500/5'
+                        : 'border-blue-500/30 text-blue-400'
+                    }`}
+                    title={speakingTab === 'checklist' ? 'Stop read aloud' : 'Read aloud claims checklist'}
+                  >
+                    {speakingTab === 'checklist' ? (
+                      <>
+                        <VolumeX className="w-3.5 h-3.5 animate-pulse" />
+                        <span>Stop Speech</span>
+                      </>
+                    ) : (
+                      <>
+                        <Volume2 className="w-3.5 h-3.5" />
+                        <span>Listen to Checklist</span>
+                      </>
+                    )}
+                  </button>
+                )}
+              </div>
+
+              {/* Input Form */}
+              <div className="flex flex-col sm:flex-row items-end gap-3 max-w-lg">
+                <div className="flex-1 w-full">
+                  <label className="block text-[10px] text-slate-500 font-bold uppercase tracking-wider mb-1.5">Treatment or Surgery Type</label>
+                  <select
+                    value={treatmentTypeInput}
+                    onChange={(e) => setTreatmentTypeInput(e.target.value)}
+                    className="form-input text-xs w-full bg-slate-950/40"
+                  >
+                    <option value="" disabled>Select a treatment...</option>
+                    <option value="Cataract Surgery">Cataract Surgery (मोतीबिंदू शस्त्रक्रिया)</option>
+                    <option value="Heart Bypass / CABG">Heart Bypass / CABG (बायपास शस्त्रक्रिया)</option>
+                    <option value="Knee Replacement">Knee Replacement (गुडघा प्रत्यारोपण)</option>
+                    <option value="Accidental Fracture Cover">Accidental Fracture Cover (अपघाती फ्रॅक्चर)</option>
+                    <option value="Kidney Dialysis">Kidney Dialysis (डायलिसिस)</option>
+                    <option value="Maternity Delivery">Maternity Delivery (प्रसूती)</option>
+                  </select>
+                </div>
+                <button
+                  onClick={handleGenerateChecklist}
+                  disabled={isGeneratingChecklist || !treatmentTypeInput}
+                  className="btn-primary text-xs py-2.5 px-4 w-full sm:w-auto justify-center flex items-center gap-1.5"
+                >
+                  {isGeneratingChecklist ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Generating...</span>
+                    </>
+                  ) : (
+                    'Generate Checklist'
+                  )}
+                </button>
+              </div>
+
+              {/* Checklist Output */}
+              {displayedChecklist ? (
+                <div className="space-y-6 pt-4 border-t border-slate-700/30 animate-in fade-in duration-200">
+                  {/* Estimated timeline banner */}
+                  <div className="p-4 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-between">
+                    <p className="text-xs font-semibold text-blue-300">Estimated Claim Approval Timeline:</p>
+                    <span className="text-xs px-2.5 py-1 rounded-full bg-blue-500/20 text-blue-200 border border-blue-500/30 font-bold">
+                      {displayedChecklist.estimated_approval_days}
+                    </span>
+                  </div>
+
+                  {/* Documents table */}
+                  <div className="space-y-3">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Required Claims Documents</h4>
+                    <div className="border border-white/5 rounded-xl overflow-hidden">
+                      <table className="w-full">
+                        <thead>
+                          <tr className="border-b border-slate-700/50 bg-slate-900/20">
+                            <th className="text-left px-5 py-3 text-xs font-semibold text-slate-400 uppercase w-1/3">Document Required</th>
+                            <th className="text-left px-5 py-3 text-xs font-semibold text-slate-400 uppercase w-1/6">Importance</th>
+                            <th className="text-left px-5 py-3 text-xs font-semibold text-slate-400 uppercase w-1/2">Instructions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-700/30">
+                          {displayedChecklist.checklist.map((item: any, idx: number) => (
+                            <tr key={idx} className="hover:bg-white/3">
+                              <td className="px-5 py-3.5 text-sm font-medium text-slate-300">{item.document_name}</td>
+                              <td className="px-5 py-3.5 text-xs">
+                                <span className={`px-2 py-0.5 rounded-full font-bold border capitalize ${
+                                  item.importance.toLowerCase().includes('mandatory') || item.importance.includes('अनिवार्य')
+                                    ? 'bg-red-500/10 text-red-400 border-red-500/20'
+                                    : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                                }`}>
+                                  {item.importance}
+                                </span>
+                              </td>
+                              <td className="px-5 py-3.5 text-xs text-slate-400 leading-relaxed">{item.description}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* Claim process steps */}
+                  <div className="space-y-3">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Step-by-Step Claim Guidelines</h4>
+                    <ol className="space-y-3">
+                      {displayedChecklist.claim_steps.map((step: string, idx: number) => (
+                        <li key={idx} className="flex gap-4 p-4 rounded-xl border border-white/5 bg-slate-950/20">
+                          <span className="w-6 h-6 rounded-full bg-blue-500/10 border border-blue-500/30 flex items-center justify-center text-xs font-bold text-blue-300 flex-shrink-0">
+                            {idx + 1}
+                          </span>
+                          <p className="text-xs text-slate-300 leading-relaxed pt-0.5">{step}</p>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-center py-12 bg-slate-950/10 border border-dashed border-slate-700/30 rounded-xl">
+                  <List className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+                  <p className="text-slate-400 text-sm">Select a treatment and generate a claims checklist.</p>
+                </div>
               )}
             </div>
           )}
