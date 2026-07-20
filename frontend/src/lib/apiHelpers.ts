@@ -159,6 +159,11 @@ export const aiApi = {
     return res.data;
   },
 
+  getDocumentTreatments: async (documentId: string): Promise<{ treatments: string[] }> => {
+    const res = await apiClient.get(`/ai/documents/${documentId}/treatments`);
+    return res.data;
+  },
+
   claimsChecklist: async (documentId: string, treatmentType: string) => {
     const res = await apiClient.post('/ai/claims-checklist', {
       document_id: documentId,
@@ -189,7 +194,7 @@ export const remindersApi = {
     document_id: string;
     renewal_date?: string;
     premium_due_date?: string;
-    premium_amount?: number;
+    premium_amount?: string;
   }) => {
     const res = await apiClient.post('/documents/reminders', data);
     return res.data;
@@ -224,4 +229,17 @@ export const claimsApi = {
     const res = await apiClient.get('/claims/stats');
     return res.data;
   },
+  predict: async (data: {
+    age: number;
+    bmi: number;
+    smoker: number;
+    pre_existing_conditions: number;
+    coverage_tier: number;
+    systolic_bp: number;
+    diastolic_bp: number;
+  }) => {
+    const res = await apiClient.post('/claims/predict', data);
+    return res.data;
+  },
 };
+

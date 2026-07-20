@@ -144,7 +144,8 @@ async def search_vector_store(
         return []
         
     # Generate query embedding
-    query_emb = await generate_single_embedding(query)
+    # Prepend standard nomic search_query task prefix to maximize RAG query matching performance
+    query_emb = await generate_single_embedding(f"search_query: {query}")
     query_vec = np.array([query_emb]).astype("float32")
     faiss.normalize_L2(query_vec)
     

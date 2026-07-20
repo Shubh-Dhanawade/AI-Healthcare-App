@@ -24,7 +24,7 @@ export default function Navbar() {
   const { user } = useAuth();
 
   return (
-    <header className="flex items-center justify-between px-6 py-4 border-b"
+    <header className="flex items-center justify-between px-6 py-4 border-b z-40 relative"
       style={{ borderColor: 'rgba(59,130,246,0.1)', background: 'rgba(10,15,30,0.6)', backdropFilter: 'blur(20px)' }}>
       {/* Page Title */}
       <div className="flex items-center gap-3">

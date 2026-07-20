@@ -140,14 +140,24 @@ TRANSLATE_PROMPT = """Translate to {target_language}:
 {text}"""
 
 
-CLAIMS_CHECKLIST_PROMPT = """You are a health insurance claims auditor. Create a claim documentation checklist for:
-POLICY: {policy_name}
+CLAIMS_CHECKLIST_PROMPT = """You are a senior healthcare claims auditor. Read the following claim process section from the health insurance policy document and create a claims checklist for:
 TREATMENT/ILNESS: {treatment_type}
+POLICY NAME: {policy_name}
+
 POLICY DETAILS:
 {fields_summary}
 
-Return ONLY valid JSON. Keep explanations short.
-Return JSON format:
+CLAIM PROCESS SECTION FROM POLICY:
+\"\"\"
+{claim_section}
+\"\"\"
+
+CRITICAL RULES:
+1. Examine the CLAIM PROCESS SECTION above. If the document describes a specific claim process or required documents for this treatment/illness, extract and display them.
+2. If the document does NOT describe the claim process or documents, generate a set of standard, necessary steps and documents for a claim.
+3. Return ONLY valid JSON matching the schema below. No explanation, no code fences.
+
+JSON format:
 {{
   "checklist": [
     {{
@@ -1489,12 +1499,74 @@ async def translate_text(text: str, target_language: str) -> str:
     return text  # Return original if all else fails
 
 
-async def generate_claims_checklist(policy_name: str, fields_summary: str, treatment_type: str) -> dict:
+def extract_claim_section(text: str, max_chars: int = 6000) -> str:
+    """Find and extract the section of the policy related to claim process/procedures."""
+    if not text:
+        return ""
+    keywords = ["claim process", "how to claim", "claim procedure", "submission of claim", "claim document", "claims"]
+    text_lower = text.lower()
+    
+    for kw in keywords:
+        pos = text_lower.find(kw)
+        if pos != -1:
+            start = max(0, pos - 500)
+            end = min(len(text), pos + max_chars - 500)
+            logger.info(f"Extracted claim section using keyword: '{kw}' at position {pos}")
+            return text[start:end]
+            
+    return text[:max_chars]
+
+
+TREATMENTS_EXTRACTION_PROMPT = """Analyze the following health insurance policy document and extract a list of up to 6 major medical treatments, surgeries, or procedures that are covered or mentioned in the document (e.g., Cataract Surgery, Knee Replacement, Heart Bypass, Dialysis, Maternity, Accidental Fracture, etc.).
+Return ONLY a valid JSON object with a single key "treatments" containing an array of strings. Do not include any markdown fences or explanatory text.
+
+JSON Format:
+{{
+  "treatments": ["Cataract Surgery", "Heart Bypass", "Knee Replacement", ...]
+}}
+
+DOCUMENT:
+{document_text}"""
+
+
+async def extract_covered_treatments(document_id: str, document_text: str) -> list[str]:
+    """Extract a list of covered treatments from the policy text using Ollama."""
+    cache_key = f"treatments:{document_id}"
+    if cache_key in _ai_cache:
+        return _ai_cache[cache_key]["treatments"]
+        
+    try:
+        # Take the first 10,000 characters where coverages are usually defined
+        prompt = TREATMENTS_EXTRACTION_PROMPT.format(document_text=document_text[:10000])
+        response = await call_ollama(prompt, num_predict=150, num_ctx=2048)
+        result = extract_json_from_response(response)
+        
+        treatments = result.get("treatments", [])
+        if isinstance(treatments, list) and len(treatments) > 0:
+            clean_treatments = [str(t).strip() for t in treatments if str(t).strip()][:6]
+            _ai_cache[cache_key] = {"treatments": clean_treatments}
+            return clean_treatments
+    except Exception as e:
+        logger.warning(f"Failed to extract covered treatments from LLM: {e}")
+        
+    fallback = [
+        "Cataract Surgery",
+        "Heart Bypass / CABG",
+        "Knee Replacement",
+        "Accidental Fracture Cover",
+        "Kidney Dialysis",
+        "Maternity Delivery"
+    ]
+    return fallback
+
+
+async def generate_claims_checklist(policy_name: str, fields_summary: str, treatment_type: str, claim_section: str = "") -> dict:
     """Generate dynamic claim checklist using Ollama."""
     prompt = CLAIMS_CHECKLIST_PROMPT.format(
         policy_name=policy_name,
         fields_summary=fields_summary,
-        treatment_type=treatment_type
+        treatment_type=treatment_type,
+        claim_section=claim_section or "Not specified in document text."
     )
     try:
         response = await call_ollama(prompt)

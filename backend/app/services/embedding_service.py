@@ -26,9 +26,11 @@ async def generate_embeddings_batch(texts: List[str]) -> List[List[float]]:
     
     for i in range(0, len(texts), batch_size):
         sub_batch = texts[i:i+batch_size]
+        # Prepend standard nomic search_document task prefix to optimize semantic indexing
+        prefixed_sub_batch = [f"search_document: {t}" for t in sub_batch]
         payload = {
             "model": "nomic-embed-text",
-            "input": sub_batch
+            "input": prefixed_sub_batch
         }
         
         try:
@@ -41,14 +43,14 @@ async def generate_embeddings_batch(texts: List[str]) -> List[List[float]]:
                 # Fallback to single-call if batch size mismatch or empty
                 logger.warning(f"Batch embedding returned mismatched size. Falling back to single-item queries.")
                 for text in sub_batch:
-                    single_emb = await generate_single_embedding(text)
+                    single_emb = await generate_single_embedding(f"search_document: {text}")
                     all_embeddings.append(single_emb)
         except Exception as batch_err:
             logger.error(f"Batch embedding failed for sub-batch {i // batch_size}: {batch_err}. Falling back to single-item queries.")
             # Fallback to single-call on failure
             for text in sub_batch:
                 try:
-                    single_emb = await generate_single_embedding(text)
+                    single_emb = await generate_single_embedding(f"search_document: {text}")
                     all_embeddings.append(single_emb)
                 except Exception as single_err:
                     logger.error(f"Single-item embedding fallback failed: {single_err}")
