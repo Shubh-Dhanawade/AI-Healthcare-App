@@ -43,7 +43,7 @@ SUMMARIZATION_PROMPT = """You are a senior healthcare insurance analyst. Read th
 
 CRITICAL RULES — follow exactly:
 1. Return ONLY a valid JSON object. No text before or after it. No markdown code fences.
-2. summary_text: MUST be 400-500 words written in flowing paragraphs. ABSOLUTELY NO bullet points or numbered lists inside summary_text.
+2. summary_text: MUST be around 250 words, tightly optimized for important and meaningful information, written in flowing paragraphs. ABSOLUTELY NO bullet points or numbered lists inside summary_text.
 3. The four bullet fields (coverage_summary, exclusions_summary, waiting_period_summary, premium_summary): each bullet MUST start with '• ' and be one complete, specific sentence sourced from the document.
 4. Only state facts present in the document. Do not invent values.
 
@@ -500,9 +500,9 @@ def _build_fallback_summary(document_text: str) -> dict:
             "you make the most of your health insurance benefits and avoid claim rejections."
         )
 
-    # Ensure the summary reaches ~400 words by padding with additional document sentences
+    # Ensure the summary reaches ~250 words by padding with additional document sentences
     summary_text = "\n\n".join(parts)
-    if len(summary_text.split()) < 300:
+    if len(summary_text.split()) < 150:
         extra = _extract_sentences_with_keywords(
             text,
             ["insurance", "policy", "covered", "benefit", "hospital", "treatment"],

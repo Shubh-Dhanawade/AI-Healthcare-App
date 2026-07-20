@@ -9,8 +9,9 @@ import {
   ArrowLeft, Brain, Shield, FileText, Search, RefreshCw,
   AlertTriangle, Info, ChevronDown, ChevronUp,
   Send, MessageSquare, List, Loader2, Download, Mail,
-  Volume2, VolumeX
+  Volume2, VolumeX, Clock, CheckCircle2, XCircle, Wallet
 } from 'lucide-react';
+
 import { useState, useEffect, useRef } from 'react';
 import DocumentStatusBadge from '@/components/documents/DocumentStatusBadge';
 import Link from 'next/link';
@@ -1452,7 +1453,7 @@ export default function DocumentDetailPage() {
       {canRunAI && (
         <div className="glass-card p-5 border border-white/5 space-y-4">
           <h2 className="font-semibold text-sm text-slate-300 flex items-center gap-2">
-            <span className="text-blue-400">⏰</span> Smart Renewal & Premium Alerts
+            <Clock className="w-4 h-4 text-blue-400" /> Smart Renewal & Premium Alerts
           </h2>
           <p className="text-xs text-slate-400">
             Set dates for your policy renewal and premium payments. The system will automatically calculate and trigger renewal alerts 7 days prior, and premium reminders 5 days prior.
@@ -1685,18 +1686,21 @@ export default function DocumentDetailPage() {
                     <h3 className="text-xs font-bold text-slate-400 tracking-wider uppercase">Policy Details & Exclusions</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {[
-                        { label: '✅ Coverage & Benefits', value: displayedSummary.coverage_summary, color: '#10b981', border: 'border-emerald-500/20', bg: 'bg-emerald-500/5', dotColor: 'bg-emerald-400' },
-                        { label: '❌ Exclusions & Limits', value: displayedSummary.exclusions_summary, color: '#ef4444', border: 'border-red-500/20', bg: 'bg-red-500/5', dotColor: 'bg-red-400' },
-                        { label: '⏰ Waiting Periods', value: displayedSummary.waiting_period_summary, color: '#f59e0b', border: 'border-amber-500/20', bg: 'bg-amber-500/5', dotColor: 'bg-amber-400' },
-                        { label: '💰 Premium & Charges', value: displayedSummary.premium_summary, color: '#3b82f6', border: 'border-blue-500/20', bg: 'bg-blue-500/5', dotColor: 'bg-blue-400' },
+                        { title: 'Coverage & Benefits', icon: CheckCircle2, value: displayedSummary.coverage_summary, color: '#10b981', border: 'border-emerald-500/20', bg: 'bg-emerald-500/5', dotColor: 'bg-emerald-400' },
+                        { title: 'Exclusions & Limits', icon: XCircle, value: displayedSummary.exclusions_summary, color: '#ef4444', border: 'border-red-500/20', bg: 'bg-red-500/5', dotColor: 'bg-red-400' },
+                        { title: 'Waiting Periods', icon: Clock, value: displayedSummary.waiting_period_summary, color: '#f59e0b', border: 'border-amber-500/20', bg: 'bg-amber-500/5', dotColor: 'bg-amber-400' },
+                        { title: 'Premium & Charges', icon: Wallet, value: displayedSummary.premium_summary, color: '#3b82f6', border: 'border-blue-500/20', bg: 'bg-blue-500/5', dotColor: 'bg-blue-400' },
                       ].filter(s => s.value).map((section) => {
                         const bullets = (section.value || '')
                           .split(/\n/)
                           .map((line: string) => line.replace(/^[•\-*\s\u2022\uf0b7]+/, '').trim())
                           .filter((line: string) => line.length > 0);
                         return (
-                          <div key={section.label} className={`p-4 rounded-xl border ${section.border} ${section.bg}`}>
-                            <h4 className="font-bold text-xs uppercase tracking-wider mb-3" style={{ color: section.color }}>{section.label}</h4>
+                          <div key={section.title} className={`p-4 rounded-xl border ${section.border} ${section.bg}`}>
+                            <h4 className="font-bold text-xs uppercase tracking-wider mb-3 flex items-center gap-1.5" style={{ color: section.color }}>
+                              <section.icon className="w-4 h-4" />
+                              {section.title}
+                            </h4>
                             <ul className="space-y-2">
                               {bullets.map((bullet: string, idx: number) => (
                                 <li key={idx} className="flex items-start gap-2 text-xs text-slate-200 leading-relaxed">
