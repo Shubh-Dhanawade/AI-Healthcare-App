@@ -58,22 +58,48 @@ class Base(DeclarativeBase):
     pass
 
 
+# Global flag for pgvector availability (checked on startup)
+HAS_PGVECTOR = False
+
+
 async def create_tables():
     """Create all database tables on startup."""
     from app.models import user, document, summary, risk_analysis, rag_query_log, chat  # noqa
     
-    # 1. Create tables inside a dedicated transaction block
+    # 1. Detect and enable pgvector extension in PostgreSQL if supported
+    global HAS_PGVECTOR
+    HAS_PGVECTOR = False
+    if "sqlite" not in settings.DATABASE_URL:
+        async with engine.begin() as conn:
+            try:
+                from sqlalchemy import text
+                await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
+                HAS_PGVECTOR = True
+                logger.info("✅ pgvector extension enabled successfully in PostgreSQL")
+            except Exception as pg_err:
+                logger.warning(
+                    f"⚠️ pgvector extension is not available on this PostgreSQL server: {pg_err}. "
+                    "Falling back to TEXT representation with numpy similarity wrappers."
+                )
+
+    # 2. Create tables inside a dedicated transaction block
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("✅ Database tables structure verified")
         
-    # 2. Run column migrations in a separate transaction block (avoids transaction aborts on duplicates)
+    # 3. Run column migrations in a separate transaction block (avoids transaction aborts on duplicates)
     async with engine.begin() as conn:
         if "sqlite" in settings.DATABASE_URL:
             try:
                 from sqlalchemy import text
                 await conn.execute(text("ALTER TABLE documents ADD COLUMN file_hash VARCHAR(64)"))
                 logger.info("✅ Dynamically added file_hash column to documents table (SQLite)")
+            except Exception:
+                pass
+            try:
+                from sqlalchemy import text
+                await conn.execute(text("ALTER TABLE document_chunks ADD COLUMN embedding_vector TEXT"))
+                logger.info("✅ Dynamically added embedding_vector column to document_chunks table (SQLite)")
             except Exception:
                 pass
         else:
@@ -89,6 +115,20 @@ async def create_tables():
                     logger.info("✅ Dynamically added file_hash column to documents table (PostgreSQL)")
             except Exception as e:
                 logger.warning(f"Failed to check or alter documents table in PostgreSQL: {e}")
+
+            try:
+                from sqlalchemy import text
+                # Query schema safely in PostgreSQL to see if embedding_vector exists
+                res = await conn.execute(text(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name='document_chunks' AND column_name='embedding_vector'"
+                ))
+                if not res.scalar():
+                    col_type = "vector(768)" if HAS_PGVECTOR else "TEXT"
+                    await conn.execute(text(f"ALTER TABLE document_chunks ADD COLUMN embedding_vector {col_type}"))
+                    logger.info(f"✅ Dynamically added embedding_vector column ({col_type}) to document_chunks table (PostgreSQL)")
+            except Exception as e:
+                logger.warning(f"Failed to check or alter document_chunks table in PostgreSQL: {e}")
 
     # 3. Populate file_hash values in a third transaction block
     async with engine.begin() as conn:

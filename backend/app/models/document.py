@@ -4,8 +4,51 @@ import uuid
 from datetime import datetime
 from sqlalchemy import String, Text, ForeignKey, DateTime, Integer
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.types import UserDefinedType
+from sqlalchemy.ext.compiler import compiles
 
 from app.core.database import Base, utc_now_naive
+
+
+class SafeVector(UserDefinedType):
+    """
+    A compile-safe pgvector Vector wrapper.
+    Compiles to:
+      - 'vector(dim)' for PostgreSQL with vector extension enabled.
+      - 'TEXT' for SQLite or databases without pgvector.
+    """
+    def __init__(self, dim=768):
+        self.dim = dim
+
+    def get_col_spec(self, **kw):
+        return f"vector({self.dim})"
+
+    def bind_processor(self, dialect):
+        from app.core.database import HAS_PGVECTOR
+        if dialect.name == "postgresql" and HAS_PGVECTOR:
+            return lambda value: value
+        import json
+        return lambda value: json.dumps(value) if value is not None else None
+
+    def result_processor(self, dialect, coltype):
+        from app.core.database import HAS_PGVECTOR
+        if dialect.name == "postgresql" and HAS_PGVECTOR:
+            return lambda value: value
+        import json
+        return lambda value: json.loads(value) if value is not None else None
+
+
+@compiles(SafeVector, "postgresql")
+def compile_safe_vector_postgresql(type_, compiler, **kw):
+    from app.core.database import HAS_PGVECTOR
+    if HAS_PGVECTOR:
+        return f"vector({type_.dim})"
+    return "TEXT"
+
+
+@compiles(SafeVector, "sqlite")
+def compile_safe_vector_sqlite(type_, compiler, **kw):
+    return "TEXT"
 
 
 class Document(Base):
@@ -107,6 +150,9 @@ class DocumentChunk(Base):
     text_content: Mapped[str] = mapped_column(Text, nullable=False)
     # Store embedding floats as serialized JSON string (e.g. "[0.021, -0.043, ...]")
     embedding: Mapped[str] = mapped_column(Text, nullable=False)
+    
+    # Store embedding as native vector for pgvector, falling back to SafeVector representation
+    embedding_vector: Mapped[list[float]] = mapped_column(SafeVector(768), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=utc_now_naive

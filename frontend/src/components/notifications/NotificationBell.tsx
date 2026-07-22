@@ -76,7 +76,7 @@ export default function NotificationBell() {
 
       {/* Dropdown Card */}
       {isOpen && (
-        <div className="absolute z-50 right-0 mt-3 w-80 sm:w-96 bg-[#111827] border border-slate-700/60 rounded-2xl shadow-2xl z-50 overflow-hidden backdrop-blur-xl">
+        <div className="absolute  right-0 mt-3 w-80 sm:w-96 bg-[#111827] border border-slate-700/60 rounded-2xl shadow-2xl z-50 overflow-hidden backdrop-blur-xl z-50">
           {/* Header */}
           <div className="px-4 py-3.5 border-b border-slate-800 flex items-center justify-between">
             <h3 className="text-sm font-bold text-white flex items-center gap-2">
@@ -110,13 +110,7 @@ export default function NotificationBell() {
             ) : (
               activeReminders.map((reminder) => {
                 const isRenewal = reminder.reminder_type === 'renewal';
-                const alertDate = new Date(reminder.reminder_date);
-                const targetDate = new Date(alertDate);
-                if (isRenewal) {
-                  targetDate.setDate(targetDate.getDate() + 7);
-                } else {
-                  targetDate.setDate(targetDate.getDate() + 5);
-                }
+                const date = new Date(reminder.reminder_date);
 
                 return (
                   <div key={reminder.id} className="p-4 hover:bg-white/2 transition-all flex items-start gap-3">
@@ -140,12 +134,8 @@ export default function NotificationBell() {
                         </p>
                       )}
 
-                      <p className="text-[10px] text-slate-300 font-semibold mt-1">
-                        {isRenewal ? 'Renewal Date' : 'Due Date'}: <span className="text-blue-400 font-bold">{targetDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</span>
-                      </p>
-
-                      <p className="text-[9px] text-slate-500 mt-0.5 font-medium">
-                        (Alerted: {alertDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })})
+                      <p className="text-[10px] text-slate-500 mt-1.5 flex items-center gap-1 font-medium">
+                        Alert date: {date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
                       </p>
 
                       {/* Nav Link */}

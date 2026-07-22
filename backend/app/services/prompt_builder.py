@@ -12,7 +12,8 @@ def build_chat_prompt(
     history: List[Dict[str, str]],
     policies: List[Dict[str, Any]],
     user_name: str = "there",
-    is_comparison: bool = False
+    is_comparison: bool = False,
+    structured_context: str = ""
 ) -> str:
     """Build an optimized prompt for RAG Chat."""
     
@@ -66,6 +67,9 @@ def build_chat_prompt(
             history_lines += [f"{role}: {content}"]
     history_str = "\n".join(history_lines) if history_lines else "No previous conversation."
     
+    # Format optional SQL database details
+    structured_str = f"STRUCTURED DATABASE DETAILS (Exact facts retrieved from SQL database):\n{structured_context}\n\n" if structured_context else ""
+
     # 4. Construct prompt
     if is_comparison:
         policy_names = [p.get("filename", "Policy") for p in policies]
@@ -83,6 +87,7 @@ def build_chat_prompt(
             "6. Do NOT include any inline references, page numbers, or source citations (such as 'Reference: ...', 'Page X', 'In filename.pdf - Page Y') inside your response text. Citations are automatically appended in a separate section below your response, so any inline citations are redundant.\n"
             "7. Do NOT include any 'ASSISTANT:', 'USER:', or 'context:' labels in your response.\n"
             "\n"
+            f"{structured_str}"
             f"STORED POLICY SUMMARIES:\n{summaries_block}\n\n"
             f"POLICY CONTEXT:\n{context_block}\n\n"
             f"PREVIOUS CONVERSATION:\n{history_str}\n\n"
@@ -105,6 +110,7 @@ def build_chat_prompt(
             "8. Do NOT output 'ASSISTANT:', 'USER:', or 'context:' labels in your response.\n"
             "9. Never output curly braces in your answer.\n"
             "\n"
+            f"{structured_str}"
             f"STORED POLICY SUMMARIES:\n{summaries_block}\n\n"
             f"POLICY CONTEXT (direct document excerpts — read all blocks):\n{context_block}\n\n"
             f"PREVIOUS CONVERSATION:\n{history_str}\n\n"
