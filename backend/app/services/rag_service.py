@@ -102,14 +102,14 @@ async def generate_document_chunks(document_id: str, text_content: str, db: Asyn
     await db.flush()
     db_time = time.time() - db_start
     
-    # 5. Build and save FAISS index
+    # 5. Build and save hybrid vector store indexes (FAISS, pgvector, and Qdrant)
     faiss_start = time.time()
     from app.models.document import Document
     doc_res = await db.execute(select(Document).where(Document.id == document_id))
     doc = doc_res.scalar_one_or_none()
     if doc:
-        from app.services.vector_store import build_faiss_index
-        await build_faiss_index(db, doc.user_id, document_id, db_chunks)
+        from app.services.vector_store import index_chunks_in_vector_stores
+        await index_chunks_in_vector_stores(db, doc.user_id, document_id, db_chunks)
     faiss_time = time.time() - faiss_start
     
     total_time = time.time() - start_time

@@ -37,6 +37,8 @@ python-slugify==8.0.4
 # Vector Store & Embeddings
 faiss-cpu==1.10.0
 numpy==1.26.4
+qdrant-client==1.12.2
+pgvector==0.3.6
 
 # Data Processing & ML
 pandas==2.2.1

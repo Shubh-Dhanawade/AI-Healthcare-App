@@ -72,6 +72,59 @@ def _text_search_fallback(query: str, policies: List[Dict[str, Any]], top_k: int
     hits.sort(key=lambda x: x["score"], reverse=True)
     return hits[:top_k]
 
+
+def classify_question(query: str) -> str:
+    """
+    Classify user query into FACTUAL, SEMANTIC, or COMPLEX.
+    """
+    query_lower = query.lower()
+    factual_keywords = [
+        "policy number", "premium", "due date", "expiry", "renewal date", 
+        "deductible", "co-pay", "copay", "co-payment", "holder", 
+        "network", "company", "issuer", "what is my number", "policy end date"
+    ]
+    complex_keywords = [
+        "summarize", "summary", "explain my policy", "will diabetes", "covered", 
+        "limitations", "comparison", "compare", "likely be covered", "pre-existing"
+    ]
+    if any(k in query_lower for k in complex_keywords):
+        return "COMPLEX"
+    if any(k in query_lower for k in factual_keywords):
+        return "FACTUAL"
+    return "SEMANTIC"
+
+
+async def fetch_structured_policy_data(db: AsyncSession, policy_ids: List[str]) -> str:
+    """Fetch structured metadata and extracted fields for target policies from PostgreSQL."""
+    from app.models.document import Document, ExtractedField
+    from sqlalchemy import select
+    
+    structured_blocks = []
+    for pid in policy_ids:
+        doc_res = await db.execute(select(Document).where(Document.id == pid))
+        doc = doc_res.scalar_one_or_none()
+        if not doc:
+            continue
+            
+        block = [
+            f"=== STRUCTURED DETAILS FOR {doc.original_filename} ===",
+            f"Policy Name: {doc.original_filename}",
+            f"Renewal Date: {doc.renewal_date.strftime('%Y-%m-%d') if doc.renewal_date else 'Not Mentioned'}",
+            f"Premium Due Date: {doc.premium_due_date.strftime('%Y-%m-%d') if doc.premium_due_date else 'Not Mentioned'}"
+        ]
+        
+        fields_res = await db.execute(
+            select(ExtractedField).where(ExtractedField.document_id == pid)
+        )
+        fields = fields_res.scalars().all()
+        for field in fields:
+            block.append(f"{field.field_name}: {field.field_value}")
+            
+        structured_blocks.append("\n".join(block))
+        
+    return "\n\n---\n\n".join(structured_blocks) if structured_blocks else ""
+
+
 async def run_chat_query(
     policies: List[Dict[str, Any]],
     query: str,
@@ -175,7 +228,8 @@ async def run_chat_query(
             relevance_reason = "Answer relevance check completed."
             context_relevance = sum(c.get("score", 0.0) for c in filtered_chunks) / len(filtered_chunks) if filtered_chunks else 1.0
             
-            from app.services.ai_service import FAITHFULNESS_PROMPT, RELEVANCE_PROMPT, extract_json_from_response
+            from app.services.ai_service import extract_json_from_response
+            from app.services.rag_service import FAITHFULNESS_PROMPT, RELEVANCE_PROMPT
             faith_prompt = FAITHFULNESS_PROMPT.format(context=context_str, answer=response)
             rel_prompt = RELEVANCE_PROMPT.format(query=query, answer=response)
             
@@ -338,7 +392,8 @@ async def run_chat_query_stream(
                     relevance_reason = "Evaluation skipped for speed."
                     context_relevance = sum(c.get("score", 0.0) for c in filtered_chunks) / len(filtered_chunks) if filtered_chunks else 1.0
 
-                    from app.services.ai_service import FAITHFULNESS_PROMPT, RELEVANCE_PROMPT, extract_json_from_response
+                    from app.services.ai_service import extract_json_from_response
+                    from app.services.rag_service import FAITHFULNESS_PROMPT, RELEVANCE_PROMPT
                     faith_prompt = FAITHFULNESS_PROMPT.format(context=context_str, answer=full_response)
                     rel_prompt = RELEVANCE_PROMPT.format(query=query, answer=full_response)
 

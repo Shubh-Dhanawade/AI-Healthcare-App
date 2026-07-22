@@ -1,7 +1,7 @@
 'use client';
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { documentsApi, aiApi, exportApi, remindersApi } from '@/lib/apiHelpers';
+import { documentsApi, aiApi, exportApi, remindersApi, claimsApi } from '@/lib/apiHelpers';
 import { DocumentDetail, RiskAnalysis } from '@/types';
 import { useParams, useRouter } from 'next/navigation';
 import toast from 'react-hot-toast';
@@ -441,6 +441,58 @@ export default function DocumentDetailPage() {
   const [treatmentTypeInput, setTreatmentTypeInput] = useState('');
   const [checklistData, setChecklistData] = useState<any>(null);
   const [isGeneratingChecklist, setIsGeneratingChecklist] = useState(false);
+
+  // Fetch covered treatments list from backend dynamically
+  const { data: treatmentsData } = useQuery({
+    queryKey: ['documentTreatments', docId],
+    queryFn: () => aiApi.getDocumentTreatments(docId),
+    enabled: !!docId,
+  });
+
+  const treatmentsList = treatmentsData?.treatments || [
+    "Cataract Surgery",
+    "Heart Bypass / CABG",
+    "Knee Replacement",
+    "Accidental Fracture Cover",
+    "Kidney Dialysis",
+    "Maternity Delivery"
+  ];
+
+  // Interactive Claims Predictor states (within policy details tab)
+  const [predictAge, setPredictAge] = useState<number>(45);
+  const [predictBmi, setPredictBmi] = useState<number>(24.2);
+  const [predictSmoker, setPredictSmoker] = useState<number>(0);
+  const [predictPreExisting, setPredictPreExisting] = useState<number>(0);
+  const [predictSystolic, setPredictSystolic] = useState<number>(120);
+  const [predictDiastolic, setPredictDiastolic] = useState<number>(80);
+  
+  const [claimPredictionResult, setClaimPredictionResult] = useState<any>(null);
+  const [isClaimPredicting, setIsClaimPredicting] = useState<boolean>(false);
+  const [claimPredictionError, setClaimPredictionError] = useState<string | null>(null);
+
+  const handlePredictClaim = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsClaimPredicting(true);
+    setClaimPredictionError(null);
+    try {
+      const res = await claimsApi.predict({
+        age: predictAge,
+        bmi: predictBmi,
+        smoker: predictSmoker,
+        pre_existing_conditions: predictPreExisting,
+        coverage_tier: 2, // Default to standard tier
+        systolic_bp: predictSystolic,
+        diastolic_bp: predictDiastolic,
+        document_id: docId
+      });
+      setClaimPredictionResult(res);
+    } catch (err: any) {
+      console.error(err);
+      setClaimPredictionError(err.response?.data?.detail || "Actuarial prediction failed. Please verify API connection.");
+    } finally {
+      setIsClaimPredicting(false);
+    }
+  };
 
   // Reminders / Alerts states
   const [renewalDate, setRenewalDate] = useState('');
@@ -1071,14 +1123,19 @@ export default function DocumentDetailPage() {
         document_id: docId,
         renewal_date: renewalDate ? new Date(renewalDate).toISOString() : undefined,
         premium_due_date: premiumDueDate ? new Date(premiumDueDate).toISOString() : undefined,
-        premium_amount: premiumAmount ? parseFloat(premiumAmount.replace(/[^\d.]/g, '')) : undefined,
+        premium_amount: premiumAmount ? premiumAmount.replace(/[^\d.]/g, '') : undefined,
       });
       toast.success('Smart renewal and premium alerts scheduled successfully!', { id: toastId });
       queryClient.invalidateQueries({ queryKey: ['reminders'] });
       queryClient.invalidateQueries({ queryKey: ['document', docId] });
     } catch (error: any) {
       console.error(error);
-      toast.error(error.response?.data?.detail || 'Failed to schedule alerts', { id: toastId });
+      const errMsg = typeof error.response?.data?.detail === 'string'
+        ? error.response.data.detail
+        : Array.isArray(error.response?.data?.detail)
+          ? error.response.data.detail.map((d: any) => `${d.loc.join('.')}: ${d.msg}`).join(', ')
+          : 'Failed to schedule alerts';
+      toast.error(errMsg, { id: toastId });
     } finally {
       setIsSavingReminders(false);
     }
@@ -1946,16 +2003,16 @@ export default function DocumentDetailPage() {
                   <label className="block text-[10px] text-slate-500 font-bold uppercase tracking-wider mb-1.5">Treatment or Surgery Type</label>
                   <select
                     value={treatmentTypeInput}
-                    onChange={(e) => setTreatmentTypeInput(e.target.value)}
+                    onChange={(e) => {
+                      setTreatmentTypeInput(e.target.value);
+                      setClaimPredictionResult(null); // Reset predictor results on change
+                    }}
                     className="form-input text-xs w-full bg-slate-950/40"
                   >
                     <option value="" disabled>Select a treatment...</option>
-                    <option value="Cataract Surgery">Cataract Surgery (मोतीबिंदू शस्त्रक्रिया)</option>
-                    <option value="Heart Bypass / CABG">Heart Bypass / CABG (बायपास शस्त्रक्रिया)</option>
-                    <option value="Knee Replacement">Knee Replacement (गुडघा प्रत्यारोपण)</option>
-                    <option value="Accidental Fracture Cover">Accidental Fracture Cover (अपघाती फ्रॅक्चर)</option>
-                    <option value="Kidney Dialysis">Kidney Dialysis (डायलिसिस)</option>
-                    <option value="Maternity Delivery">Maternity Delivery (प्रसूती)</option>
+                    {treatmentsList.map((t) => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
                   </select>
                 </div>
                 <button
@@ -2031,6 +2088,168 @@ export default function DocumentDetailPage() {
                         </li>
                       ))}
                     </ol>
+                  </div>
+
+                  {/* Interactive Claim Underwriter for this specific policy and treatment */}
+                  <div className="border-t border-slate-700/30 pt-6 mt-8 space-y-6">
+                    <div>
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-2">
+                        <Brain className="w-4 h-4 text-purple-400 animate-pulse" /> Actuarial Underwriter Risk Predictor
+                      </h4>
+                      <p className="text-[11px] text-slate-400 mt-1">
+                        Predict the approval probability and risk drivers for a claim of <strong>{treatmentTypeInput}</strong> under this policy based on your health profile.
+                      </p>
+                    </div>
+
+                    <div className="grid md:grid-cols-5 gap-6">
+                      {/* Inputs Column */}
+                      <div className="md:col-span-2 space-y-3 bg-slate-950/30 p-4 border border-white/5 rounded-xl">
+                        <form onSubmit={handlePredictClaim} className="space-y-3 text-[11px]">
+                          <div>
+                            <label className="block text-slate-400 mb-1 font-medium">Age</label>
+                            <input 
+                              type="number" 
+                              value={predictAge} 
+                              onChange={(e) => setPredictAge(parseInt(e.target.value) || 0)}
+                              className="w-full bg-slate-950 border border-slate-800 rounded-lg p-1.5 text-white outline-none focus:border-blue-500 text-xs"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-slate-400 mb-1 font-medium">BMI</label>
+                            <input 
+                              type="number" 
+                              step="0.1"
+                              value={predictBmi} 
+                              onChange={(e) => setPredictBmi(parseFloat(e.target.value) || 0)}
+                              className="w-full bg-slate-950 border border-slate-800 rounded-lg p-1.5 text-white outline-none focus:border-blue-500 text-xs"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-slate-400 mb-1 font-medium">Active Smoker</label>
+                            <select 
+                              value={predictSmoker} 
+                              onChange={(e) => setPredictSmoker(parseInt(e.target.value) || 0)}
+                              className="w-full bg-slate-950 border border-slate-800 rounded-lg p-1.5 text-white outline-none focus:border-blue-500 text-xs"
+                            >
+                              <option value={0}>No</option>
+                              <option value={1}>Yes</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-slate-400 mb-1 font-medium">Pre-existing Conditions</label>
+                            <input 
+                              type="number" 
+                              value={predictPreExisting} 
+                              onChange={(e) => setPredictPreExisting(parseInt(e.target.value) || 0)}
+                              className="w-full bg-slate-950 border border-slate-800 rounded-lg p-1.5 text-white outline-none focus:border-blue-500 text-xs"
+                            />
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="block text-slate-400 mb-1 font-medium">Systolic BP</label>
+                              <input 
+                                type="number" 
+                                value={predictSystolic} 
+                                onChange={(e) => setPredictSystolic(parseInt(e.target.value) || 120)}
+                                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-1.5 text-white outline-none focus:border-blue-500 text-xs"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-slate-400 mb-1 font-medium">Diastolic BP</label>
+                              <input 
+                                type="number" 
+                                value={predictDiastolic} 
+                                onChange={(e) => setPredictDiastolic(parseInt(e.target.value) || 80)}
+                                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-1.5 text-white outline-none focus:border-blue-500 text-xs"
+                              />
+                            </div>
+                          </div>
+                          <button
+                            type="submit"
+                            disabled={isClaimPredicting}
+                            className="w-full py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg font-semibold tracking-wider transition-colors shadow-lg cursor-pointer text-center text-xs"
+                          >
+                            {isClaimPredicting ? 'Evaluating Risk...' : 'Verify Claim Vitals'}
+                          </button>
+                        </form>
+                        {claimPredictionError && (
+                          <div className="p-2.5 bg-red-950/40 border border-red-500/20 text-red-400 rounded-lg text-[10px]">
+                            {claimPredictionError}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Outputs Column */}
+                      <div className="md:col-span-3 space-y-4">
+                        {claimPredictionResult ? (
+                          <div className="space-y-4">
+                            <div className="grid grid-cols-2 gap-3">
+                              <div className="bg-slate-950/40 p-3 border border-white/5 rounded-xl text-center">
+                                <span className="text-slate-400 text-[10px] font-semibold block mb-0.5">Denial Risk</span>
+                                <span className={`text-2xl font-bold font-mono ${claimPredictionResult.claim_denied ? 'text-red-400' : 'text-emerald-400'}`}>
+                                  {claimPredictionResult.denial_probability}%
+                                </span>
+                              </div>
+                              <div className={`bg-slate-950/40 p-3 border rounded-xl text-center flex flex-col justify-center ${claimPredictionResult.claim_denied ? 'border-red-500/20 bg-red-500/5' : 'border-emerald-500/20 bg-emerald-500/5'}`}>
+                                <span className="text-slate-400 text-[10px] font-semibold block mb-0.5">Decision</span>
+                                <span className={`text-xs font-bold uppercase tracking-wider ${claimPredictionResult.claim_denied ? 'text-red-400' : 'text-emerald-400'}`}>
+                                  {claimPredictionResult.claim_denied ? 'High Denial Risk' : 'Likely Approved'}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="bg-slate-950/40 p-4 border border-white/5 rounded-xl">
+                              <h5 className="text-[10px] font-bold text-slate-300 mb-1.5 uppercase tracking-wider flex items-center gap-1">
+                                <Brain className="w-3.5 h-3.5 text-purple-400" /> Gemma 3 Underwriting Verdict
+                              </h5>
+                              <p className="text-xs text-slate-300 leading-relaxed italic bg-slate-950/60 p-3 rounded-lg border border-slate-800">
+                                "{claimPredictionResult.explanation}"
+                              </p>
+                            </div>
+
+                            <div className="bg-slate-950/40 p-4 border border-white/5 rounded-xl space-y-2">
+                              <h5 className="text-[10px] font-bold text-slate-300 mb-2 uppercase tracking-wider flex items-center gap-1">
+                                <List className="w-3.5 h-3.5 text-blue-400" /> Local Risk Factors
+                              </h5>
+                              <div className="space-y-2.5">
+                                {claimPredictionResult.contributions.map((c: any) => {
+                                  const isPos = c.contribution > 0;
+                                  const width = Math.min(Math.abs(c.contribution) * 1.5, 100);
+                                  return (
+                                    <div key={c.feature} className="text-[10px]">
+                                      <div className="flex justify-between text-slate-300 mb-0.5">
+                                        <span className="font-semibold">{c.label} ({c.value})</span>
+                                        <span className={`font-bold font-mono ${isPos ? 'text-red-400' : 'text-emerald-400'}`}>
+                                          {isPos ? `+${c.contribution}%` : `${c.contribution}%`}
+                                        </span>
+                                      </div>
+                                      <div className="w-full bg-slate-950 h-1.5 rounded-full overflow-hidden flex">
+                                        <div className="w-1/2 flex justify-end bg-slate-900">
+                                          {!isPos && (
+                                            <div className="h-full bg-emerald-500" style={{ width: `${width}%` }} />
+                                          )}
+                                        </div>
+                                        <div className="w-1/2 bg-slate-900">
+                                          {isPos && (
+                                            <div className="h-full bg-red-500" style={{ width: `${width}%` }} />
+                                          )}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="h-full min-h-[200px] flex flex-col items-center justify-center text-center p-6 border border-dashed border-slate-800 rounded-xl bg-slate-950/10">
+                            <Brain className="w-8 h-8 text-slate-600 mb-2" />
+                            <p className="text-xs font-semibold text-slate-400">Claims Verification Engine Ready</p>
+                            <p className="text-[10px] text-slate-500 max-w-xs">Enter your vitals on the left to verify if a claim for this treatment is likely to be approved under this policy.</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 </div>
               ) : (

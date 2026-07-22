@@ -582,12 +582,30 @@ async def generate_checklist(
     fields = res_fields.scalars().all()
     fields_summary = "\n".join([f"{f.field_name}: {f.field_value}" for f in fields])
     
+    # Find and extract claim section from policy text
+    from app.services.ai_service import extract_claim_section
+    claim_section = extract_claim_section(doc.extracted_text or "")
+    
     checklist_data = await generate_claims_checklist(
         policy_name=doc.original_filename,
         fields_summary=fields_summary,
-        treatment_type=request.treatment_type
+        treatment_type=request.treatment_type,
+        claim_section=claim_section
     )
     return ClaimsChecklistResponse(**checklist_data)
+
+
+@router.get("/documents/{document_id}/treatments")
+async def get_document_treatments(
+    document_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Extract and return list of covered treatments/claims directly from the policy text."""
+    doc = await _get_document(document_id, current_user, db)
+    from app.services.ai_service import extract_covered_treatments
+    treatments = await extract_covered_treatments(doc.id, doc.extracted_text or "")
+    return {"treatments": treatments}
 
 
 @router.post("/documents/{document_id}/query", response_model=QueryResponse)

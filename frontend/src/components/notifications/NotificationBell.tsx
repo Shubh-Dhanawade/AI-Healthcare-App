@@ -44,7 +44,7 @@ export default function NotificationBell() {
   const dismissMutation = useMutation({
     mutationFn: remindersApi.dismiss,
     onSuccess: (_, variables) => {
-      queryClient.setQueryData(['reminders'], (prev: Reminder[] | undefined) => 
+      queryClient.setQueryData(['reminders'], (prev: Reminder[] | undefined) =>
         prev ? prev.filter(r => r.id !== variables) : []
       );
       toast.success("Reminder dismissed");
@@ -76,7 +76,7 @@ export default function NotificationBell() {
 
       {/* Dropdown Card */}
       {isOpen && (
-        <div className="absolute right-0 mt-3 w-80 sm:w-96 bg-[#111827] border border-slate-700/60 rounded-2xl shadow-2xl z-50 overflow-hidden backdrop-blur-xl">
+        <div className="absolute  right-0 mt-3 w-80 sm:w-96 bg-[#111827] border border-slate-700/60 rounded-2xl shadow-2xl z-50 overflow-hidden backdrop-blur-xl z-50">
           {/* Header */}
           <div className="px-4 py-3.5 border-b border-slate-800 flex items-center justify-between">
             <h3 className="text-sm font-bold text-white flex items-center gap-2">
@@ -111,15 +111,14 @@ export default function NotificationBell() {
               activeReminders.map((reminder) => {
                 const isRenewal = reminder.reminder_type === 'renewal';
                 const date = new Date(reminder.reminder_date);
-                
+
                 return (
                   <div key={reminder.id} className="p-4 hover:bg-white/2 transition-all flex items-start gap-3">
                     {/* Icon Column */}
-                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5 ${
-                      isRenewal 
-                        ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' 
-                        : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                    }`}>
+                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5 ${isRenewal
+                      ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                      : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                      }`}>
                       {isRenewal ? <Calendar className="w-4 h-4" /> : <DollarSign className="w-4 h-4" />}
                     </div>
 
@@ -128,7 +127,7 @@ export default function NotificationBell() {
                       <p className="text-xs font-semibold text-slate-200 leading-tight">
                         {reminder.title}
                       </p>
-                      
+
                       {reminder.premium_amount && (
                         <p className="text-xs text-slate-400 font-medium mt-1">
                           Amount due: <span className="text-emerald-400 font-bold">${reminder.premium_amount}</span>
@@ -138,9 +137,9 @@ export default function NotificationBell() {
                       <p className="text-[10px] text-slate-500 mt-1.5 flex items-center gap-1 font-medium">
                         Alert date: {date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
                       </p>
-                      
+
                       {/* Nav Link */}
-                      <Link 
+                      <Link
                         href={`/documents/${reminder.document_id}`}
                         onClick={() => setIsOpen(false)}
                         className="inline-flex items-center gap-1 text-[10px] font-bold text-blue-400 hover:text-blue-300 mt-2 transition-all"

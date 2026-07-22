@@ -97,6 +97,8 @@ def _parse_premium_amount(prem_str: str) -> Optional[float]:
 async def _auto_schedule_policy_alerts(db, doc, fields_data) -> None:
     from sqlalchemy import delete
     from app.models.reminder import PolicyReminder
+    from app.models.document import ExtractedField
+    from datetime import datetime, timedelta
     
     extracted_renewal = None
     extracted_premium_due = None
@@ -114,53 +116,93 @@ async def _auto_schedule_policy_alerts(db, doc, fields_data) -> None:
         elif any(x in name_lower for x in ["premium amount", "gross premium", "net premium", "total premium"]):
             extracted_premium_val = _parse_premium_amount(val)
 
-    # Use renewal date if no separate premium due date
+    # Coerce extracted datetimes to naive to match db layout
+    if extracted_renewal:
+        extracted_renewal = extracted_renewal.replace(tzinfo=None)
+    if extracted_premium_due:
+        extracted_premium_due = extracted_premium_due.replace(tzinfo=None)
+
+    # Check and assign defaults if missing
+    has_renewal = (extracted_renewal is not None)
+    has_premium_due = (extracted_premium_due is not None)
+    has_premium_val = (extracted_premium_val is not None)
+
+    if not has_renewal:
+        # Default to 1 year from now
+        extracted_renewal = datetime.utcnow() + timedelta(days=365)
+        db.add(ExtractedField(
+            document_id=doc.id,
+            field_name="Renewal Date",
+            field_value=f"{extracted_renewal.strftime('%Y-%m-%d')} (Not Mentioned, Defaulted)",
+            field_category="policy_period"
+        ))
+        logger.info(f"[AUTO-ALERT] Renewal date not found in document. Defaulting to 1 year: {extracted_renewal}")
+        
+    if not has_premium_due:
+        # Default to 11 months from now
+        extracted_premium_due = datetime.utcnow() + timedelta(days=330)
+        db.add(ExtractedField(
+            document_id=doc.id,
+            field_name="Premium Due Date",
+            field_value=f"{extracted_premium_due.strftime('%Y-%m-%d')} (Not Mentioned, Defaulted)",
+            field_category="premium"
+        ))
+        logger.info(f"[AUTO-ALERT] Premium due date not found in document. Defaulting to 11 months: {extracted_premium_due}")
+
+    if not has_premium_val:
+        extracted_premium_val = "Not Mentioned in Policy"
+        db.add(ExtractedField(
+            document_id=doc.id,
+            field_name="Premium Amount",
+            field_value="Not Mentioned in Policy",
+            field_category="premium"
+        ))
+        logger.info(f"[AUTO-ALERT] Premium amount not found in document. Defaulting placeholder indicator.")
+
     target_prem_due = extracted_premium_due or extracted_renewal
 
-    if extracted_renewal:
-        doc.renewal_date = extracted_renewal
-        
-        # Clear existing renewal alerts
-        await db.execute(delete(PolicyReminder).where(
-            PolicyReminder.document_id == doc.id,
-            PolicyReminder.reminder_type == "renewal"
-        ))
-        
-        # Create renewal reminder (7 days prior)
-        trigger_date = extracted_renewal - timedelta(days=7)
-        r1 = PolicyReminder(
-            user_id=doc.user_id,
-            document_id=doc.id,
-            title=f"Policy Renewal Approaching: {doc.original_filename}",
-            reminder_type="renewal",
-            reminder_date=trigger_date,
-            is_dismissed=False
-        )
-        db.add(r1)
-        logger.info(f"[AUTO-ALERT] Scheduled renewal reminder for doc {doc.id} on {trigger_date}")
+    doc.renewal_date = extracted_renewal
+    
+    # Clear existing renewal alerts
+    await db.execute(delete(PolicyReminder).where(
+        PolicyReminder.document_id == doc.id,
+        PolicyReminder.reminder_type == "renewal"
+    ))
+    
+    # Create renewal reminder (7 days prior)
+    trigger_date = extracted_renewal - timedelta(days=7)
+    r1 = PolicyReminder(
+        user_id=doc.user_id,
+        document_id=doc.id,
+        title=f"Policy Renewal Approaching: {doc.original_filename}",
+        reminder_type="renewal",
+        reminder_date=trigger_date,
+        is_dismissed=False
+    )
+    db.add(r1)
+    logger.info(f"[AUTO-ALERT] Scheduled renewal reminder for doc {doc.id} on {trigger_date}")
 
-    if target_prem_due and extracted_premium_val:
-        doc.premium_due_date = target_prem_due
-        
-        # Clear existing premium alerts
-        await db.execute(delete(PolicyReminder).where(
-            PolicyReminder.document_id == doc.id,
-            PolicyReminder.reminder_type == "premium"
-        ))
-        
-        # Create premium reminder (5 days prior)
-        trigger_date = target_prem_due - timedelta(days=5)
-        r2 = PolicyReminder(
-            user_id=doc.user_id,
-            document_id=doc.id,
-            title=f"Premium Payment Approaching: {doc.original_filename}",
-            reminder_type="premium",
-            reminder_date=trigger_date,
-            premium_amount=str(extracted_premium_val),
-            is_dismissed=False
-        )
-        db.add(r2)
-        logger.info(f"[AUTO-ALERT] Scheduled premium reminder for doc {doc.id} on {trigger_date}")
+    doc.premium_due_date = target_prem_due
+    
+    # Clear existing premium alerts
+    await db.execute(delete(PolicyReminder).where(
+        PolicyReminder.document_id == doc.id,
+        PolicyReminder.reminder_type == "premium"
+    ))
+    
+    # Create premium reminder (5 days prior)
+    trigger_date = target_prem_due - timedelta(days=5)
+    r2 = PolicyReminder(
+        user_id=doc.user_id,
+        document_id=doc.id,
+        title=f"Premium Payment Approaching: {doc.original_filename}",
+        reminder_type="premium",
+        reminder_date=trigger_date,
+        premium_amount=str(extracted_premium_val),
+        is_dismissed=False
+    )
+    db.add(r2)
+    logger.info(f"[AUTO-ALERT] Scheduled premium reminder for doc {doc.id} on {trigger_date}")
 
     # Trigger email notification to user
     try:
@@ -172,7 +214,7 @@ async def _auto_schedule_policy_alerts(db, doc, fields_data) -> None:
                 policy_name=doc.original_filename,
                 renewal_date=doc.renewal_date,
                 premium_due_date=doc.premium_due_date,
-                premium_amount=str(extracted_premium_val) if extracted_premium_val else None
+                premium_amount=str(extracted_premium_val)
             )
     except Exception as email_err:
         logger.error(f"Failed to trigger auto email notification for reminder: {email_err}")
@@ -1012,12 +1054,15 @@ async def schedule_reminder(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
         
-    # Update document dates
-    if request.renewal_date:
-        doc.renewal_date = request.renewal_date
+    # Update document dates and ensure timezone-naive datetimes for PostgreSQL TIMESTAMP WITHOUT TIME ZONE columns
+    renewal_naive = request.renewal_date.replace(tzinfo=None) if request.renewal_date else None
+    premium_due_naive = request.premium_due_date.replace(tzinfo=None) if request.premium_due_date else None
+
+    if renewal_naive:
+        doc.renewal_date = renewal_naive
         # Create reminder alert
         # Trigger 7 days prior
-        trigger_date = request.renewal_date - timedelta(days=7)
+        trigger_date = renewal_naive - timedelta(days=7)
         r1 = PolicyReminder(
             user_id=current_user.id,
             document_id=doc.id,
@@ -1027,9 +1072,9 @@ async def schedule_reminder(
         )
         db.add(r1)
         
-    if request.premium_due_date:
-        doc.premium_due_date = request.premium_due_date
-        trigger_date = request.premium_due_date - timedelta(days=5)
+    if premium_due_naive:
+        doc.premium_due_date = premium_due_naive
+        trigger_date = premium_due_naive - timedelta(days=5)
         r2 = PolicyReminder(
             user_id=current_user.id,
             document_id=doc.id,
@@ -1048,8 +1093,8 @@ async def schedule_reminder(
             user_name=current_user.full_name or current_user.email,
             user_email=current_user.email,
             policy_name=doc.original_filename,
-            renewal_date=doc.renewal_date,
-            premium_due_date=doc.premium_due_date,
+            renewal_date=renewal_naive,
+            premium_due_date=premium_due_naive,
             premium_amount=request.premium_amount
         )
     except Exception as email_err:
