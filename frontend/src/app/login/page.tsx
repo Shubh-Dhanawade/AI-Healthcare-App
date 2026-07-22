@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { authApi } from '@/lib/apiHelpers';
 import toast from 'react-hot-toast';
-import { Activity, Mail, Lock, Eye, EyeOff, ArrowRight } from 'lucide-react';
+import { Activity, Mail, Lock, Eye, EyeOff, ArrowRight, AlertCircle } from 'lucide-react';
 import Link from 'next/link';
 
 export default function LoginPage() {
@@ -13,17 +13,21 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [showPw, setShowPw] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
   const { login } = useAuth();
   const router = useRouter();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError('');
     if (!email.trim() || !password) {
+      setError('Please fill in all fields');
       toast.error('Please fill in all fields');
       return;
     }
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
+      setError('Please enter a valid email address');
       toast.error('Please enter a valid email address');
       return;
     }
@@ -34,7 +38,9 @@ export default function LoginPage() {
       toast.success(`Welcome back, ${res.user.full_name}!`);
       router.replace('/dashboard');
     } catch (err: any) {
-      toast.error(err.response?.data?.detail || 'Login failed. Check your credentials.');
+      const errMsg = err.response?.data?.detail || 'Login failed. Check your credentials.';
+      setError(errMsg);
+      toast.error(errMsg);
     } finally {
       setLoading(false);
     }
@@ -66,6 +72,12 @@ export default function LoginPage() {
 
         {/* Form Card */}
         <div className="glass-card p-8">
+          {error && (
+            <div className="mb-6 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm flex items-start gap-2.5 fade-in">
+              <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+              <span>{error}</span>
+            </div>
+          )}
           <form onSubmit={handleSubmit} className="space-y-5">
             {/* Email */}
             <div>

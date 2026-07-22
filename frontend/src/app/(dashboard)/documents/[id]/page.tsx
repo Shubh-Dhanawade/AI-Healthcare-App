@@ -9,8 +9,9 @@ import {
   ArrowLeft, Brain, Shield, FileText, Search, RefreshCw,
   AlertTriangle, Info, ChevronDown, ChevronUp,
   Send, MessageSquare, List, Loader2, Download, Mail,
-  Volume2, VolumeX
+  Volume2, VolumeX, Clock, CheckCircle2, XCircle, Wallet
 } from 'lucide-react';
+
 import { useState, useEffect, useRef } from 'react';
 import DocumentStatusBadge from '@/components/documents/DocumentStatusBadge';
 import Link from 'next/link';
@@ -172,170 +173,245 @@ const generateSimplePrintHTML = (doc: DocumentDetail, selectedLanguage: string) 
   // Build fields list
   let fieldsRows = '';
   if (doc.extracted_fields && doc.extracted_fields.length > 0) {
-    doc.extracted_fields.forEach(f => {
+    fieldsRows += '<table style="width: 100%; border-collapse: collapse; font-size: 13px;">';
+    doc.extracted_fields.forEach((f, index) => {
+      const bg = index % 2 === 0 ? '#f8fafc' : '#ffffff';
       fieldsRows += `
-        <div style="padding: 10px 0; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; font-size: 13px;">
-          <span style="font-weight: bold; color: #000000; width: 40%;">${f.field_name}:</span>
-          <span style="color: #000000; width: 55%; text-align: left;">${f.field_value || '—'}</span>
-        </div>
+        <tr style="background-color: ${bg}; border-bottom: 1px solid #e2e8f0;">
+          <td style="padding: 14px 16px; font-weight: 600; color: #334155; width: 35%; border-right: 1px solid #e2e8f0;">${f.field_name}</td>
+          <td style="padding: 14px 16px; color: #0f172a;">${f.field_value || '—'}</td>
+        </tr>
       `;
     });
+    fieldsRows += '</table>';
   } else {
-    fieldsRows = '<div style="padding: 10px 0; text-align: center; color: #000000;">No extracted fields available.</div>';
+    fieldsRows = '<div style="padding: 20px; text-align: center; color: #64748b;">No extracted fields available.</div>';
   }
 
   // Build risk cards
   let risksContent = '';
   if (doc.risk_analyses && doc.risk_analyses.length > 0) {
     doc.risk_analyses.forEach(r => {
-      const severityColor = r.severity === 'high' ? '#dc2626' : (r.severity === 'medium' ? '#d97706' : '#059669');
+      const isHigh = r.severity === 'high';
+      const isMedium = r.severity === 'medium';
+      const severityColor = isHigh ? '#dc2626' : (isMedium ? '#d97706' : '#059669');
+      const bgColor = isHigh ? '#fef2f2' : (isMedium ? '#fffbeb' : '#ecfdf5');
+      const borderColor = isHigh ? '#fecaca' : (isMedium ? '#fde68a' : '#a7f3d0');
+      
       risksContent += `
-        <div style="border: 1px solid #e2e8f0; border-left: 5px solid ${severityColor}; padding: 15px; border-radius: 6px; margin-bottom: 15px; background-color: #ffffff;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-            <span style="font-weight: bold; font-size: 13px; color: #000000;">${r.risk_type.replace(/_/g, ' ').toUpperCase()}</span>
-            <span style="font-size: 11px; font-weight: bold; color: ${severityColor}; border: 1px solid ${severityColor}; padding: 2px 8px; border-radius: 4px;">${r.severity.toUpperCase()}</span>
+        <div style="background-color: ${bgColor}; border: 1px solid ${borderColor}; border-left: 5px solid ${severityColor}; padding: 16px; border-radius: 8px; margin-bottom: 16px; page-break-inside: avoid;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <span style="font-weight: 700; font-size: 14px; color: #0f172a;">${r.risk_type.replace(/_/g, ' ').toUpperCase()}</span>
+            <span style="font-size: 11px; font-weight: 700; color: ${severityColor}; background-color: #ffffff; border: 1px solid ${severityColor}; padding: 4px 10px; border-radius: 9999px;">${r.severity.toUpperCase()}</span>
           </div>
-          <p style="margin: 0 0 6px 0; font-size: 12.5px; color: #000000; font-style: italic;">"${r.clause_text}"</p>
-          ${r.explanation ? `<p style="margin: 0 0 4px 0; font-size: 12px; color: #000000;"><strong>Analysis:</strong> ${r.explanation}</p>` : ''}
-          ${r.recommendation ? `<p style="margin: 0; font-size: 12px; color: #dc2626; font-weight: bold;"><strong>Recommendation:</strong> ${r.recommendation}</p>` : ''}
+          <p style="margin: 0 0 8px 0; font-size: 13px; color: #334155; font-style: italic; line-height: 1.5;">"${r.clause_text}"</p>
+          ${r.explanation ? `<p style="margin: 0 0 6px 0; font-size: 13px; color: #1e293b; line-height: 1.5;"><strong>Analysis:</strong> ${r.explanation}</p>` : ''}
+          ${r.recommendation ? `<p style="margin: 0; font-size: 13px; color: ${severityColor}; font-weight: 600; line-height: 1.5;">Recommendation: ${r.recommendation}</p>` : ''}
         </div>
       `;
     });
   } else {
-    risksContent = '<p style="color: #059669; font-weight: bold; font-size: 13px;">No critical risks identified.</p>';
+    risksContent = '<div style="padding: 20px; background-color: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 8px; color: #059669; font-weight: 600; text-align: center;">No critical risks identified.</div>';
   }
 
   return `
     <!DOCTYPE html>
-    <html>
+    <html lang="en">
     <head>
       <meta charset="utf-8">
-      <style>
-        body {
-          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-          color: #000000;
-          line-height: 1.6;
-          margin: 0;
-          padding: 30px;
-          background: #ffffff;
-        }
-        .container {
-          max-width: 800px;
-          margin: 0 auto;
-          background-color: white;
-        }
-        .header {
-          border-bottom: 3px solid #000000;
-          padding-bottom: 12px;
-          margin-bottom: 30px;
-        }
-        .header h1 {
-          margin: 0;
-          font-size: 26px;
-          font-weight: bold;
-          color: #000000;
-        }
-        .meta-line {
-          font-size: 12px;
-          color: #000000;
-          margin-top: 5px;
-          opacity: 0.8;
-        }
-        .section {
-          margin-bottom: 35px;
-        }
-        .section-title {
-          font-size: 15px;
-          text-transform: uppercase;
-          letter-spacing: 0.05em;
-          color: #000000;
-          background: #f1f5f9;
-          padding: 8px 12px;
-          border-left: 5px solid #000000;
-          font-weight: bold;
-          margin-bottom: 15px;
-        }
-        .summary-text {
-          font-size: 13.5px;
-          color: #000000;
-          text-align: justify;
-          margin-bottom: 20px;
-        }
-        .info-card {
-          border: 1px solid #e2e8f0;
-          padding: 15px;
-          border-radius: 6px;
-          margin-bottom: 15px;
-          background: #ffffff;
-        }
-        .info-card-title {
-          font-weight: bold;
-          font-size: 13px;
-          color: #000000;
-          margin-bottom: 5px;
-        }
-        .info-card-content {
-          font-size: 12.5px;
-          color: #000000;
-          margin: 0;
-          white-space: pre-wrap;
-        }
-      </style>
     </head>
     <body>
-      <div class="container">
-        <div class="header">
-          <h1>Healthcare Policy Analysis Report</h1>
-          <div class="meta-line">
-            Document: ${doc.original_filename} &bull; Processed: ${new Date(doc.created_at).toLocaleDateString()} &bull; Safety Score: ${doc.safety_score}/100
+      <div class="report-wrapper">
+        <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;600;700&family=Noto+Sans+Devanagari:wght@400;600;700&display=swap" rel="stylesheet">
+        <style>
+          * {
+            box-sizing: border-box;
+          }
+          body {
+            font-family: 'Noto Sans', 'Noto Sans Devanagari', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #ffffff !important;
+            color: #0f172a !important;
+            line-height: 1.6;
+            margin: 0;
+            padding: 0;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+          }
+          .report-wrapper {
+            background-color: #ffffff !important;
+            color: #0f172a !important;
+            padding: 40px;
+            max-width: 800px;
+            margin: 0 auto;
+          }
+          .header-section {
+            background-color: #1e293b !important;
+            color: #ffffff !important;
+            padding: 30px;
+            border-radius: 12px;
+            margin-bottom: 35px;
+            border: 1px solid #0f172a;
+          }
+          .header-title {
+            font-size: 28px;
+            font-weight: 700;
+            margin: 0 0 10px 0;
+            color: #ffffff !important;
+            letter-spacing: -0.02em;
+          }
+          .header-meta {
+            font-size: 13px;
+            color: #cbd5e1 !important;
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+          }
+          .meta-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+          }
+          .section {
+            margin-bottom: 40px;
+          }
+          .section-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #e2e8f0;
+            padding-bottom: 10px;
+          }
+          .section-title {
+            font-size: 18px;
+            font-weight: 700;
+            color: #0f172a !important;
+            margin: 0;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+          }
+          .summary-text {
+            font-size: 14px;
+            color: #334155 !important;
+            text-align: left;
+            margin-bottom: 25px;
+            white-space: pre-wrap;
+            line-height: 1.7;
+          }
+          .info-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            margin-top: 20px;
+          }
+          .info-card {
+            flex: 1 1 calc(50% - 10px);
+            background-color: #f8fafc !important;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 20px;
+            page-break-inside: avoid;
+          }
+          .info-card.full-width {
+            flex: 1 1 100%;
+          }
+          .info-card-title {
+            font-weight: 700;
+            font-size: 14px;
+            color: #0f172a !important;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+          }
+          .info-card-content {
+            font-size: 13px;
+            color: #475569 !important;
+            margin: 0;
+            white-space: pre-wrap;
+            line-height: 1.6;
+            font-family: inherit;
+          }
+          .table-container {
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            overflow: hidden;
+          }
+          .footer {
+            margin-top: 50px;
+            padding-top: 20px;
+            border-top: 1px solid #e2e8f0;
+            text-align: center;
+            font-size: 12px;
+            color: #94a3b8 !important;
+          }
+        </style>
+        
+        <div class="header-section">
+          <h1 class="header-title">Healthcare Policy Analysis Report</h1>
+          <div class="header-meta">
+            <span class="meta-item">Document: ${doc.original_filename}</span>
+            <span class="meta-item">&bull; Processed: ${new Date(doc.created_at).toLocaleDateString()}</span>
+            <span class="meta-item">&bull; Safety Score: ${doc.safety_score}/100</span>
           </div>
         </div>
 
         <div class="section">
-          <div class="section-title">AI Executive Summary (${selectedLanguage})</div>
+          <div class="section-header">
+            <h2 class="section-title">AI Executive Summary (${selectedLanguage})</h2>
+          </div>
           <div class="summary-text">${doc.summary?.summary_text || 'No summary available.'}</div>
           
-          ${doc.summary?.coverage_summary ? `
-            <div class="info-card">
-              <div class="info-card-title">✅ Covered Items</div>
-              <pre class="info-card-content">${doc.summary.coverage_summary}</pre>
-            </div>
-          ` : ''}
-          
-          ${doc.summary?.exclusions_summary ? `
-            <div class="info-card">
-              <div class="info-card-title">❌ Excluded Items</div>
-              <pre class="info-card-content">${doc.summary.exclusions_summary}</pre>
-            </div>
-          ` : ''}
-          
-          ${doc.summary?.waiting_period_summary ? `
-            <div class="info-card">
-              <div class="info-card-title">⏰ Waiting Periods</div>
-              <pre class="info-card-content">${doc.summary.waiting_period_summary}</pre>
-            </div>
-          ` : ''}
-          
-          ${doc.summary?.premium_summary ? `
-            <div class="info-card">
-              <div class="info-card-title">💰 Premium Details</div>
-              <pre class="info-card-content">${doc.summary.premium_summary}</pre>
-            </div>
-          ` : ''}
+          <div class="info-grid">
+            ${doc.summary?.coverage_summary ? `
+              <div class="info-card">
+                <div class="info-card-title"><span style="color: #10b981; font-size: 16px;">&check;</span> Covered Items</div>
+                <pre class="info-card-content">${doc.summary.coverage_summary}</pre>
+              </div>
+            ` : ''}
+            
+            ${doc.summary?.exclusions_summary ? `
+              <div class="info-card">
+                <div class="info-card-title"><span style="color: #ef4444; font-size: 16px;">&cross;</span> Excluded Items</div>
+                <pre class="info-card-content">${doc.summary.exclusions_summary}</pre>
+              </div>
+            ` : ''}
+            
+            ${doc.summary?.waiting_period_summary ? `
+              <div class="info-card ${!doc.summary?.premium_summary ? 'full-width' : ''}">
+                <div class="info-card-title"><span style="color: #f59e0b; font-size: 16px;">&#8987;</span> Waiting Periods</div>
+                <pre class="info-card-content">${doc.summary.waiting_period_summary}</pre>
+              </div>
+            ` : ''}
+            
+            ${doc.summary?.premium_summary ? `
+              <div class="info-card ${!doc.summary?.waiting_period_summary ? 'full-width' : ''}">
+                <div class="info-card-title"><span style="color: #3b82f6; font-size: 16px;">&#36;</span> Premium Details</div>
+                <pre class="info-card-content">${doc.summary.premium_summary}</pre>
+              </div>
+            ` : ''}
+          </div>
         </div>
 
         <div class="section">
-          <div class="section-title">Extracted Policy Parameters</div>
-          <div style="border: 1px solid #e2e8f0; padding: 15px; border-radius: 6px; background-color: #ffffff;">
+          <div class="section-header">
+            <h2 class="section-title">Extracted Policy Parameters</h2>
+          </div>
+          <div class="table-container">
             ${fieldsRows}
           </div>
         </div>
 
         <div class="section">
-          <div class="section-title">Critical Risk Audit</div>
+          <div class="section-header">
+            <h2 class="section-title">Critical Risk Audit</h2>
+          </div>
           <div>
             ${risksContent}
           </div>
+        </div>
+        
+        <div class="footer">
+          Generated securely by HealthPolicyLens &bull; AI Document Intelligence
         </div>
       </div>
     </body>
@@ -380,8 +456,24 @@ export default function DocumentDetailPage() {
       // 1. Load html2pdf from CDN
       await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js');
 
+      // Prepare translated data
+      const currentFields = selectedLanguage === 'English'
+        ? doc.extracted_fields
+        : (translations[selectedLanguage]?.extracted_fields || doc.extracted_fields);
+        
+      const currentRisks = selectedLanguage === 'English'
+        ? doc.risk_analyses
+        : (translations[selectedLanguage]?.risk_analyses || doc.risk_analyses);
+        
+      const docToPrint = {
+        ...doc,
+        summary: displayedSummary || doc.summary,
+        extracted_fields: currentFields,
+        risk_analyses: currentRisks
+      };
+
       // 2. Generate the simple print HTML report template
-      const printHTML = generateSimplePrintHTML(doc, selectedLanguage);
+      const printHTML = generateSimplePrintHTML(docToPrint, selectedLanguage);
 
       // 3. Create a temporary hidden iframe container
       const iframe = document.createElement('iframe');
@@ -416,7 +508,7 @@ export default function DocumentDetailPage() {
           };
 
           // @ts-ignore
-          await html2pdf().from(iframeDoc.body).set(opt).save();
+          await html2pdf().from(iframeDoc.documentElement).set(opt).save();
 
           toast.success('PDF report downloaded successfully!', { id: toastId });
         } catch (pdfError) {
@@ -450,33 +542,43 @@ export default function DocumentDetailPage() {
   const handleWhatsAppShare = () => {
     if (!doc) return;
 
+    const currentFields = selectedLanguage === 'English'
+      ? doc.extracted_fields
+      : (translations[selectedLanguage]?.extracted_fields || doc.extracted_fields);
+      
+    const currentRisks = selectedLanguage === 'English'
+      ? doc.risk_analyses
+      : (translations[selectedLanguage]?.risk_analyses || doc.risk_analyses);
+
+    const currentSummary = displayedSummary || doc.summary;
+
     let text = `🏥 *HealthPolicyLens Policy Audit Report*\n`;
     text += `*Policy Name:* ${doc.original_filename}\n\n`;
 
-    if (doc.summary) {
-      text += `*Summary in Brief:*\n${doc.summary.summary_text}\n\n`;
+    if (currentSummary) {
+      text += `*Summary in Brief:*\n${currentSummary.summary_text}\n\n`;
     }
 
-    if (doc.extracted_fields && doc.extracted_fields.length > 0) {
+    if (currentFields && currentFields.length > 0) {
       text += `*Key Policy Details:*\n`;
       const keyFields = ['policy_name', 'insurer_name', 'sum_insured', 'premium_amount', 'deductible', 'co_payment'];
-      const fieldsToPrint = doc.extracted_fields.filter(f =>
-        keyFields.includes(f.field_name.toLowerCase().replace(/\s/g, '_')) ||
+      const fieldsToPrint = currentFields.filter((f: any) =>
+        keyFields.includes(f.field_name.toLowerCase().replace(/\\s/g, '_')) ||
         keyFields.includes(f.field_name.toLowerCase())
       );
 
-      const printedFields = fieldsToPrint.length > 0 ? fieldsToPrint : doc.extracted_fields;
-      printedFields.slice(0, 6).forEach(f => {
+      const printedFields = fieldsToPrint.length > 0 ? fieldsToPrint : currentFields;
+      printedFields.slice(0, 6).forEach((f: any) => {
         text += `• ${f.field_name}: ${f.field_value || '—'}\n`;
       });
       text += `\n`;
     }
 
-    if (doc.risk_analyses && doc.risk_analyses.length > 0) {
-      const highRisks = doc.risk_analyses.filter(r => r.severity === 'high');
+    if (currentRisks && currentRisks.length > 0) {
+      const highRisks = currentRisks.filter((r: any) => r.severity === 'high');
       if (highRisks.length > 0) {
         text += `*⚠️ Critical Risks Detected:*\n`;
-        highRisks.slice(0, 3).forEach(r => {
+        highRisks.slice(0, 3).forEach((r: any) => {
           text += `• ${r.risk_type.replace(/_/g, ' ').toUpperCase()} (${r.severity.toUpperCase()}): ${r.clause_text}\n`;
         });
         text += `\n`;
@@ -1182,9 +1284,6 @@ export default function DocumentDetailPage() {
             <div className="flex items-center gap-3 mt-1.5 flex-wrap">
               <DocumentStatusBadge status={doc.status} />
               <span className="text-xs text-slate-500">{doc.page_count} page{doc.page_count !== 1 ? 's' : ''}</span>
-              {doc.extraction_method && (
-                <span className="text-xs text-slate-500">via {doc.extraction_method}</span>
-              )}
             </div>
           </div>
         </div>
@@ -1354,7 +1453,7 @@ export default function DocumentDetailPage() {
       {canRunAI && (
         <div className="glass-card p-5 border border-white/5 space-y-4">
           <h2 className="font-semibold text-sm text-slate-300 flex items-center gap-2">
-            <span className="text-blue-400">⏰</span> Smart Renewal & Premium Alerts
+            <Clock className="w-4 h-4 text-blue-400" /> Smart Renewal & Premium Alerts
           </h2>
           <p className="text-xs text-slate-400">
             Set dates for your policy renewal and premium payments. The system will automatically calculate and trigger renewal alerts 7 days prior, and premium reminders 5 days prior.
@@ -1500,7 +1599,7 @@ export default function DocumentDetailPage() {
                         <select
                           value={selectedLanguage}
                           onChange={(e) => handleLanguageChange(e.target.value)}
-                          className="bg-transparent border-none text-xs text-white focus:outline-none cursor-pointer"
+                          className="bg-black border-none text-xs text-white focus:outline-none cursor-pointer"
                         >
                           <option value="English">English</option>
                           <option value="Hindi">Hindi (हिंदी)</option>
@@ -1587,18 +1686,21 @@ export default function DocumentDetailPage() {
                     <h3 className="text-xs font-bold text-slate-400 tracking-wider uppercase">Policy Details & Exclusions</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {[
-                        { label: '✅ Coverage & Benefits', value: displayedSummary.coverage_summary, color: '#10b981', border: 'border-emerald-500/20', bg: 'bg-emerald-500/5', dotColor: 'bg-emerald-400' },
-                        { label: '❌ Exclusions & Limits', value: displayedSummary.exclusions_summary, color: '#ef4444', border: 'border-red-500/20', bg: 'bg-red-500/5', dotColor: 'bg-red-400' },
-                        { label: '⏰ Waiting Periods', value: displayedSummary.waiting_period_summary, color: '#f59e0b', border: 'border-amber-500/20', bg: 'bg-amber-500/5', dotColor: 'bg-amber-400' },
-                        { label: '💰 Premium & Charges', value: displayedSummary.premium_summary, color: '#3b82f6', border: 'border-blue-500/20', bg: 'bg-blue-500/5', dotColor: 'bg-blue-400' },
+                        { title: 'Coverage & Benefits', icon: CheckCircle2, value: displayedSummary.coverage_summary, color: '#10b981', border: 'border-emerald-500/20', bg: 'bg-emerald-500/5', dotColor: 'bg-emerald-400' },
+                        { title: 'Exclusions & Limits', icon: XCircle, value: displayedSummary.exclusions_summary, color: '#ef4444', border: 'border-red-500/20', bg: 'bg-red-500/5', dotColor: 'bg-red-400' },
+                        { title: 'Waiting Periods', icon: Clock, value: displayedSummary.waiting_period_summary, color: '#f59e0b', border: 'border-amber-500/20', bg: 'bg-amber-500/5', dotColor: 'bg-amber-400' },
+                        { title: 'Premium & Charges', icon: Wallet, value: displayedSummary.premium_summary, color: '#3b82f6', border: 'border-blue-500/20', bg: 'bg-blue-500/5', dotColor: 'bg-blue-400' },
                       ].filter(s => s.value).map((section) => {
                         const bullets = (section.value || '')
                           .split(/\n/)
                           .map((line: string) => line.replace(/^[•\-*\s\u2022\uf0b7]+/, '').trim())
                           .filter((line: string) => line.length > 0);
                         return (
-                          <div key={section.label} className={`p-4 rounded-xl border ${section.border} ${section.bg}`}>
-                            <h4 className="font-bold text-xs uppercase tracking-wider mb-3" style={{ color: section.color }}>{section.label}</h4>
+                          <div key={section.title} className={`p-4 rounded-xl border ${section.border} ${section.bg}`}>
+                            <h4 className="font-bold text-xs uppercase tracking-wider mb-3 flex items-center gap-1.5" style={{ color: section.color }}>
+                              <section.icon className="w-4 h-4" />
+                              {section.title}
+                            </h4>
                             <ul className="space-y-2">
                               {bullets.map((bullet: string, idx: number) => (
                                 <li key={idx} className="flex items-start gap-2 text-xs text-slate-200 leading-relaxed">
@@ -1645,7 +1747,7 @@ export default function DocumentDetailPage() {
                     </div>
                   )}
                 </div>
-                <p className="text-xs text-slate-500 text-right">Generated by {displayedSummary.model_used || doc.summary?.model_used || 'AI model'} • {doc.summary?.created_at ? new Date(doc.summary.created_at).toLocaleString() : ''}</p>
+                <p className="text-xs text-slate-500 text-right">Generated on {doc.summary?.created_at ? new Date(doc.summary.created_at).toLocaleString() : ''}</p>
               </div>
             );
           })()}

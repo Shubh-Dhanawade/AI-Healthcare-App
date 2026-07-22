@@ -31,7 +31,11 @@ apiClient.interceptors.request.use(
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401 && typeof window !== 'undefined') {
+    if (
+      error.response?.status === 401 && 
+      typeof window !== 'undefined' && 
+      window.location.pathname !== '/login'
+    ) {
       localStorage.removeItem('access_token');
       localStorage.removeItem('user');
       window.location.href = '/login';

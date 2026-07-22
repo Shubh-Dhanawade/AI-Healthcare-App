@@ -317,6 +317,8 @@ async def query_chatbot(
     query_stmt = select(Document).where(Document.user_id == current_user.id)
     if request.document_ids:
         query_stmt = query_stmt.where(Document.id.in_(request.document_ids))
+    elif request.document_id:
+        query_stmt = query_stmt.where(Document.id == request.document_id)
     else:
         # Defaults to completed/summarized policies
         query_stmt = query_stmt.where(Document.status.in_(["completed", "summarized", "text_extracted"]))
@@ -470,6 +472,8 @@ async def query_chatbot_stream(
     query_stmt = select(Document).where(Document.user_id == current_user.id)
     if request.document_ids:
         query_stmt = query_stmt.where(Document.id.in_(request.document_ids))
+    elif request.document_id:
+        query_stmt = query_stmt.where(Document.id == request.document_id)
     else:
         query_stmt = query_stmt.where(Document.status.in_(["completed", "summarized", "text_extracted"]))
     query_stmt = query_stmt.options(selectinload(Document.summary))

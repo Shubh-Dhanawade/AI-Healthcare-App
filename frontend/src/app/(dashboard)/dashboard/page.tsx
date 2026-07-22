@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { documentsApi, remindersApi } from '@/lib/apiHelpers';
 import { Document } from '@/types';
 import { useAuth } from '@/contexts/AuthContext';
-import { FileText, Upload, Shield, Brain, TrendingUp, Clock, CheckCircle, AlertTriangle, Cpu } from 'lucide-react';
+import { FileText, Upload, Shield, Brain, TrendingUp, Clock, CheckCircle, AlertTriangle, Cpu, Bell, Sparkles } from 'lucide-react';
 import Link from 'next/link';
 import DocumentStatusBadge from '@/components/documents/DocumentStatusBadge';
 import { useState } from 'react';
@@ -236,8 +236,8 @@ export default function DashboardPage() {
         <div className="absolute top-0 right-0 w-64 h-64 rounded-full opacity-10 blur-3xl pointer-events-none"
           style={{ background: 'radial-gradient(circle, #3b82f6, transparent)', transform: 'translate(30%, -30%)' }} />
         <div className="relative">
-          <h1 className="text-2xl font-bold mb-1">
-            Welcome back, <span className="gradient-text">{user?.full_name?.split(' ')[0]}</span> 👋
+          <h1 className="text-2xl font-bold mb-1 flex items-center gap-2">
+            Welcome back, <span className="gradient-text">{user?.full_name?.split(' ')[0]}</span> <Sparkles className="w-6 h-6 text-amber-400" />
           </h1>
           <p className="text-slate-400">Here&apos;s an overview of your insurance documents.</p>
           <div className="flex gap-3 mt-5">
@@ -357,7 +357,7 @@ export default function DashboardPage() {
         <div className="lg:col-span-5 glass-card p-6 flex flex-col h-full">
           <div className="flex items-center justify-between mb-5">
             <h2 className="text-lg font-bold flex items-center gap-2">
-              <span className="text-blue-400">🔔</span>
+              <Bell className="w-5 h-5 text-blue-400" />
               Active Policy Alerts
             </h2>
           </div>

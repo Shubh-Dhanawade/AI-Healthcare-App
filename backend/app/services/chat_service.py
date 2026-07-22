@@ -22,20 +22,21 @@ from app.services.ai_service import (
 
 
 # ─────────────────────────────────────────
-# Similarity threshold — lowered to 0.05 so keyword-boosted chunks are not
-# filtered out before the re-ranking pass in vector_store has a chance to elevate them.
-# The old 0.10 threshold was discarding maternity/rare-term chunks that had
-# low raw cosine scores but contain the exact keywords the user asked about.
+# Similarity threshold — lowered to -1.0 (no threshold)
+# so keyword-boosted chunks are not filtered out before the 
+# re-ranking pass in vector_store has a chance to elevate them.
+# The LLM is smart enough to reject irrelevant context.
 # ─────────────────────────────────────────
-SIMILARITY_THRESHOLD = 0.05
+SIMILARITY_THRESHOLD = -1.0
 
+_STOP_WORDS = {"the", "and", "for", "with", "that", "this", "what", "how", "are", "you", "can", "does", "did", "was", "has", "have"}
 
 def _text_search_fallback(query: str, policies: List[Dict[str, Any]], top_k: int = 4) -> List[Dict[str, Any]]:
     """
     Fast TF-IDF keyword fallback when FAISS vector retrieval fails or returns no results.
     Chunks the extracted policy text and ranks by keyword overlap with the query.
     """
-    query_words = [w.lower() for w in re.findall(r'\w+', query) if len(w) > 2]
+    query_words = [w.lower() for w in re.findall(r'\w+', query) if len(w) > 2 and w.lower() not in _STOP_WORDS]
     if not query_words:
         return []
 
