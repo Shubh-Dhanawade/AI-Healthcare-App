@@ -31,12 +31,34 @@ SIMILARITY_THRESHOLD = -1.0
 
 _STOP_WORDS = {"the", "and", "for", "with", "that", "this", "what", "how", "are", "you", "can", "does", "did", "was", "has", "have"}
 
-def _text_search_fallback(query: str, policies: List[Dict[str, Any]], top_k: int = 4) -> List[Dict[str, Any]]:
+def _text_search_fallback(query: str, policies: List[Dict[str, Any]], top_k: int = 6) -> List[Dict[str, Any]]:
     """
-    Fast TF-IDF keyword fallback when FAISS vector retrieval fails or returns no results.
-    Chunks the extracted policy text and ranks by keyword overlap with the query.
+    Fast keyword search over policy document text with table-row awareness and synonym expansion.
+    Used concurrently with vector search in hybrid retrieval.
     """
-    query_words = [w.lower() for w in re.findall(r'\w+', query) if len(w) > 2 and w.lower() not in _STOP_WORDS]
+    query_lower = query.lower()
+    # Expand query with common insurance synonyms for maximum recall
+    SYNONYMS = {
+        "dental": ["teeth", "tooth", "oral", "dentist", "dental treatment"],
+        "maternity": ["pregnancy", "childbirth", "delivery", "newborn", "obstetric", "miscarriage"],
+        "covered": ["covers", "coverage", "eligible", "payable", "admissible", "benefit"],
+        "room rent": ["room charges", "accommodation", "hospital room", "icu", "shared room"],
+        "pre-existing": ["pre existing", "ped", "pre-existing disease"],
+        "waiting period": ["waiting", "moratorium", "initial period"],
+        "premium": ["amount paid", "annual cost", "total premium"],
+        "claim": ["reimbursement", "cashless", "hospital discharge"],
+        "deductible": ["aggregate deductible", "excess", "deduct"],
+        "ayush": ["ayurveda", "homeopathy", "unani", "siddha"],
+        "ambulance": ["air ambulance", "transport", "emergency travel"],
+        "cataract": ["eye", "lens", "vision"],
+    }
+    expanded_words = set(re.findall(r'\w+', query_lower))
+    for base_term, syns in SYNONYMS.items():
+        if any(s in query_lower for s in [base_term] + syns):
+            for s in syns:
+                expanded_words.update(s.split())
+
+    query_words = [w for w in expanded_words if len(w) > 2 and w not in _STOP_WORDS]
     if not query_words:
         return []
 
@@ -48,29 +70,55 @@ def _text_search_fallback(query: str, policies: List[Dict[str, Any]], top_k: int
         if not text:
             continue
 
-        # Simple 400-char chunks with 50-char overlap
-        chunk_size = 400
-        overlap = 50
+        # Use 1000-char chunks with 200-char overlap
+        chunk_size = 1000
+        overlap = 200
         start = 0
         chunks = []
         while start < len(text):
-            chunks.append(text[start:start + chunk_size])
+            end = start + chunk_size
+            chunk = text[start:end]
+            # Don't cut in the middle of a line — extend to next newline
+            if end < len(text) and '\n' in text[end:end+100]:
+                nl_pos = text.index('\n', end)
+                chunk = text[start:nl_pos]
+            chunks.append((start, chunk))
             start += chunk_size - overlap
 
-        for i, chunk in enumerate(chunks):
+        for pos, chunk in chunks:
             chunk_lower = chunk.lower()
             score = sum(chunk_lower.count(w) for w in query_words)
             if score > 0:
+                # Boost chunks from benefit schedule / coverage sections (tables)
+                schedule_boost = 0
+                if any(k in chunk_lower for k in ["schedule of benefits", "section", "covered upto", "covered up to", "at actuals", "1.1", "1.2"]):
+                    schedule_boost = 3
+                # Additional boost if exact query terms appear in chunk
+                if any(qw in chunk_lower for qw in query_words if len(qw) > 3):
+                    schedule_boost += 2
+
+                page_num = 1
+                page_match = re.search(r'\[Page (\d+)\]', chunk)
+                if page_match:
+                    page_num = int(page_match.group(1))
                 hits.append({
                     "text": chunk,
                     "source": filename,
-                    "page": 1,
-                    "score": float(score),
+                    "page": page_num,
+                    "score": float(score + schedule_boost),
                     "document_id": policy.get("id", "")
                 })
 
     hits.sort(key=lambda x: x["score"], reverse=True)
-    return hits[:top_k]
+    # De-duplicate overlapping chunks (same text within first 80 chars)
+    seen_starts: set = set()
+    deduped = []
+    for h in hits:
+        key = h["text"][:80].lower().strip()
+        if key not in seen_starts:
+            seen_starts.add(key)
+            deduped.append(h)
+    return deduped[:top_k]
 
 
 def classify_question(query: str) -> str:
@@ -95,8 +143,9 @@ def classify_question(query: str) -> str:
 
 
 async def fetch_structured_policy_data(db: AsyncSession, policy_ids: List[str]) -> str:
-    """Fetch structured metadata and extracted fields for target policies from PostgreSQL."""
+    """Fetch structured metadata, extracted fields, summaries, and risk analyses for target policies from PostgreSQL."""
     from app.models.document import Document, ExtractedField
+    from app.models.risk_analysis import Summary
     from sqlalchemy import select
     
     structured_blocks = []
@@ -119,6 +168,18 @@ async def fetch_structured_policy_data(db: AsyncSession, policy_ids: List[str]) 
         fields = fields_res.scalars().all()
         for field in fields:
             block.append(f"{field.field_name}: {field.field_value}")
+
+        summary_res = await db.execute(select(Summary).where(Summary.document_id == pid))
+        sum_obj = summary_res.scalar_one_or_none()
+        if sum_obj:
+            if sum_obj.coverage_summary:
+                block.append(f"Coverage Summary: {sum_obj.coverage_summary}")
+            if sum_obj.exclusions_summary:
+                block.append(f"Exclusions Summary: {sum_obj.exclusions_summary}")
+            if sum_obj.waiting_period_summary:
+                block.append(f"Waiting Period Summary: {sum_obj.waiting_period_summary}")
+            if sum_obj.premium_summary:
+                block.append(f"Premium Summary: {sum_obj.premium_summary}")
             
         structured_blocks.append("\n".join(block))
         
@@ -155,31 +216,43 @@ async def run_chat_query(
         logger.info(f"Cache hit for query: '{search_query}'")
         return cached_response
         
-    # 4. RAG Retrieval using FAISS (+ keyword boost re-ranking inside search_vector_store)
+    # 4. Hybrid RAG Retrieval (Vector Search + Direct Keyword Match)
     is_comparison = _is_comparison_query(search_query) and len(policies) > 1
-    # Fetch 8 candidates per doc (was 5) — vector_store applies keyword boost and returns best top_k
-    top_k = 8 if is_comparison else 6
+    top_k = 10 if is_comparison else 8
     
     retrieval_start = time.time()
-    retrieved_chunks = await search_vector_store(db, search_query, policies, top_k=top_k)
+    # Vector Search
+    vector_chunks = await search_vector_store(db, search_query, policies, top_k=top_k)
+    # Keyword Match Search
+    keyword_chunks = _text_search_fallback(search_query, policies, top_k=top_k)
+    
+    # Merge & Deduplicate vector + keyword results
+    seen_texts: set = set()
+    combined_chunks: List[Dict[str, Any]] = []
+    
+    for kc in keyword_chunks:
+        kc_key = kc["text"][:80].lower().strip()
+        if kc_key not in seen_texts:
+            seen_texts.add(kc_key)
+            combined_chunks.append(kc)
+
+    for vc in vector_chunks:
+        vc_key = vc["text"][:80].lower().strip()
+        if vc_key not in seen_texts:
+            seen_texts.add(vc_key)
+            combined_chunks.append(vc)
+
+    combined_chunks.sort(key=lambda x: x.get("score", 0.0), reverse=True)
+    filtered_chunks = combined_chunks[:top_k]
     retrieval_time = time.time() - retrieval_start
     
-    # Similarity threshold filtering — lowered to 0.10 to capture more relevant chunks
-    filtered_chunks = [c for c in retrieved_chunks if c.get("score", 0.0) >= SIMILARITY_THRESHOLD]
     logger.info(
-        f"Retrieved {len(retrieved_chunks)} chunks in {retrieval_time:.4f}s. "
-        f"Filtered to {len(filtered_chunks)} chunks with score >= {SIMILARITY_THRESHOLD}"
+        f"Hybrid retrieval retrieved {len(combined_chunks)} combined chunks in {retrieval_time:.4f}s. "
+        f"Selected top {len(filtered_chunks)} chunks for LLM context."
     )
-    if retrieved_chunks:
-        scores_str = ", ".join(f"{c['source']}(p{c['page']}): {c['score']:.4f}" for c in retrieved_chunks[:3])
-        logger.debug(f"Top chunks: {scores_str}")
-
-    # ── Fallback: if FAISS returned nothing, use direct keyword search over raw policy text ──
-    if not filtered_chunks:
-        logger.warning("FAISS returned no results above threshold — falling back to keyword text search")
-        filtered_chunks = _text_search_fallback(search_query, policies, top_k=top_k)
-        if filtered_chunks:
-            logger.info(f"Keyword fallback found {len(filtered_chunks)} chunks")
+    
+    # ── Always supplement with structured DB fields & summaries ──
+    structured_context = await fetch_structured_policy_data(db, [p.get("id") for p in policies if p.get("id")])
         
     # 5. Build prompt
     prompt = build_chat_prompt(
@@ -188,12 +261,13 @@ async def run_chat_query(
         history=history,
         policies=policies,
         user_name=user_name,
-        is_comparison=is_comparison
+        is_comparison=is_comparison,
+        structured_context=structured_context
     )
     
-    # 6. Call LLM
+    # 6. Call LLM — using num_ctx=4096 to prevent prompt truncation
     llm_start = time.time()
-    response = await call_ollama(prompt, num_predict=500 if is_comparison else 350)
+    response = await call_ollama(prompt, num_predict=600 if is_comparison else 450, num_ctx=4096)
     llm_time = time.time() - llm_start
     
     total_time = time.time() - start_time
@@ -217,59 +291,8 @@ async def run_chat_query(
 
     # Cache successful response (valid for 10 minutes)
     CacheManager.set(cache_key, response, ttl_seconds=600)
-    
-    # Dynamic RAG Evaluation Logging
-    if user_id and filtered_chunks:
-        try:
-            context_str = "\n\n".join(c["text"] for c in filtered_chunks)
-            faithfulness_score = 1.0
-            faithfulness_reason = "No context retrieved."
-            relevance_score = 1.0
-            relevance_reason = "Answer relevance check completed."
-            context_relevance = sum(c.get("score", 0.0) for c in filtered_chunks) / len(filtered_chunks) if filtered_chunks else 1.0
-            
-            from app.services.ai_service import extract_json_from_response
-            from app.services.rag_service import FAITHFULNESS_PROMPT, RELEVANCE_PROMPT
-            faith_prompt = FAITHFULNESS_PROMPT.format(context=context_str, answer=response)
-            rel_prompt = RELEVANCE_PROMPT.format(query=query, answer=response)
-            
-            faith_res, rel_res = await asyncio.gather(
-                call_ollama(faith_prompt, num_predict=128),
-                call_ollama(rel_prompt, num_predict=128),
-                return_exceptions=True
-            )
-            
-            if not isinstance(faith_res, Exception):
-                faith_json = extract_json_from_response(faith_res)
-                if "score" in faith_json:
-                    faithfulness_score = float(faith_json["score"])
-                    faithfulness_reason = faith_json.get("reasoning", "Faithfulness check complete.")
-                    
-            if not isinstance(rel_res, Exception):
-                rel_json = extract_json_from_response(rel_res)
-                if "score" in rel_json:
-                    relevance_score = float(rel_json["score"])
-                    relevance_reason = rel_json.get("reasoning", "Relevance check complete.")
-                    
-            from app.models.rag_query_log import RAGQueryLog
-            log_entry = RAGQueryLog(
-                user_id=user_id,
-                query=query,
-                answer=response,
-                faithfulness=min(max(faithfulness_score, 0.0), 1.0),
-                faithfulness_reasoning=faithfulness_reason,
-                answer_relevance=min(max(relevance_score, 0.0), 1.0),
-                answer_relevance_reasoning=relevance_reason,
-                context_relevance=min(max(context_relevance, 0.0), 1.0),
-                latency=round(total_time, 2)
-            )
-            db.add(log_entry)
-            await db.commit()
-            logger.info("✅ Logged RAG query evaluation to database successfully")
-        except Exception as log_err:
-            logger.error(f"Error logging RAG query evaluation: {log_err}")
-
     return response
+
 
 async def run_chat_query_stream(
     policies: List[Dict[str, Any]],
@@ -306,31 +329,43 @@ async def run_chat_query_stream(
             yield word + " "
         return
         
-    # 4. RAG Retrieval using FAISS (+ keyword boost re-ranking inside search_vector_store)
+    # 4. Hybrid RAG Retrieval (Vector Search + Direct Keyword Match)
     is_comparison = _is_comparison_query(search_query) and len(policies) > 1
-    # Fetch 8 candidates per doc (was 5) — vector_store applies keyword boost and returns best top_k
-    top_k = 8 if is_comparison else 6
+    top_k = 10 if is_comparison else 8
     
     retrieval_start = time.time()
-    retrieved_chunks = await search_vector_store(db, search_query, policies, top_k=top_k)
+    # Vector Search
+    vector_chunks = await search_vector_store(db, search_query, policies, top_k=top_k)
+    # Keyword Match Search
+    keyword_chunks = _text_search_fallback(search_query, policies, top_k=top_k)
+    
+    # Merge & Deduplicate vector + keyword results
+    seen_texts: set = set()
+    combined_chunks: List[Dict[str, Any]] = []
+    
+    for kc in keyword_chunks:
+        kc_key = kc["text"][:80].lower().strip()
+        if kc_key not in seen_texts:
+            seen_texts.add(kc_key)
+            combined_chunks.append(kc)
+
+    for vc in vector_chunks:
+        vc_key = vc["text"][:80].lower().strip()
+        if vc_key not in seen_texts:
+            seen_texts.add(vc_key)
+            combined_chunks.append(vc)
+
+    combined_chunks.sort(key=lambda x: x.get("score", 0.0), reverse=True)
+    filtered_chunks = combined_chunks[:top_k]
     retrieval_time = time.time() - retrieval_start
     
-    # Similarity threshold filtering — lowered to 0.10 to capture more relevant chunks
-    filtered_chunks = [c for c in retrieved_chunks if c.get("score", 0.0) >= SIMILARITY_THRESHOLD]
     logger.info(
-        f"Retrieved {len(retrieved_chunks)} chunks in {retrieval_time:.4f}s. "
-        f"Filtered to {len(filtered_chunks)} chunks with score >= {SIMILARITY_THRESHOLD}"
+        f"Hybrid retrieval retrieved {len(combined_chunks)} combined chunks in {retrieval_time:.4f}s. "
+        f"Selected top {len(filtered_chunks)} chunks for LLM context."
     )
-    if retrieved_chunks:
-        scores_str = ", ".join(f"{c['source']}(p{c['page']}): {c['score']:.4f}" for c in retrieved_chunks[:3])
-        logger.debug(f"Top chunks: {scores_str}")
 
-    # ── Fallback: if FAISS returned nothing, use direct keyword search over raw policy text ──
-    if not filtered_chunks:
-        logger.warning("FAISS returned no results above threshold — falling back to keyword text search")
-        filtered_chunks = _text_search_fallback(search_query, policies, top_k=top_k)
-        if filtered_chunks:
-            logger.info(f"Keyword fallback found {len(filtered_chunks)} chunks")
+    # ── Always supplement with structured DB fields & summaries ──
+    structured_context = await fetch_structured_policy_data(db, [p.get("id") for p in policies if p.get("id")])
         
     # 5. Build prompt
     prompt = build_chat_prompt(
@@ -339,16 +374,17 @@ async def run_chat_query_stream(
         history=history,
         policies=policies,
         user_name=user_name,
-        is_comparison=is_comparison
+        is_comparison=is_comparison,
+        structured_context=structured_context
     )
     
-    # 6. Stream tokens from Ollama client
+    # 6. Stream tokens from Ollama client using num_ctx=4096
     full_response_parts: List[str] = []
     first_token_time: Optional[float] = None
     
     try:
-        max_tokens = 550 if is_comparison else 380
-        async for token in call_ollama_stream(prompt, num_predict=max_tokens):
+        max_tokens = 700 if is_comparison else 500
+        async for token in call_ollama_stream(prompt, num_predict=max_tokens, num_ctx=4096):
             if first_token_time is None:
                 first_token_time = time.time() - start_time
                 logger.info(f"⚡ Time to first token: {first_token_time:.4f}s")

@@ -18,11 +18,11 @@ async def generate_embeddings_batch(texts: List[str]) -> List[List[float]]:
         
     client = get_httpx_client()
     
-    # Process in sub-batches of 20 to prevent huge payload issues
-    batch_size = 20
+    # Process in large batches of 100 to send all chunks in a single fast API payload
+    batch_size = 100
     all_embeddings: List[List[float]] = []
     
-    logger.info(f"Generating embeddings for {len(texts)} chunks in batches of {batch_size}...")
+    logger.info(f"Generating embeddings for {len(texts)} chunks in batch size of {batch_size}...")
     
     for i in range(0, len(texts), batch_size):
         sub_batch = texts[i:i+batch_size]

@@ -243,7 +243,7 @@ def _keyword_boost_score(chunk_text: str, query: str, base_score: float) -> floa
     """Boost similarity scores of chunks containing exact keywords from the query."""
     query_words = set(
         w.lower() for w in re.findall(r'\w+', query)
-        if len(w) > 3
+        if len(w) >= 3
     )
     if not query_words:
         return base_score
@@ -251,7 +251,7 @@ def _keyword_boost_score(chunk_text: str, query: str, base_score: float) -> floa
     matched = sum(1 for w in query_words if w in chunk_lower)
     if matched == 0:
         return base_score
-    boost = min(0.6, matched * 0.3)
+    boost = min(1.0, matched * 0.4)
     return base_score + boost
 
 

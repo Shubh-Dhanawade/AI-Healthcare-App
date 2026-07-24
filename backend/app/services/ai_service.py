@@ -39,49 +39,57 @@ def _rag_cache_key(query: str, policy_ids: list) -> str:
 
 # ── Concise prompts — fewer input tokens = faster model processing ──
 
-SUMMARIZATION_PROMPT = """You are a senior healthcare insurance analyst. Read the following insurance policy document carefully and produce a structured, factual summary.
+SUMMARIZATION_PROMPT = """You are a senior healthcare insurance analyst with 20 years of experience reviewing Indian insurance policy documents. Your task is to read the following document carefully and write a structured, factual summary using ONLY information present in the document.
 
-CRITICAL RULES — follow exactly:
-1. Return ONLY a valid JSON object. No text before or after it. No markdown code fences.
-2. summary_text: MUST be around 250 words, tightly optimized for important and meaningful information, written in flowing paragraphs. ABSOLUTELY NO bullet points or numbered lists inside summary_text.
-3. The four bullet fields (coverage_summary, exclusions_summary, waiting_period_summary, premium_summary): each bullet MUST start with '• ' and be one complete, specific sentence sourced from the document.
-4. Only state facts present in the document. Do not invent values.
+CRITICAL RULES:
+1. Return ONLY a valid JSON object. No text before or after it. No markdown code blocks.
+2. Do NOT invent any values. Every number, name, date, and term must be directly extracted from the document.
+3. Write summary_text as 5-6 flowing prose paragraphs (second person, no bullet points inside). Target 250-300 words.
+4. For the four bullet-point fields: each bullet must start with '• ' and be ONE complete, specific sentence with real data from the document.
+5. If a piece of information is truly not in the document, omit that bullet rather than guessing.
 
-JSON schema (return exactly this structure):
+JSON schema (return exactly this structure, no extra keys):
 {{
-  "summary_text": "PARAGRAPH 1 — Policy Identity: State the exact policy name, insurer company name, policyholder full name, policy number, and coverage period/validity. PARAGRAPH 2 — Coverage: State the exact Sum Insured amount, whether individual or family floater, and list every category covered: inpatient hospitalisation, daycare procedures, pre-hospitalisation expenses (with number of days), post-hospitalisation expenses (with number of days), ambulance charges, AYUSH treatments. PARAGRAPH 3 — Insured Members & Premium: List every insured member's name with their relationship and any individual sum insured or premium. State the total annual premium inclusive of GST. PARAGRAPH 4 — Key Benefits: Describe 3-5 standout benefits such as cashless hospitalisation network size, no-claim bonus, restoration benefit, wellness programs, OPD cover, or other add-ons found in the document. PARAGRAPH 5 — Waiting Periods & Restrictions: State all waiting periods with exact durations (initial waiting period, pre-existing disease waiting period, specific disease waiting period). Mention any co-payment clause or deductible. PARAGRAPH 6 — Claims & Advisory: Explain the claim process (cashless vs reimbursement), mention the customer care helpline number if found, and give a brief closing advisory. Write all six paragraphs in second person ('your policy', 'you are covered for') with no bullet points.",
-  "coverage_summary": "4-6 bullet points, each starting with '• '. Each bullet is ONE complete sentence stating a specific coverage or benefit with exact amounts where available. Example: '• Inpatient hospitalisation is covered up to the full Sum Insured of ₹X Lakh including room rent, nursing charges, surgeon fees, and ICU charges.'",
-  "exclusions_summary": "4-6 bullet points, each starting with '• '. Each bullet is ONE complete sentence stating a specific exclusion — something the policy does NOT cover. Be specific: name the exact excluded item or condition. Example: '• Cosmetic and aesthetic treatments are not covered unless necessitated directly by an accident.'",
-  "waiting_period_summary": "3-5 bullet points, each starting with '• '. Each bullet is ONE complete sentence stating one waiting period rule with the exact duration in months or days. Example: '• Pre-existing diseases are covered after a continuous 36-month waiting period from the policy start date.'",
-  "premium_summary": "3-5 bullet points, each starting with '• '. Each bullet is ONE complete sentence about premium, charges, or payment terms. Include the total premium amount, GST, co-payment percentage (if any), deductible (if any), and renewal grace period. Example: '• Total annual premium payable is ₹X,XXX inclusive of 18% GST.'"
+  "summary_text": "Write 5-6 paragraphs here. Paragraph 1: Name the policy (e.g. my: Optima Secure), the insurer (e.g. HDFC ERGO General Insurance), the policyholder full name, the policy number, and the validity period (e.g. 05-05-2026 to 04-05-2029). Paragraph 2: State the exact Sum Insured (e.g. ₹20,00,000 on a Family Floater basis) and list all covered categories found in the document: inpatient hospitalisation, day care procedures, pre-hospitalisation (mention exact number of days), post-hospitalisation (exact days), ambulance, AYUSH, home healthcare, domiciliary hospitalisation. Paragraph 3: List every insured member by name, relationship, date of birth, and their individual premium amounts if mentioned. State the total premium paid (e.g. ₹74,653 towards premium paid on 05-05-2026). Paragraph 4: Describe key benefits actually mentioned in the document: automatic restore benefit, secure benefit, cumulative bonus, daily cash for shared room, emergency air ambulance limit, preventive health check-up limit. Paragraph 5: State all waiting periods with exact durations: initial waiting period for all illnesses, pre-existing disease waiting period, specific disease waiting period. Mention any co-payment or aggregate deductible. Paragraph 6: Explain the cashless and reimbursement claim procedures as described in the document. Include the customer helpline number and website if found. Close with an advisory note.",
+  "coverage_summary": "Write 4-6 bullet points each starting with '• '. Example format: '• Inpatient hospitalisation is covered up to the full Sum Insured with room rent at actuals and ICU at actuals.' Use exact figures and terms from the document.",
+  "exclusions_summary": "Write 4-6 bullet points each starting with '• '. List specific exclusions named in the document. Example: '• Cosmetic or plastic surgery is not covered unless required as reconstruction following an accident or burn.' Be specific — name the actual excluded conditions.",
+  "waiting_period_summary": "Write 3-5 bullet points each starting with '• '. State exact waiting periods. Example: '• Pre-existing diseases are subject to a 36-month waiting period from the first policy inception date.' Include all types found: initial, PED, specific disease.",
+  "premium_summary": "Write 3-5 bullet points each starting with '• '. Include: total premium amount with GST status, individual member premiums if available, any discounts applied (claims experience, loyalty, long-term, online), and payment date. Example: '• Total premium of ₹74,653 was received on 05-05-2026 covering the period 05-05-2026 to 04-05-2029.'"
 }}
 
 DOCUMENT:
 {document_text}"""
 
 
-FIELD_EXTRACTION_PROMPT = """You are a healthcare insurance data entry clerk. Analyze the following health insurance document text and extract values for the requested fields.
-If a field is not explicitly mentioned or cannot be found in the text, use null or "Not specified".
-Do not create any extra keys. Return ONLY a valid JSON object matching the schema below. Do not output any markdown code blocks, preamble, or trailing text.
+FIELD_EXTRACTION_PROMPT = """You are a healthcare insurance and medical document data extraction expert. Read the following document carefully and extract ONLY values that are explicitly stated in the document text. Do not guess or invent values.
 
-Return format JSON:
-{{
-  "policy_name": "the name of the policy plan",
-  "insurer_name": "the insurance provider name",
-  "policy_number": "the policy number",
-  "sum_insured": "overall coverage amount",
-  "premium_amount": "premium cost if specified",
-  "deductible": "deductible terms or amount",
-  "co_payment": "co-payment terms or percentage",
-  "waiting_period": "waiting period rules",
-  "coverage_type": "type of plan (family floater, individual, etc.)",
-  "policy_term": "policy duration",
-  "network_hospitals": "network hospital count or details",
-  "pre_existing_coverage": "waiting periods/terms for pre-existing diseases",
-  "maternity_coverage": "maternity benefit details/limits",
-  "room_rent_limit": "daily room rent limit",
-  "claim_process": "brief instructions on filing a claim"
-}}
+Rules:
+- If a field value is not present in the document, return null (not "Not specified", not empty string).
+- For dates: always use the format found in the document (e.g. "05-05-2026 to 04-05-2029").
+- For amounts: include the currency symbol as it appears (e.g. "₹74,653" or "20,00,000").
+- Do NOT output any markdown, code fences, explanation text, or extra keys.
+- Return ONLY a single valid JSON object.
+
+JSON schema (extract exactly these keys):
+{
+  "policy_name": "exact product/plan name from the document e.g. my: Optima Secure",
+  "insurer_name": "exact insurance company or hospital/lab name",
+  "policy_number": "exact policy number, certificate number, or report ID",
+  "insured_person": "full name of policyholder or patient",
+  "sum_insured": "total coverage amount with currency symbol e.g. ₹20,00,000",
+  "premium_amount": "total premium paid or payable with currency symbol e.g. ₹74,653",
+  "policy_term": "exact validity period as shown e.g. 05-05-2026 to 04-05-2029",
+  "renewal_date": "policy end/expiry date e.g. 04-05-2029",
+  "coverage_type": "individual or Family Floater",
+  "room_rent_limit": "room rent category e.g. At Actuals or Single Private Room or 1% of SI per day",
+  "waiting_period": "waiting period duration e.g. 36 months for pre-existing diseases, 30 days initial",
+  "pre_existing_coverage": "pre-existing disease waiting period duration only e.g. 3 Years / 36 months",
+  "deductible": "aggregate deductible amount or Not Opted",
+  "co_payment": "co-payment percentage or Not Applicable",
+  "maternity_coverage": "maternity benefit details or exclusion clause text",
+  "network_hospitals": "hospital network count or network name",
+  "claim_process": "brief claim filing instructions from the document"
+}
 
 DOCUMENT:
 {document_text}"""
@@ -349,8 +357,14 @@ def _build_fallback_summary(document_text: str) -> dict:
     ], text) or None
 
     premium = _regex_find_any([
-        r'(?:total\s+premium|gross\s+premium|net\s+premium|premium\s+paid|premium\s+amount)[:\s₹Rs.]+([\d,]{4,}(?:\.[\d]+)?)',
-        r'(?:premium)[:\s₹Rs.]+([\d,]{4,}(?:\.[\d]+)?)',
+        r'(?:total\s+premium|gross\s+premium|net\s+premium|premium\s+paid|premium\s+amount|premium\s+received)[:\s\u20b9Rs.INR]*\s*([\d,]{3,}(?:\.[\d]{1,2})?)',
+        r'[\u20b9Rs.INR]\s*([\d,]{4,}(?:\.\d{1,2})?)\s*(?:towards\s+premium|towards\s+the\s+premium|towards\s+insurance|premium)',
+        r'(?:received\s+an\s+amount\s+of)\s*[\u20b9Rs.INR]*\s*([\d,]{3,}(?:\.\d{1,2})?)',
+        r'(?:towards\s+premium)[^\n\r]*?[\u20b9Rs.INR]*\s*([\d,]{3,}(?:\.\d{1,2})?)',
+        r'(?:Premium)[:\s\u20b9Rs.INR]*\s*([\d,]{3,}(?:\.\d{1,2})?)',
+        r'Total\s+(?:Premium|Amount)[:\s\u20b9Rs.INR]*\s*([\d,]{3,}(?:\.\d{1,2})?)',
+        r'[\u20b9Rs.INR]\s*([\d,]{4,}(?:\.\d{1,2})?)',
+        r'([\d,]{4,}(?:\.\d{1,2})?)\s*(?:towards\s+premium)',
     ], text) or None
 
     waiting_period = _regex_find_any([
@@ -370,7 +384,8 @@ def _build_fallback_summary(document_text: str) -> dict:
     ], text) or None
 
     policy_term = _regex_find_any([
-        r'(?:policy\s+period|policy\s+term)[:\s]+([^.\n]{0,60})',
+        r'(?:period|validity|duration|from|term)[:\s]*([0-3]?\d[\-/][0-1]?\d[\-/]\d{2,4}\s*(?:to|till|\-)\s*[0-3]?\d[\-/][0-1]?\d[\-/]\d{2,4})',
+        r'(?:policy\s+period|policy\s+term)[:\s]+([0-9][^.\n]{0,60})',
         r'(?:from)[:\s]+([\d]{1,2}[\-/][\d]{1,2}[\-/][\d]{2,4}[^\n]{0,30}to[^\n]{0,30})',
     ], text) or None
 
@@ -586,125 +601,7 @@ def _build_fallback_summary(document_text: str) -> dict:
         "premium_summary": premium_summary,
     }
 
-    premium = _regex_find_any([
-        r'(?:total\s+premium|gross\s+premium|net\s+premium|premium\s+paid|premium\s+amount)[:\s₹Rs.]+([\d,]{4,}(?:\.[\d]+)?)',
-        r'(?:premium)[:\s₹Rs.]+([\d,]{4,}(?:\.[\d]+)?)',
-    ], text)
 
-    waiting_period = _regex_find_any([
-        r'(?:waiting\s+period)[:\s]+([\d]+\s*(?:month|year|day)[s]?[^.\n]{0,80})',
-        r'([\d]+\s*(?:month|year)[s]?\s+waiting\s+period)',
-    ], text)
-
-    co_pay = _regex_find_any([
-        r'(?:co-?pay(?:ment)?)[:\s]+([\d]+%[^.\n]{0,60})',
-        r'(?:co-?pay(?:ment)?\s+of\s+)([\d]+%[^.\n]{0,60})',
-    ], text)
-
-    # ── Build executive summary text ────────────────────────────────────────
-    facts = []
-    if insurer:
-        facts.append(f"Insurer: {insurer}")
-    if policy_name:
-        facts.append(f"Plan: {policy_name}")
-    if policy_number:
-        facts.append(f"Policy Number: {policy_number}")
-    if policy_holder:
-        facts.append(f"Policyholder: {policy_holder}")
-    if sum_insured:
-        facts.append(f"Sum Insured: ₹{sum_insured}")
-    if premium:
-        facts.append(f"Premium: ₹{premium}")
-    if waiting_period:
-        facts.append(f"Waiting Period: {waiting_period}")
-    if co_pay:
-        facts.append(f"Co-payment: {co_pay}")
-
-    facts_text = ". ".join(facts) + "." if facts else ""
-
-    # Pull 2-3 meaningful description sentences from the document
-    desc_candidates = [s.strip() for s in re.split(r'(?<=[.!?])\s+|\n{2,}', text)
-                       if len(s.strip()) > 80 and not s.strip().startswith('[Page')]
-    desc_sentences = []
-    seen_desc = set()
-    skip_re = re.compile(
-        r'^(page\s*\d+|dear\s+|\[page|subject:|insured\s+person|date of|name of|relationship|gender|premium\s+period)',
-        re.IGNORECASE
-    )
-    for s in desc_candidates:
-        key = s[:60].lower()
-        if key not in seen_desc and not skip_re.match(s):
-            seen_desc.add(key)
-            desc_sentences.append(s[:350])
-        if len(desc_sentences) >= 3:
-            break
-
-    intro_text = " ".join(desc_sentences)
-    summary_text = f"{facts_text} {intro_text}".strip()[:1500]
-    if not summary_text or len(summary_text) < 100:
-        summary_text = (
-            f"This health insurance document contains policy details from "
-            f"{insurer or 'the insurer'}. "
-            f"{facts_text} "
-            f"Please refer to the full document for complete terms and conditions."
-        )
-
-    # ── Coverage section ────────────────────────────────────────────────────
-    coverage_hits = _extract_sentences_with_keywords(
-        full_text,
-        [
-            "hospitaliz", "inpatient", "daycare", "ICU", "ambulance",
-            "sum insured", "reimburse", "cashless", "OPD", "wellness",
-            "benefit", "covered under", "entitled to", "eligible for",
-        ],
-        max_results=5,
-    )
-    coverage_summary = "\n".join(f"• {s}" for s in coverage_hits) if coverage_hits else \
-        "• Please refer to the policy schedule for a full list of covered benefits."
-
-    # ── Exclusions section ──────────────────────────────────────────────────
-    excl_hits = _extract_sentences_with_keywords(
-        full_text,
-        [
-            "exclud", "not cover", "not payable", "not admissible",
-            "shall not", "exception", "not eligible", "no claim",
-        ],
-        max_results=5,
-    )
-    exclusions_summary = "\n".join(f"• {s}" for s in excl_hits) if excl_hits else \
-        "• Exclusions not clearly identified — please review the full document."
-
-    # ── Waiting period section ──────────────────────────────────────────────
-    wait_hits = _extract_sentences_with_keywords(
-        full_text,
-        [
-            "waiting period", "initial waiting", "pre-existing",
-            "months waiting", "days waiting", "moratorium",
-        ],
-        max_results=4,
-    )
-    waiting_period_summary = "\n".join(f"• {s}" for s in wait_hits) if wait_hits else \
-        "• Waiting period details not found — please review the policy schedule."
-
-    # ── Premium / cost section ──────────────────────────────────────────────
-    premium_hits = _extract_sentences_with_keywords(
-        full_text,
-        [
-            "premium", "deductible", "co-pay", "copay",
-            "sum insured", "GST", "tax", "renewal", "total amount",
-        ],
-        max_results=5,
-    )
-    premium_summary = "\n".join(f"• {s}" for s in premium_hits) if premium_hits else \
-        "• Premium and cost details not clearly identified — please review the policy schedule."
-
-    return {
-        "summary_text": summary_text,
-        "coverage_summary": coverage_summary,
-        "exclusions_summary": exclusions_summary,
-        "waiting_period_summary": waiting_period_summary,
-        "premium_summary": premium_summary,
-    }
 
 
 def _build_fallback_fields(document_text: str) -> list[dict]:
@@ -769,16 +666,20 @@ def _build_fallback_fields(document_text: str) -> list[dict]:
 
     # ── Premium Amount ──────────────────────────────────────────────────────
     add("Premium Amount", _regex_find_any([
-        r'(?:total\s+premium|gross\s+premium|net\s+premium)[:\s₹Rs.]+([\d,]{4,}(?:\.[\d]{0,2})?)',
-        r'(?:premium\s+paid|premium\s+amount)[:\s₹Rs.]+([\d,]{4,}(?:\.[\d]{0,2})?)',
-        r'(?:annual\s+premium)[:\s₹Rs.]+([\d,]{4,}(?:\.[\d]{0,2})?)',
-        r'Total\s+(?:Premium|Amount)[:\s₹Rs.]+([\d,]{4,}(?:\.[\d]{0,2})?)',
+        r'(?:total\s+premium|gross\s+premium|net\s+premium|premium\s+paid|premium\s+amount|premium\s+received)[:\s\u20b9Rs.INR]*\s*([\d,]{3,}(?:\.[\d]{1,2})?)',
+        r'[\u20b9Rs.INR]\s*([\d,]{4,}(?:\.\d{1,2})?)\s*(?:towards\s+premium|towards\s+the\s+premium|towards\s+insurance|premium)',
+        r'(?:received\s+an\s+amount\s+of)\s*[\u20b9Rs.INR]*\s*([\d,]{3,}(?:\.\d{1,2})?)',
+        r'(?:towards\s+premium)[^\n\r]*?[\u20b9Rs.INR]*\s*([\d,]{3,}(?:\.\d{1,2})?)',
+        r'(?:Premium)[:\s\u20b9Rs.INR]*\s*([\d,]{3,}(?:\.\d{1,2})?)',
+        r'Total\s+(?:Premium|Amount)[:\s\u20b9Rs.INR]*\s*([\d,]{3,}(?:\.\d{1,2})?)',
+        r'[\u20b9Rs.INR]\s*([\d,]{4,}(?:\.\d{1,2})?)',
+        r'([\d,]{4,}(?:\.\d{1,2})?)\s*(?:towards\s+premium)',
     ], text), "premium")
 
     # ── Deductible ──────────────────────────────────────────────────────────
     add("Deductible", _regex_find_any([
-        r'(?:deductible|excess)[:\s₹Rs.]+([₹Rs\d,]+(?:\.[\d]{0,2})?)',
-        r'(?:per\s+hospitalization\s+deductible)[:\s₹Rs.]+([\d,]+)',
+        r'(?:deductible|excess)[:\s\u20b9Rs.]+([\u20b9Rs\d,]+(?:\.[\d]{0,2})?)',
+        r'(?:per\s+hospitalization\s+deductible)[:\s\u20b9Rs.]+([\d,]+)',
     ], text), "premium")
 
     # ── Co-payment ──────────────────────────────────────────────────────────
@@ -802,12 +703,41 @@ def _build_fallback_fields(document_text: str) -> list[dict]:
         r'(?:individual|floater|family)[:\s]+(?:plan|policy|basis)',
     ], text), "coverage")
 
-    # ── Policy Term / Period ────────────────────────────────────────────────
-    add("Policy Term", _regex_find_any([
-        r'(?:policy\s+term|policy\s+period|duration)[:\s]+([^.\n]{0,80})',
-        r'(?:from|valid\s+from)[:\s]+([\d]{1,2}[\-/][\d]{1,2}[\-/][\d]{2,4}[^\n]{0,50}to[^\n]{0,50})',
-        r'(?:inception\s+date|start\s+date)[:\s]+([\d]{1,2}[\-/][\d]{1,2}[\-/][\d]{2,4})',
-    ], text), "policy_info")
+    # ── Policy Term & Dates Extraction ──────────────────────────────────────
+    date_range_match = re.search(
+        r'(?:period|validity|duration|from|term)[:\s]*([0-3]?\d[\-/][0-1]?\d[\-/]\d{2,4})\s*(?:to|till|\-)\s*([0-3]?\d[\-/][0-1]?\d[\-/]\d{2,4})',
+        text, re.IGNORECASE
+    )
+    if not date_range_match:
+        date_range_match = re.search(
+            r'([0-3]?\d[\-/][0-1]?\d[\-/]\d{4})\s*(?:to|till|\-)\s*([0-3]?\d[\-/][0-1]?\d[\-/]\d{4})',
+            text
+        )
+
+    start_date = date_range_match.group(1).strip() if date_range_match else None
+    end_date = date_range_match.group(2).strip() if date_range_match else None
+
+    if start_date and end_date:
+        add("Policy Term", f"{start_date} to {end_date}", "policy_info")
+        add("Renewal Date", end_date, "policy_period")
+        add("Expiry Date", end_date, "policy_period")
+        add("Premium Due Date", end_date, "premium")
+    else:
+        raw_term = _regex_find_any([
+            r'(?:policy\s+term|policy\s+period|duration)[:\s]+([0-9][^.\n]{0,60})',
+            r'(?:from|valid\s+from)[:\s]+([\d]{1,2}[\-/][\d]{1,2}[\-/][\d]{2,4}[^\n]{0,30}to[^\n]{0,30})',
+        ], text)
+        if raw_term and not raw_term.startswith("&"):
+            add("Policy Term", raw_term, "policy_info")
+
+        expiry_val = _regex_find_any([
+            r'(?:expiry\s+date|renewal\s+date|valid\s+till|valid\s+to|end\s+date)[:\s]+([0-3]?\d[\-/][0-1]?\d[\-/]\d{2,4})',
+            r'(?:period\s+of\s+insurance\s+to)[:\s]+([0-3]?\d[\-/][0-1]?\d[\-/]\d{2,4})',
+        ], text)
+        if expiry_val:
+            add("Renewal Date", expiry_val, "policy_period")
+            add("Expiry Date", expiry_val, "policy_period")
+            add("Premium Due Date", expiry_val, "premium")
 
     # ── Network Hospitals ───────────────────────────────────────────────────
     add("Network Hospitals", _regex_find_any([
@@ -818,22 +748,34 @@ def _build_fallback_fields(document_text: str) -> list[dict]:
 
     # ── Room Rent Limit ─────────────────────────────────────────────────────
     add("Room Rent Limit", _regex_find_any([
-        r'(?:room\s+rent\s+limit)[:\s₹Rs.]+([^.\n]{0,100})',
-        r'(?:room\s+rent)[^.\n]{0,30}([₹Rs\d,]+(?:\s*per\s+day)?[^.\n]{0,60})',
-        r'((?:single\s+private\s+AC\s+room|private\s+room)[^.\n]{0,60})',
+        r'1\.1\.a\s+Room\s+Rent\s+([A-Za-z][A-Za-z ]{0,20})',
+        r'Room\s+Rent[:\s]+([Aa]t\s+[Aa]ctuals?|Single\s+Private[A-Za-z ]{0,25}|Shared\s+[Rr]oom[A-Za-z ]{0,25}|Upto\s+[\d%][\d%A-Za-z /. ]{0,40})',
+        r'(?:room\s+rent\s+(?:limit|category))[:\s]+([A-Za-z][A-Za-z0-9 %\./-]{2,60})',
+        r'(?:room\s+rent)[^\n]{0,40}(?:is\s+|covers?\s+|limited\s+to\s+|payable\s+at\s+)([A-Za-z0-9 %\./,-]{3,60})',
     ], text), "restrictions")
 
     # ── Pre-existing Disease Coverage ───────────────────────────────────────
     add("Pre Existing Coverage", _regex_find_any([
-        r'(?:pre-?existing)[^.\n]{0,50}((?:cover|wait|period)[^.\n]{0,80})',
-        r'(?:pre-?existing\s+disease)[:\s]+([^.\n]{0,120})',
+        r'PED\s+wait\s+period[^\n]{0,60}([\d]+\s*(?:Year|Month|year|month)[s]?)',
+        r'[Pp]re-?existing\s+[Dd]isease[s]?\s+[Ww]aiting\s+[Pp]eriod[:\s]+([\d]+\s*(?:month|year)[s]?)',
+        r'[Pp]re-?existing[^.\n]{0,30}([\d]+\s*(?:month|year)[s]?[^.\n]{0,40})',
+        r'(?:PED|pre-existing)[^.\n]{0,20}([\d]+[/-][\d]+\s*(?:month|year)[s]?)',
+        r'waiting\s+period[^.\n]{0,20}([\d]+\s*(?:Year|Month|year|month)[s]?)[^.\n]{0,30}[Pp]re-?existing',
     ], text), "restrictions")
 
     # ── Maternity Coverage ──────────────────────────────────────────────────
-    add("Maternity Coverage", _regex_find_any([
-        r'(?:maternity)[:\s]+([^.\n]{0,120})',
-        r'(?:maternity\s+benefit)[:\s]+([^.\n]{0,100})',
-    ], text), "coverage")
+    # Skip lines that are just exclusion code references (Code – ExclXX)
+    _maternity_raw = _regex_find_any([
+        r'[Mm]aternity[:\s]+(?!.*Code\s*[-–]\s*Excl)([^.\n]{10,120})',
+        r'[Mm]aternity\s+[Bb]enefit[:\s]+(?!.*Code\s*[-–]\s*Excl)([^.\n]{10,100})',
+        r'[Mm]aternity[^.\n]{0,30}(covered[^.\n]{0,80})',
+    ], text)
+    # Also check if maternity is explicitly excluded
+    if not _maternity_raw:
+        _mat_excl = re.search(r'[Mm]aternity[^.\n]{0,30}(not\s+covered|excluded|Code\s*[-–]\s*Excl\d+)', text)
+        _maternity_raw = "Not Covered / Excluded" if _mat_excl else None
+    if _maternity_raw:
+        add("Maternity Coverage", _maternity_raw, "coverage")
 
     # ── Claim Process ───────────────────────────────────────────────────────
     add("Claim Process", _regex_find_any([
@@ -851,13 +793,66 @@ def _build_fallback_fields(document_text: str) -> list[dict]:
 
     # ── Contact / Customer Care ─────────────────────────────────────────────
     add("Contact Number", _regex_find_any([
-        r'(?:customer\s+(?:care|service|helpline)|toll\s+free|contact)[:\s]+([+0-9 \-]{8,18})',
-        r'(?:call\s+us)[\s:]+([+0-9 \-]{8,18})',
-        r'(1800\s*[0-9\-]+)',
+        r'(?:customer\s+(?:care|service|helpline)|toll\s+free)[:\s]+([0-9]{3}[\s\-]+[0-9]{4}[\s\-]+[0-9]{4})',
+        r'(?:call\s+us\s+at)[:\s]+([0-9]{3}[\s\-]+[0-9]{4}[\s\-]+[0-9]{4})',
+        r'(?:contact|helpline|call)[:\s]+([0-9]{3}[\s\-]+[0-9]{4}[\s\-]+[0-9]{4})',
+        r'(1800[\s\-]?[0-9]{3,4}[\s\-]?[0-9]{4})',
+        r'(\+91[\s\-]?[6-9][0-9]{9})',
+        r'(?:call\s+us\s+at|customer\s+care)[^0-9]{0,20}([0-9]{3,5}[\s\-][0-9]{4,8})',
     ], text), "policy_info")
 
+    # ── Health / Medical Diagnostic Report Fallbacks ────────────────────────
+    is_health_report = any(kw in text.lower() for kw in [
+        "lab report", "laboratory", "diagnostic", "blood test", "test report",
+        "discharge summary", "patient name", "pathology", "radiology", "clinical report",
+        "health checkup", "medical report", "hospital discharge"
+    ])
+
+    if is_health_report:
+        patient_name = _regex_find_any([
+            r'(?:patient\s+name|name\s+of\s+patient|patient)[:\s]+([A-Z][A-Za-z .]{3,40})',
+            r'(?:mr\.|mrs\.|ms\.)\s+([A-Z][A-Za-z .]{3,40})',
+            r'Dear\s+([A-Z][A-Za-z .]{3,40})',
+        ], text)
+        if patient_name and not any(f["field_name"] == "Insured Person" for f in fields):
+            add("Insured Person", patient_name, "policy_info")
+
+        lab_name = _regex_find_any([
+            r'([A-Za-z0-9 .&]+(?:Diagnostics|Hospital|Clinic|Pathology|Laboratory|Labs|Health\s+Services)[A-Za-z .]*)',
+            r'(?:hospital|lab|clinic|facility)\s+name[:\s]+([A-Za-z0-9 .&]+)',
+        ], text)
+        if lab_name and not any(f["field_name"] == "Insurer Name" for f in fields):
+            add("Insurer Name", lab_name, "policy_info")
+
+        report_date = _regex_find_any([
+            r'(?:report\s+date|collection\s+date|date\s+of\s+admission|date)[:\s]+([0-3]?\d[\-/][0-1]?\d[\-/]\d{2,4})',
+        ], text)
+        if report_date and not any(f["field_name"] == "Policy Term" for f in fields):
+            add("Policy Term", f"Report Date: {report_date}", "policy_info")
+
+        doctor_name = _regex_find_any([
+            r'(?:dr\.|doctor|ref\s+by|consultant)[:\s]+([A-Z][A-Za-z .]{3,40})',
+        ], text)
+        if doctor_name:
+            add("Consulting Doctor", f"Dr. {doctor_name.replace('Dr.', '').strip()}", "policy_info")
+
+        # Only extract diagnosis from actual diagnostic sections, not insurance exclusion sections
+        diag_section_start = max(
+            text.lower().find("diagnosis"),
+            text.lower().find("clinical finding"),
+            text.lower().find("impression"),
+        )
+        # If diagnosis keyword only appears deep in exclusion sections, skip
+        excl_start = text.lower().find("exclusion")
+        if diag_section_start > 0 and (excl_start < 0 or diag_section_start < excl_start):
+            diagnosis = _regex_find_any([
+                r'(?:diagnosis|clinical\s+findings|impression)[:\s]+([A-Za-z][^.\n]{5,150})',
+                r'(?:investigation)[:\s]+([A-Za-z][^.\n]{5,100})',
+            ], text[:diag_section_start + 500])
+            if diagnosis and "code excl" not in diagnosis.lower():
+                add("Diagnosis / Findings", diagnosis, "coverage")
+
     if not fields:
-        # Last resort — return document identification info
         snippet = document_text[:300].replace("\n", " ").strip()
         fields.append({
             "field_name": "Document Content",
@@ -1041,13 +1036,13 @@ async def generate_summary(document_text: str, force_regenerate: bool = False) -
         logger.info("Cache hit: summary")
         return _ai_cache[ck]
 
-    # Use up to 30000 chars — enough for key policy content, keeps input tokens low for speed
-    truncated = document_text[:30000] if len(document_text) > 30000 else document_text
+    # Use up to 25000 chars — enough for key policy content, keeps input tokens low for speed
+    truncated = document_text[:25000] if len(document_text) > 25000 else document_text
     try:
         response = await call_ollama(
             SUMMARIZATION_PROMPT.format(document_text=truncated),
-            num_predict=3500,   # 3500 tokens needed for 400-500 word summary + 4 bullet sections
-            num_ctx=12288,
+            num_predict=1200,   # Concise JSON summary + 4 bullet sections
+            num_ctx=4096,
         )
         result = extract_json_from_response(response)
         if result.get("summary_text"):
@@ -1076,12 +1071,12 @@ async def extract_policy_fields(document_text: str, force_regenerate: bool = Fal
         logger.info("Cache hit: fields")
         return _ai_cache[ck]
 
-    truncated = document_text[:30000] if len(document_text) > 30000 else document_text
+    truncated = document_text[:25000] if len(document_text) > 25000 else document_text
     try:
         response = await call_ollama(
             FIELD_EXTRACTION_PROMPT.format(document_text=truncated),
-            num_predict=600,
-            num_ctx=12288,
+            num_predict=500,
+            num_ctx=4096,
         )
         result = extract_json_from_response(response)
         if result:
@@ -1102,34 +1097,88 @@ async def extract_policy_fields(document_text: str, force_regenerate: bool = Fal
                         
             if "premium_amount" in result:
                 val = str(result["premium_amount"]).strip()
-                if val in ("0", "null", "") or len(val) < 3:
+                if val.lower() in ("0", "null", "", "not specified", "not mentioned in policy") or len(val) < 3:
                     fallback_prem = _regex_find_any([
-                        r'(?:total\s+premium|gross\s+premium|net\s+premium)[:\s₹Rs.]+([\d,]{4,}(?:\.[\d]{0,2})?)',
-                        r'(?:premium\s+paid|premium\s+amount)[:\s₹Rs.]+([\d,]{4,}(?:\.[\d]{0,2})?)',
-                        r'Total\s+(?:Premium|Amount)[:\s₹Rs.]+([\d,]{4,}(?:\.[\d]{0,2})?)',
+                        r'(?:total\s+premium|gross\s+premium|net\s+premium|premium\s+paid|premium\s+amount|premium\s+received)[:\s\u20b9Rs.INR]*\s*([\d,]{3,}(?:\.[\d]{1,2})?)',
+                        r'[\u20b9Rs.INR]\s*([\d,]{4,}(?:\.\d{1,2})?)\s*(?:towards\s+premium|towards\s+the\s+premium|towards\s+insurance|premium)',
+                        r'(?:received\s+an\s+amount\s+of)\s*[\u20b9Rs.INR]*\s*([\d,]{3,}(?:\.\d{1,2})?)',
+                        r'(?:towards\s+premium)[^\n\r]*?[\u20b9Rs.INR]*\s*([\d,]{3,}(?:\.\d{1,2})?)',
+                        r'(?:Premium)[:\s\u20b9Rs.INR]*\s*([\d,]{3,}(?:\.\d{1,2})?)',
+                        r'Total\s+(?:Premium|Amount)[:\s\u20b9Rs.INR]*\s*([\d,]{3,}(?:\.\d{1,2})?)',
+                        r'[\u20b9Rs.INR]\s*([\d,]{4,}(?:\.\d{1,2})?)',
+                        r'([\d,]{4,}(?:\.\d{1,2})?)\s*(?:towards\s+premium)',
                     ], document_text)
                     if fallback_prem and fallback_prem != "Not found in document":
-                        result["premium_amount"] = fallback_prem
+                        result["premium_amount"] = f"₹{fallback_prem}"
+
+            # If premium_amount was not in result at all, try finding it via regex
+            if "premium_amount" not in result or not result["premium_amount"]:
+                fallback_prem = _regex_find_any([
+                    r'(?:total\s+premium|gross\s+premium|net\s+premium|premium\s+paid|premium\s+amount|premium\s+received)[:\s\u20b9Rs.INR]*\s*([\d,]{3,}(?:\.[\d]{1,2})?)',
+                    r'[\u20b9Rs.INR]\s*([\d,]{4,}(?:\.\d{1,2})?)\s*(?:towards\s+premium|towards\s+the\s+premium|towards\s+insurance|premium)',
+                    r'(?:received\s+an\s+amount\s+of)\s*[\u20b9Rs.INR]*\s*([\d,]{3,}(?:\.\d{1,2})?)',
+                    r'(?:towards\s+premium)[^\n\r]*?[\u20b9Rs.INR]*\s*([\d,]{3,}(?:\.\d{1,2})?)',
+                ], document_text)
+                if fallback_prem and fallback_prem != "Not found in document":
+                    result["premium_amount"] = f"₹{fallback_prem}"
             
             field_category_map = {
-                "policy_name": "policy_info", "insurer_name": "policy_info",
-                "policy_number": "policy_info", "sum_insured": "coverage",
-                "premium_amount": "premium", "deductible": "premium",
-                "co_payment": "premium", "waiting_period": "restrictions",
-                "coverage_type": "coverage", "policy_term": "policy_info",
-                "network_hospitals": "coverage", "pre_existing_coverage": "coverage",
-                "maternity_coverage": "coverage", "room_rent_limit": "restrictions",
+                "policy_name": "policy_info",
+                "insurer_name": "policy_info",
+                "policy_number": "policy_info",
+                "insured_person": "policy_info",
+                "sum_insured": "coverage",
+                "premium_amount": "premium",
+                "policy_term": "policy_info",
+                "renewal_date": "policy_period",
+                "coverage_type": "coverage",
+                "room_rent_limit": "restrictions",
+                "waiting_period": "restrictions",
+                "pre_existing_coverage": "restrictions",
+                "deductible": "premium",
+                "co_payment": "premium",
+                "maternity_coverage": "coverage",
+                "network_hospitals": "coverage",
                 "claim_process": "process",
+            }
+            # Friendly display names for keys
+            field_display_names = {
+                "policy_name": "Policy Name",
+                "insurer_name": "Insurer Name",
+                "policy_number": "Policy Number",
+                "insured_person": "Insured Person",
+                "sum_insured": "Sum Insured",
+                "premium_amount": "Premium Amount",
+                "policy_term": "Policy Term",
+                "renewal_date": "Renewal Date",
+                "coverage_type": "Coverage Type",
+                "room_rent_limit": "Room Rent Limit",
+                "waiting_period": "Waiting Period",
+                "pre_existing_coverage": "Pre Existing Coverage",
+                "deductible": "Deductible",
+                "co_payment": "Co Payment",
+                "maternity_coverage": "Maternity Coverage",
+                "network_hospitals": "Network Hospitals",
+                "claim_process": "Claim Process",
             }
             fields = [
                 {
-                    "field_name": key.replace("_", " ").title(),
+                    "field_name": field_display_names.get(key, key.replace("_", " ").title()),
                     "field_value": str(value),
                     "field_category": field_category_map.get(key, "general"),
                 }
                 for key, value in result.items()
-                if value and value not in ("null", None)
+                if value and str(value).lower() not in ("null", "none", "not specified")
             ]
+            
+            # Ensure date fields (Renewal Date, Expiry Date) are included from document text if LLM omitted them
+            fallback_fields = _build_fallback_fields(document_text)
+            existing_names = {f["field_name"].lower() for f in fields}
+            for fb in fallback_fields:
+                if fb["field_name"].lower() in ("renewal date", "expiry date", "premium due date", "insured person") and fb["field_name"].lower() not in existing_names:
+                    fields.append(fb)
+                    existing_names.add(fb["field_name"].lower())
+
             _ai_cache[ck] = fields
             return fields
     except Exception as e:
@@ -1147,12 +1196,12 @@ async def analyze_risks(document_text: str, force_regenerate: bool = False) -> d
         logger.info("Cache hit: risks")
         return _ai_cache[ck]
 
-    truncated = document_text[:30000] if len(document_text) > 30000 else document_text
+    truncated = document_text[:25000] if len(document_text) > 25000 else document_text
     try:
         response = await call_ollama(
             RISK_ANALYSIS_PROMPT.format(document_text=truncated),
-            num_predict=500,
-            num_ctx=12288,
+            num_predict=450,
+            num_ctx=4096,
         )
         result = extract_json_from_response(response)
         if result.get("risks"):
