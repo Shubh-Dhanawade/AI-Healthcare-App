@@ -12,7 +12,7 @@ import {
   Volume2, VolumeX, Clock, CheckCircle2, XCircle, Wallet
 } from 'lucide-react';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import DocumentStatusBadge from '@/components/documents/DocumentStatusBadge';
 import Link from 'next/link';
 
@@ -197,7 +197,7 @@ const generateSimplePrintHTML = (doc: DocumentDetail, selectedLanguage: string) 
       const severityColor = isHigh ? '#dc2626' : (isMedium ? '#d97706' : '#059669');
       const bgColor = isHigh ? '#fef2f2' : (isMedium ? '#fffbeb' : '#ecfdf5');
       const borderColor = isHigh ? '#fecaca' : (isMedium ? '#fde68a' : '#a7f3d0');
-      
+
       risksContent += `
         <div style="background-color: ${bgColor}; border: 1px solid ${borderColor}; border-left: 5px solid ${severityColor}; padding: 16px; border-radius: 8px; margin-bottom: 16px; page-break-inside: avoid;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
@@ -431,6 +431,13 @@ export default function DocumentDetailPage() {
   const [chatLoading, setChatLoading] = useState(false);
   const sessionIdRef = useRef<string | null>(null);
 
+  // ── Real-time SSE streaming summary state ──
+  const [streamingText, setStreamingText] = useState('');
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [streamError, setStreamError] = useState<string | null>(null);
+  const hasStreamedRef = useRef(false); // prevent re-triggering on every render
+  const streamAbortRef = useRef<AbortController | null>(null);
+
   // Export / Sharing states
   const [showEmailForm, setShowEmailForm] = useState(false);
   const [emailInput, setEmailInput] = useState('');
@@ -465,7 +472,7 @@ export default function DocumentDetailPage() {
   const [predictPreExisting, setPredictPreExisting] = useState<number>(0);
   const [predictSystolic, setPredictSystolic] = useState<number>(120);
   const [predictDiastolic, setPredictDiastolic] = useState<number>(80);
-  
+
   const [claimPredictionResult, setClaimPredictionResult] = useState<any>(null);
   const [isClaimPredicting, setIsClaimPredicting] = useState<boolean>(false);
   const [claimPredictionError, setClaimPredictionError] = useState<string | null>(null);
@@ -512,11 +519,11 @@ export default function DocumentDetailPage() {
       const currentFields = selectedLanguage === 'English'
         ? doc.extracted_fields
         : (translations[selectedLanguage]?.extracted_fields || doc.extracted_fields);
-        
+
       const currentRisks = selectedLanguage === 'English'
         ? doc.risk_analyses
         : (translations[selectedLanguage]?.risk_analyses || doc.risk_analyses);
-        
+
       const docToPrint = {
         ...doc,
         summary: displayedSummary || doc.summary,
@@ -597,7 +604,7 @@ export default function DocumentDetailPage() {
     const currentFields = selectedLanguage === 'English'
       ? doc.extracted_fields
       : (translations[selectedLanguage]?.extracted_fields || doc.extracted_fields);
-      
+
     const currentRisks = selectedLanguage === 'English'
       ? doc.risk_analyses
       : (translations[selectedLanguage]?.risk_analyses || doc.risk_analyses);
@@ -969,8 +976,73 @@ export default function DocumentDetailPage() {
   useEffect(() => {
     return () => {
       if (typeof window !== 'undefined' && window.speechSynthesis) window.speechSynthesis.cancel();
+      // Abort any in-progress summary stream on unmount
+      streamAbortRef.current?.abort();
     };
   }, []);
+
+  // ── Auto-start SSE streaming summary when doc text is ready and no summary exists ──
+  const startSummaryStream = useCallback(async (docId: string) => {
+    if (hasStreamedRef.current || isStreaming) return;
+    hasStreamedRef.current = true;
+    setIsStreaming(true);
+    setStreamingText('');
+    setStreamError(null);
+
+    const token = localStorage.getItem('access_token');
+    const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+    const controller = new AbortController();
+    streamAbortRef.current = controller;
+
+    try {
+      const response = await fetch(`${API_URL}/ai/summary/stream/${docId}`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+        signal: controller.signal,
+      });
+
+      if (!response.ok || !response.body) {
+        throw new Error(`Stream failed: ${response.statusText}`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const payload = JSON.parse(line.slice(6));
+            if (payload.token) {
+              setStreamingText(prev => prev + payload.token);
+            }
+            if (payload.done) {
+              setIsStreaming(false);
+              // Invalidate query so React Query re-fetches the persisted summary from DB
+              setTimeout(() => queryClient.invalidateQueries({ queryKey: ['document', docId] }), 1000);
+            }
+            if (payload.error) {
+              setStreamError(payload.error);
+              setIsStreaming(false);
+            }
+          } catch { /* ignore parse errors for partial lines */ }
+        }
+      }
+    } catch (err: any) {
+      if (err.name !== 'AbortError') {
+        console.error('Summary stream error:', err);
+        setStreamError('Failed to stream summary. Please click Re-summarize.');
+      }
+      setIsStreaming(false);
+    }
+  }, [isStreaming, queryClient]);
 
 
 
@@ -988,6 +1060,16 @@ export default function DocumentDetailPage() {
       return false;
     },
   });
+
+  // Trigger stream when doc text is ready but no summary yet (placed after query declaration)
+  useEffect(() => {
+    if (!doc || !docId) return;
+    const readyStatuses = ['text_extracted', 'completed', 'summarized'];
+    if (readyStatuses.includes(doc.status) && !doc.summary && !hasStreamedRef.current) {
+      startSummaryStream(docId);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc?.status, doc?.summary, docId, startSummaryStream]);
 
   const summarizeMutation = useMutation({
     mutationFn: () => documentsApi.runSummary(docId),
@@ -1028,7 +1110,7 @@ export default function DocumentDetailPage() {
       if (d > 1900) { y = d; d = parseInt(m1[3]); }
       try {
         return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-      } catch(e) {}
+      } catch (e) { }
     }
     const m2 = str.match(/(\d{4})[\-\/](\d{1,2})[\-\/](\d{1,2})/);
     if (m2) {
@@ -1037,7 +1119,7 @@ export default function DocumentDetailPage() {
       let d = parseInt(m2[3]);
       try {
         return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-      } catch(e) {}
+      } catch (e) { }
     }
     const months: Record<string, number> = {
       jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
@@ -1051,7 +1133,7 @@ export default function DocumentDetailPage() {
       if (m !== undefined) {
         try {
           return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-        } catch(e) {}
+        } catch (e) { }
       }
     }
     return null;
@@ -1603,11 +1685,12 @@ export default function DocumentDetailPage() {
 
         <div className="pt-6">
           {activeTab === 'summary' && (() => {
-            if (!displayedSummary) {
+            // Show empty state ONLY if not streaming AND no summary exists
+            if (!displayedSummary && !isStreaming && !streamingText) {
               return (
                 <div className="text-center py-12 glass-card">
                   <Brain className="w-12 h-12 text-slate-600 mx-auto mb-3" />
-                  <p className="text-slate-400">No summary yet. Click "AI Summarize" to generate one.</p>
+                  <p className="text-slate-400">No summary yet. Click &quot;Re-summarize&quot; to generate one.</p>
                 </div>
               );
             }
@@ -1620,9 +1703,15 @@ export default function DocumentDetailPage() {
                     <div>
                       <h2 className="text-lg font-bold text-white flex items-center gap-2">
                         <Brain className="w-5 h-5 text-blue-400 animate-pulse" /> Summary
+                        {isStreaming && (
+                          <span className="flex items-center gap-1.5 text-xs font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/25 px-2 py-0.5 rounded-full">
+                            <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full" style={{ animation: 'blink 1s step-end infinite' }} />
+                            Generating live...
+                          </span>
+                        )}
                       </h2>
                       <p className="text-slate-400 text-xs mt-0.5">
-                        Executive summary of the policy (comprehensive review)
+                        {isStreaming ? 'AI is writing your summary in real-time — reading directly from your document' : 'Executive summary of the policy (comprehensive review)'}
                       </p>
                     </div>
                     {/* Export, Share and Language Actions */}
@@ -1630,11 +1719,10 @@ export default function DocumentDetailPage() {
                       {/* Text to Speech Button */}
                       <button
                         onClick={() => handlePlaySpeech('summary')}
-                        className={`btn-secondary text-xs py-2 px-3 flex items-center gap-1.5 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer border ${
-                          speakingTab === 'summary' 
-                            ? 'border-red-500/30 text-red-400 bg-red-500/5' 
+                        className={`btn-secondary text-xs py-2 px-3 flex items-center gap-1.5 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer border ${speakingTab === 'summary'
+                            ? 'border-red-500/30 text-red-400 bg-red-500/5'
                             : 'border-blue-500/30 text-blue-400'
-                        }`}
+                          }`}
                         title={speakingTab === 'summary' ? 'Stop read aloud' : 'Read aloud summary'}
                       >
                         {speakingTab === 'summary' ? (
@@ -1731,22 +1819,50 @@ export default function DocumentDetailPage() {
                         </div>
                       </div>
                     )}
-                    <div className="space-y-3 text-slate-200 text-sm leading-relaxed">
-                      {(displayedSummary?.summary_text || '').split(/\n{2,}|\n(?=\S)/).filter(Boolean).map((para: string, i: number) => (
-                        <p key={i} className="leading-7 text-slate-200">{para.trim()}</p>
-                      ))}
-                    </div>
+                    {/* Live streaming text — shown while LLM is generating */}
+                    {(isStreaming || (streamingText && !displayedSummary?.summary_text)) && (
+                      <div className="space-y-4">
+                        {streamingText.split(/\n{2,}/).filter(Boolean).map((para: string, i: number) => (
+                          <p key={i} className="leading-7 text-slate-200 border-l-2 border-blue-500/20 pl-3">
+                            {para.trim()}
+                          </p>
+                        ))}
+                        {isStreaming && (
+                          <span
+                            className="inline-block w-0.5 h-4 bg-blue-400 ml-0.5 align-middle"
+                            style={{ animation: 'blink 1s step-end infinite' }}
+                          />
+                        )}
+                      </div>
+                    )}
+
+                    {/* Final persisted summary — shown after stream completes and DB is updated */}
+                    {!isStreaming && displayedSummary?.summary_text && (
+                      <div className="space-y-4">
+                        {(displayedSummary.summary_text || '').split(/\n{2,}|\n(?=\S)/).filter(Boolean).map((para: string, i: number) => (
+                          <p key={i} className="leading-7 text-slate-200 border-l-2 border-blue-500/20 pl-3 mb-1">
+                            {para.trim()}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Error state */}
+                    {streamError && !isStreaming && !displayedSummary?.summary_text && (
+                      <p className="text-red-400 text-sm">{streamError}</p>
+                    )}
                   </div>
 
-                  {/* Detailed Policy Breakdowns */}
+                  {/* Detailed Policy Breakdowns — only shown once structured summary is saved to DB */}
+                  {displayedSummary && (
                   <div className="mt-6 border-t border-white/5 pt-6 space-y-4">
-                    <h3 className="text-xs font-bold text-slate-400 tracking-wider uppercase">Policy Details & Exclusions</h3>
+                    <h3 className="text-xs font-bold text-slate-400 tracking-wider uppercase">Policy Details &amp; Exclusions</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {[
-                        { title: 'Coverage & Benefits', icon: CheckCircle2, value: displayedSummary.coverage_summary, color: '#10b981', border: 'border-emerald-500/20', bg: 'bg-emerald-500/5', dotColor: 'bg-emerald-400' },
-                        { title: 'Exclusions & Limits', icon: XCircle, value: displayedSummary.exclusions_summary, color: '#ef4444', border: 'border-red-500/20', bg: 'bg-red-500/5', dotColor: 'bg-red-400' },
-                        { title: 'Waiting Periods', icon: Clock, value: displayedSummary.waiting_period_summary, color: '#f59e0b', border: 'border-amber-500/20', bg: 'bg-amber-500/5', dotColor: 'bg-amber-400' },
-                        { title: 'Premium & Charges', icon: Wallet, value: displayedSummary.premium_summary, color: '#3b82f6', border: 'border-blue-500/20', bg: 'bg-blue-500/5', dotColor: 'bg-blue-400' },
+                        { title: 'Coverage & Benefits', icon: CheckCircle2, value: displayedSummary?.coverage_summary, color: '#10b981', border: 'border-emerald-500/20', bg: 'bg-emerald-500/5', dotColor: 'bg-emerald-400' },
+                        { title: 'Exclusions & Limits', icon: XCircle, value: displayedSummary?.exclusions_summary, color: '#ef4444', border: 'border-red-500/20', bg: 'bg-red-500/5', dotColor: 'bg-red-400' },
+                        { title: 'Waiting Periods', icon: Clock, value: displayedSummary?.waiting_period_summary, color: '#f59e0b', border: 'border-amber-500/20', bg: 'bg-amber-500/5', dotColor: 'bg-amber-400' },
+                        { title: 'Premium & Charges', icon: Wallet, value: displayedSummary?.premium_summary, color: '#3b82f6', border: 'border-blue-500/20', bg: 'bg-blue-500/5', dotColor: 'bg-blue-400' },
                       ].filter(s => s.value).map((section) => {
                         const bullets = (section.value || '')
                           .split(/\n/)
@@ -1771,6 +1887,7 @@ export default function DocumentDetailPage() {
                       })}
                     </div>
                   </div>
+                  )} {/* end displayedSummary breakdown section */}
 
                   {/* Email Inline Form */}
                   {showEmailForm && (
@@ -1821,11 +1938,10 @@ export default function DocumentDetailPage() {
                   </p>
                   <button
                     onClick={() => handlePlaySpeech('fields')}
-                    className={`btn-secondary text-xs py-2 px-3.5 flex items-center gap-1.5 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer border flex-shrink-0 ${
-                      speakingTab === 'fields'
+                    className={`btn-secondary text-xs py-2 px-3.5 flex items-center gap-1.5 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer border flex-shrink-0 ${speakingTab === 'fields'
                         ? 'border-red-500/30 text-red-400 bg-red-500/5'
                         : 'border-blue-500/30 text-blue-400'
-                    }`}
+                      }`}
                     title={speakingTab === 'fields' ? 'Stop read aloud' : 'Read aloud fields'}
                   >
                     {speakingTab === 'fields' ? (
@@ -1913,11 +2029,10 @@ export default function DocumentDetailPage() {
                     </p>
                     <button
                       onClick={() => handlePlaySpeech('risks')}
-                      className={`btn-secondary text-xs py-2 px-3.5 flex items-center gap-1.5 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer border flex-shrink-0 ${
-                        speakingTab === 'risks'
+                      className={`btn-secondary text-xs py-2 px-3.5 flex items-center gap-1.5 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer border flex-shrink-0 ${speakingTab === 'risks'
                           ? 'border-red-500/30 text-red-400 bg-red-500/5'
                           : 'border-blue-500/30 text-blue-400'
-                      }`}
+                        }`}
                       title={speakingTab === 'risks' ? 'Stop read aloud' : 'Read aloud risks'}
                     >
                       {speakingTab === 'risks' ? (
@@ -1960,7 +2075,7 @@ export default function DocumentDetailPage() {
                   </div>
                 </div>
               )}
-              
+
               <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-700/40 pb-4">
                 <div>
                   <h3 className="font-bold text-sm text-white flex items-center gap-2">
@@ -1970,16 +2085,15 @@ export default function DocumentDetailPage() {
                     Generate the exact list of documents and steps required to submit a claim for a specific treatment.
                   </p>
                 </div>
-                
+
                 {/* Speech Button for Checklist (Narrator) */}
                 {checklistData && (
                   <button
                     onClick={() => handlePlaySpeech('checklist')}
-                    className={`btn-secondary text-xs py-2 px-3.5 flex items-center gap-1.5 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer border flex-shrink-0 ${
-                      speakingTab === 'checklist'
+                    className={`btn-secondary text-xs py-2 px-3.5 flex items-center gap-1.5 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer border flex-shrink-0 ${speakingTab === 'checklist'
                         ? 'border-red-500/30 text-red-400 bg-red-500/5'
                         : 'border-blue-500/30 text-blue-400'
-                    }`}
+                      }`}
                     title={speakingTab === 'checklist' ? 'Stop read aloud' : 'Read aloud claims checklist'}
                   >
                     {speakingTab === 'checklist' ? (
@@ -2059,11 +2173,10 @@ export default function DocumentDetailPage() {
                             <tr key={idx} className="hover:bg-white/3">
                               <td className="px-5 py-3.5 text-sm font-medium text-slate-300">{item.document_name}</td>
                               <td className="px-5 py-3.5 text-xs">
-                                <span className={`px-2 py-0.5 rounded-full font-bold border capitalize ${
-                                  item.importance.toLowerCase().includes('mandatory') || item.importance.includes('अनिवार्य')
+                                <span className={`px-2 py-0.5 rounded-full font-bold border capitalize ${item.importance.toLowerCase().includes('mandatory') || item.importance.includes('अनिवार्य')
                                     ? 'bg-red-500/10 text-red-400 border-red-500/20'
                                     : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                                }`}>
+                                  }`}>
                                   {item.importance}
                                 </span>
                               </td>
@@ -2107,27 +2220,27 @@ export default function DocumentDetailPage() {
                         <form onSubmit={handlePredictClaim} className="space-y-3 text-[11px]">
                           <div>
                             <label className="block text-slate-400 mb-1 font-medium">Age</label>
-                            <input 
-                              type="number" 
-                              value={predictAge} 
+                            <input
+                              type="number"
+                              value={predictAge}
                               onChange={(e) => setPredictAge(parseInt(e.target.value) || 0)}
                               className="w-full bg-slate-950 border border-slate-800 rounded-lg p-1.5 text-white outline-none focus:border-blue-500 text-xs"
                             />
                           </div>
                           <div>
                             <label className="block text-slate-400 mb-1 font-medium">BMI</label>
-                            <input 
-                              type="number" 
+                            <input
+                              type="number"
                               step="0.1"
-                              value={predictBmi} 
+                              value={predictBmi}
                               onChange={(e) => setPredictBmi(parseFloat(e.target.value) || 0)}
                               className="w-full bg-slate-950 border border-slate-800 rounded-lg p-1.5 text-white outline-none focus:border-blue-500 text-xs"
                             />
                           </div>
                           <div>
                             <label className="block text-slate-400 mb-1 font-medium">Active Smoker</label>
-                            <select 
-                              value={predictSmoker} 
+                            <select
+                              value={predictSmoker}
                               onChange={(e) => setPredictSmoker(parseInt(e.target.value) || 0)}
                               className="w-full bg-slate-950 border border-slate-800 rounded-lg p-1.5 text-white outline-none focus:border-blue-500 text-xs"
                             >
@@ -2137,9 +2250,9 @@ export default function DocumentDetailPage() {
                           </div>
                           <div>
                             <label className="block text-slate-400 mb-1 font-medium">Pre-existing Conditions</label>
-                            <input 
-                              type="number" 
-                              value={predictPreExisting} 
+                            <input
+                              type="number"
+                              value={predictPreExisting}
                               onChange={(e) => setPredictPreExisting(parseInt(e.target.value) || 0)}
                               className="w-full bg-slate-950 border border-slate-800 rounded-lg p-1.5 text-white outline-none focus:border-blue-500 text-xs"
                             />
@@ -2147,18 +2260,18 @@ export default function DocumentDetailPage() {
                           <div className="grid grid-cols-2 gap-2">
                             <div>
                               <label className="block text-slate-400 mb-1 font-medium">Systolic BP</label>
-                              <input 
-                                type="number" 
-                                value={predictSystolic} 
+                              <input
+                                type="number"
+                                value={predictSystolic}
                                 onChange={(e) => setPredictSystolic(parseInt(e.target.value) || 120)}
                                 className="w-full bg-slate-950 border border-slate-800 rounded-lg p-1.5 text-white outline-none focus:border-blue-500 text-xs"
                               />
                             </div>
                             <div>
                               <label className="block text-slate-400 mb-1 font-medium">Diastolic BP</label>
-                              <input 
-                                type="number" 
-                                value={predictDiastolic} 
+                              <input
+                                type="number"
+                                value={predictDiastolic}
                                 onChange={(e) => setPredictDiastolic(parseInt(e.target.value) || 80)}
                                 className="w-full bg-slate-950 border border-slate-800 rounded-lg p-1.5 text-white outline-none focus:border-blue-500 text-xs"
                               />

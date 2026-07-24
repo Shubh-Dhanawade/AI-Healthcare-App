@@ -129,6 +129,125 @@ async def summarize_document(
         )
 
 
+@router.get("/summary/stream/{document_id}")
+async def stream_summary_sse(
+    document_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Stream the AI summary generation token-by-token using SSE (Server-Sent Events).
+    
+    This endpoint uses a plain-text (non-JSON) prompt so the user sees human-readable
+    prose from the very first token — no waiting for complete JSON.
+    
+    After streaming completes, it triggers full structured summarization in the background
+    to persist the coverage/exclusion/waiting/premium bullet sections to the DB.
+    
+    Frontend: connect with EventSource or fetch+ReadableStream, listen for:
+      - data: {"token": "..."} — new text chunk  
+      - data: {"done": true, "full_text": "..."} — stream complete
+      - data: {"error": "..."} — error occurred
+    """
+    import json
+    import asyncio
+
+    doc = await _get_document(document_id, current_user, db)
+
+    # Plain-text streaming prompt — generates readable prose immediately (no JSON wrapper)
+    STREAM_SUMMARY_PROMPT = """You are a senior healthcare insurance analyst. Write a clear, factual 5-6 paragraph summary of the following insurance policy document using ONLY information present in the document. Write in second person ("Your policy..."). Do NOT use bullet points or headers. Write flowing prose paragraphs separated by blank lines.
+
+Paragraph 1: Name the policy, insurer, policyholder full name, policy number, and validity period.
+Paragraph 2: State the exact Sum Insured and all covered categories (inpatient, daycare, ambulance, AYUSH, etc.).
+Paragraph 3: List every insured member and the total premium paid with date.
+Paragraph 4: Describe key benefits: restore benefit, secure benefit, cumulative bonus, cash for shared room, air ambulance, preventive health check-up.
+Paragraph 5: State all waiting periods with exact durations and any co-payment or deductible.
+Paragraph 6: Explain cashless and reimbursement claim procedures, customer helpline, and advisory.
+
+DOCUMENT:
+{document_text}"""
+
+    truncated = doc.extracted_text[:25000]
+    prompt = STREAM_SUMMARY_PROMPT.format(document_text=truncated)
+
+    async def event_generator():
+        from app.services.ollama_client import call_ollama_stream
+        accumulated = []
+        try:
+            async for token in call_ollama_stream(
+                prompt,
+                num_predict=900,
+                num_ctx=4096,
+            ):
+                accumulated.append(token)
+                yield f"data: {json.dumps({'token': token})}\n\n"
+
+            full_text = "".join(accumulated)
+            yield f"data: {json.dumps({'done': True, 'full_text': full_text})}\n\n"
+
+            # Persist the streamed text to DB as summary_text so it shows on reload
+            # Run the full structured summary in background to also get the bullet sections
+            asyncio.create_task(_save_streamed_summary_to_db(document_id, full_text, doc.extracted_text))
+
+        except Exception as e:
+            logger.error(f"SSE stream error for doc {document_id}: {e}")
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering for true streaming
+            "Connection": "keep-alive",
+        },
+    )
+
+
+async def _save_streamed_summary_to_db(doc_id: str, streamed_text: str, full_doc_text: str) -> None:
+    """
+    Persist the streamed prose summary to the DB so it survives page reloads.
+    Also triggers a full structured summary (with coverage/exclusion/waiting/premium bullets)
+    in the background — this overwrites with richer data once complete.
+    """
+    from app.core.database import AsyncSessionLocal
+    from app.models.risk_analysis import Summary
+    from sqlalchemy import select, delete
+
+    try:
+        async with AsyncSessionLocal() as db:
+            # Upsert the streamed prose text immediately
+            existing = await db.execute(select(Summary).where(Summary.document_id == doc_id))
+            existing_summary = existing.scalar_one_or_none()
+
+            if existing_summary:
+                # Update existing summary with streamed prose
+                existing_summary.summary_text = streamed_text
+                logger.info(f"[SSE] Updated existing summary row with streamed text for {doc_id}")
+            else:
+                from app.core.config import settings as _settings
+                new_summary = Summary(
+                    document_id=doc_id,
+                    summary_text=streamed_text,
+                    model_used=_settings.OLLAMA_MODEL,
+                )
+                db.add(new_summary)
+                logger.info(f"[SSE] Inserted new summary row with streamed text for {doc_id}")
+
+            await db.commit()
+
+        # Now generate the full structured JSON summary (with bullet sections) and overwrite
+        from app.core.database import AsyncSessionLocal as _SessionLocal
+        async with _SessionLocal() as db2:
+            from app.services.summary_service import generate_and_store_summary
+            await generate_and_store_summary(db2, doc_id, full_doc_text, force_regenerate=True)
+            await db2.commit()
+            logger.info(f"[SSE] Full structured summary saved for {doc_id}")
+
+    except Exception as e:
+        logger.error(f"[SSE] Failed to persist streamed summary for {doc_id}: {e}")
+
+
 @router.post("/extract-fields", response_model=ExtractedFieldsResponse)
 async def extract_fields(
     request: ExtractFieldsRequest,

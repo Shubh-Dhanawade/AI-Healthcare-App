@@ -186,39 +186,56 @@ Output ONLY valid JSON with this format:
 # Text Chunking
 # ─────────────────────────────────────────
 
-def chunk_text(text: str, chunk_size: int = 800, overlap: int = 200) -> List[str]:
+def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 250) -> List[str]:
     """
-    Split text into overlapping chunks of roughly 600-900 characters,
-    preserving section boundaries, headings, and clause text.
-
-    chunk_size=800 (was 500): insurance policies have dense single paragraphs;
-    larger chunks ensure a full maternity/coverage clause stays in one block.
-    overlap=200 (was 100): extra overlap keeps clause boundaries intact so
-    cross-paragraph terms are always present in at least one complete chunk.
+    Split text into overlapping chunks of 800-1200 characters,
+    preserving section boundaries, headings, benefit schedule table rows, and clause text.
     """
     if not text:
         return []
         
-    paragraphs = text.split("\n\n")
+    # Split text into logical blocks (double newlines or single newlines with headings/table rows)
+    raw_blocks = re.split(r'\n{2,}', text)
+    blocks = []
+    for b in raw_blocks:
+        b_str = b.strip()
+        if not b_str:
+            continue
+        # If a block contains multiple single-newline table rows, preserve them
+        if len(b_str) > chunk_size and '\n' in b_str:
+            lines = b_str.split('\n')
+            current_line_block = []
+            curr_len = 0
+            for l in lines:
+                l_clean = l.strip()
+                if not l_clean:
+                    continue
+                if curr_len + len(l_clean) > chunk_size and current_line_block:
+                    blocks.append("\n".join(current_line_block))
+                    current_line_block = [l_clean]
+                    curr_len = len(l_clean)
+                else:
+                    current_line_block.append(l_clean)
+                    curr_len += len(l_clean) + 1
+            if current_line_block:
+                blocks.append("\n".join(current_line_block))
+        else:
+            blocks.append(b_str)
+            
     chunks = []
     current_chunk = []
     current_length = 0
     
-    for para in paragraphs:
-        para = para.strip()
-        if not para:
-            continue
-            
-        para_len = len(para)
+    for block in blocks:
+        block_len = len(block)
         
-        # If a single paragraph is larger than chunk_size, we split it by space
-        if para_len > chunk_size:
+        if block_len > chunk_size:
             if current_chunk:
                 chunks.append("\n\n".join(current_chunk))
                 current_chunk = []
                 current_length = 0
                 
-            words = para.split(" ")
+            words = block.split(" ")
             sub_chunk_words = []
             sub_len = 0
             for w in words:
@@ -226,30 +243,29 @@ def chunk_text(text: str, chunk_size: int = 800, overlap: int = 200) -> List[str
                 sub_len += len(w) + 1
                 if sub_len >= chunk_size:
                     chunks.append(" ".join(sub_chunk_words))
-                    # Overlap: keep the last ~25% of words (increased from 20%)
                     overlap_words = sub_chunk_words[-max(1, len(sub_chunk_words) // 4):]
                     sub_chunk_words = list(overlap_words)
                     sub_len = sum(len(x) + 1 for x in sub_chunk_words)
             if sub_chunk_words:
                 chunks.append(" ".join(sub_chunk_words))
         else:
-            if current_length + para_len + 2 > chunk_size:
+            if current_length + block_len + 2 > chunk_size:
                 chunks.append("\n\n".join(current_chunk))
                 
                 if current_chunk:
                     overlap_para = current_chunk[-1]
                     if len(overlap_para) <= overlap:
-                        current_chunk = [overlap_para, para]
-                        current_length = len(overlap_para) + para_len + 2
+                        current_chunk = [overlap_para, block]
+                        current_length = len(overlap_para) + block_len + 2
                     else:
-                        current_chunk = [para]
-                        current_length = para_len
+                        current_chunk = [block]
+                        current_length = block_len
                 else:
-                    current_chunk = [para]
-                    current_length = para_len
+                    current_chunk = [block]
+                    current_length = block_len
             else:
-                current_chunk.append(para)
-                current_length += para_len + (2 if current_length > 0 else 0)
+                current_chunk.append(block)
+                current_length += block_len + (2 if current_length > 0 else 0)
                 
     if current_chunk:
         chunks.append("\n\n".join(current_chunk))

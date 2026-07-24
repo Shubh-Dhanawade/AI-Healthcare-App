@@ -123,7 +123,7 @@ async def call_ollama(
     prompt: str,
     model: Optional[str] = None,
     num_predict: int = 512,
-    num_ctx: int = 1536,
+    num_ctx: int = 4096,
 ) -> str:
     """Call Ollama chat API synchronously with dynamic CPU/GPU layer allocation."""
     client = get_httpx_client()
@@ -153,17 +153,16 @@ async def call_ollama(
 async def call_ollama_stream(
     prompt: str,
     model: Optional[str] = None,
-    num_predict: int = 250,
-    num_ctx: int = 1024,
+    num_predict: int = 450,
+    num_ctx: int = 4096,
 ) -> AsyncGenerator[str, None]:
     """Generate streaming tokens from Ollama with GPU-accelerated speed optimizations.
     
-    Key changes vs original:
-    - num_ctx reduced 2048→1024: halves prefill time, key for fast first-token delivery
-    - num_predict reduced 380→250: chat answers should be concise; prevents runaway generation
-    - num_gpu: 999 forces all layers to GPU
+    Key settings:
+    - num_ctx=4096: ensures full policy context, structured DB data, and summaries fit without truncation
+    - num_predict=450: concise, complete policy responses
+    - num_gpu=999: forces all layers to GPU
     - keep_alive=-1: keeps model permanently in VRAM after first load, avoids cold-start
-    - use_mmap REMOVED: mmap conflicts with Vulkan GPU backend and causes slow cold-loads
     """
     client = get_httpx_client()
     model_name = model or settings.OLLAMA_MODEL

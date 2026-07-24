@@ -307,3 +307,25 @@ body {
 .relative > input.form-input[id="password"] {
   padding-right: 2.5rem !important;
 }
+
+/* ─── Streaming Summary Cursor Animation ─── */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* ─── Streaming summary paragraph fade-in ─── */
+.streaming-para-enter {
+  animation: fadeInUp 0.2s ease-out both;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
