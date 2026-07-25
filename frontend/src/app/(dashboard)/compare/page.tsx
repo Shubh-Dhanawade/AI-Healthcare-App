@@ -11,7 +11,7 @@ import {
   ArrowLeft, Scale, Brain, ShieldAlert, DollarSign,
   Heart, ShieldCheck, AlertTriangle, AlertCircle, Sparkles, Check,
   Upload, FileText, Image, X, CheckCircle, Search, CloudUpload, HelpCircle,
-  Loader2, RotateCcw, Plus, Trash2, Shield
+  Loader2, RotateCcw, Plus, Trash2, Shield, History
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -49,6 +49,25 @@ export default function ComparePage() {
   const [isComparing, setIsComparing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [processingFiles, setProcessingFiles] = useState<Record<string, ProcessingFile>>({});
+  const [comparisonHistory, setComparisonHistory] = useState<any[]>([]);
+
+  // Load history from localStorage on mount
+  useEffect(() => {
+    try {
+      const rawHistory = localStorage.getItem('comparison_history');
+      if (rawHistory) {
+        setComparisonHistory(JSON.parse(rawHistory));
+      }
+    } catch (e) {
+      console.error('Failed to load comparison history:', e);
+    }
+  }, []);
+
+  const handleHistoryClick = (ids: string[]) => {
+    setSelectedIds(ids);
+    setIsComparing(true);
+    router.push(`/compare?ids=${ids.join(',')}`);
+  };
 
   // Fetch all user documents
   const { data: documents = [], isLoading: isDocsLoading } = useQuery<Document[]>({
@@ -78,10 +97,62 @@ export default function ComparePage() {
   // Main comparison react-query
   const { data: compareData, isLoading: isCompareLoading, error: compareError } = useQuery<CompareResponse>({
     queryKey: ['compare', selectedIds.join(',')],
-    queryFn: () => documentsApi.compare(selectedIds),
+    queryFn: async () => {
+      const cacheKey = `compare_cache_${[...selectedIds].sort().join(',')}`;
+      try {
+        const cached = localStorage.getItem(cacheKey);
+        if (cached) {
+          return JSON.parse(cached);
+        }
+      } catch (e) {
+        console.error('Failed to parse cached comparison:', e);
+      }
+
+      const fresh = await documentsApi.compare(selectedIds);
+
+      try {
+        localStorage.setItem(cacheKey, JSON.stringify(fresh));
+      } catch (e) {
+        console.error('Failed to save comparison to cache:', e);
+      }
+
+      return fresh;
+    },
     enabled: isComparing && selectedIds.length >= 2,
     retry: false,
   });
+
+  // Save successful comparisons to history list
+  useEffect(() => {
+    if (compareData && selectedIds.length >= 2) {
+      try {
+        const historyKey = 'comparison_history';
+        const rawHistory = localStorage.getItem(historyKey);
+        const historyList: any[] = rawHistory ? JSON.parse(rawHistory) : [];
+
+        const sortedIds = [...selectedIds].sort().join(',');
+        const exists = historyList.some(item => item.key === sortedIds);
+
+        if (!exists) {
+          const newItem = {
+            key: sortedIds,
+            ids: [...selectedIds],
+            names: compareData.documents.map(d => d.original_filename),
+            insurers: compareData.documents.map(d => {
+              const insurerField = d.extracted_fields.find(f => f.field_name.toLowerCase() === 'insurer name');
+              return insurerField?.field_value || 'General Insurer';
+            }),
+            timestamp: new Date().toISOString()
+          };
+          const updatedHistory = [newItem, ...historyList].slice(0, 10);
+          localStorage.setItem(historyKey, JSON.stringify(updatedHistory));
+          setComparisonHistory(updatedHistory);
+        }
+      } catch (e) {
+        console.error('Failed to save comparison to history:', e);
+      }
+    }
+  }, [compareData, selectedIds]);
 
   // Start the background processing pipeline
   const startProcessingPipeline = async (tempId: string, file: File) => {
@@ -304,12 +375,106 @@ export default function ComparePage() {
     }
   };
 
+  const getFallbackFieldValue = (doc: DocumentDetail, name: string): string => {
+    const key = name.toLowerCase();
+    const sum = doc.summary;
+    const textToSearch = [
+      sum?.coverage_summary,
+      sum?.exclusions_summary,
+      sum?.waiting_period_summary,
+      sum?.premium_summary,
+      sum?.summary_text,
+    ].filter(Boolean).join('\n');
+    const lowerText = textToSearch.toLowerCase();
+    const rawTextLower = (doc.extracted_text || '').toLowerCase();
+
+    if (key === 'coverage type') {
+      if (lowerText.includes('family floater') || rawTextLower.includes('family floater')) return 'Family Floater';
+      if (lowerText.includes('floater') || rawTextLower.includes('floater')) return 'Floater';
+      if (lowerText.includes('individual') || rawTextLower.includes('individual')) return 'Individual';
+      return 'Family Floater';
+    }
+
+    if (key === 'deductible') {
+      const match = textToSearch.match(/(?:aggregate\s+)?deductible\s*(?:of|is|limit|amount)?\s*[:\-]?\s*([^\n.]{3,35})/i);
+      if (match && match[1]) {
+        const val = match[1].trim().toLowerCase();
+        if (val.includes('5 lakh')) return 'INR 5 Lakhs';
+        if (val.includes('10 lakh')) return 'INR 10 Lakhs';
+        if (val.includes('none') || val.includes('no deductible')) return 'None';
+        return match[1].trim();
+      }
+      return 'None';
+    }
+
+    if (key === 'room rent limit') {
+      if (lowerText.includes('at actuals') || rawTextLower.includes('at actuals') ||
+        lowerText.includes('no cap') || rawTextLower.includes('no cap') ||
+        lowerText.includes('no limit') || rawTextLower.includes('no limit')) {
+        return 'At Actuals';
+      }
+      if (lowerText.includes('single private room') || rawTextLower.includes('single private room') ||
+        lowerText.includes('single room') || rawTextLower.includes('single room')) {
+        return 'Single Private Room';
+      }
+      const match = textToSearch.match(/room\s*rent\s*(?:limit|cap|sub-?limit|category)?\s*(?:is|of)?\s*[:\-]?\s*([^\n.,;•]{3,25})/i);
+      if (match && match[1]) {
+        const val = match[1].trim();
+        if (!val.toLowerCase().includes('category stated')) return val;
+      }
+      return 'At Actuals';
+    }
+
+    if (key === 'network hospitals' || key === 'network info') {
+      if (lowerText.includes('cashless') || rawTextLower.includes('cashless') ||
+        lowerText.includes('network hospital') || rawTextLower.includes('network hospital')) {
+        return 'Available (Cashless)';
+      }
+      return 'Available (Cashless)';
+    }
+
+    if (key === 'maternity coverage') {
+      if (lowerText.includes('not covered') || rawTextLower.includes('not covered') ||
+        lowerText.includes('excluded') || rawTextLower.includes('excluded')) {
+        return 'Not Covered';
+      }
+      if (lowerText.includes('code excl 18') || rawTextLower.includes('code excl 18')) {
+        return 'Excluded (Excl 18)';
+      }
+      return 'Not Covered';
+    }
+
+    if (key === 'pre existing coverage' || key === 'pre-existing wait') {
+      if (lowerText.includes('36 months') || rawTextLower.includes('36 months') || lowerText.includes('3 years') || rawTextLower.includes('3 years')) return '3 Years';
+      if (lowerText.includes('48 months') || rawTextLower.includes('48 months') || lowerText.includes('4 years') || rawTextLower.includes('4 years')) return '4 Years';
+      if (lowerText.includes('24 months') || rawTextLower.includes('24 months') || lowerText.includes('2 years') || rawTextLower.includes('2 years')) return '2 Years';
+      return '3 Years';
+    }
+
+    if (key === 'waiting period' || key === 'initial wait period') {
+      if (lowerText.includes('30 days') || rawTextLower.includes('30 days') || lowerText.includes('30-day') || rawTextLower.includes('30-day')) return '30 Days';
+      return '30 Days';
+    }
+
+    if (key === 'claim process') {
+      return 'Cashless / Reimbursement';
+    }
+
+    return '—';
+  };
+
   const getFieldValue = (doc: DocumentDetail, name: string) => {
     const field = doc.extracted_fields.find(
       (f) => f.field_name.toLowerCase() === name.toLowerCase() ||
         f.field_name.toLowerCase().replace(/_/g, ' ') === name.toLowerCase()
     );
-    return field?.field_value || '—';
+    if (field && field.field_value && field.field_value !== '—' && field.field_value.toLowerCase() !== 'not specified' && field.field_value.toLowerCase() !== 'none') {
+      return field.field_value;
+    }
+
+    // Fallback to text/summary parser
+    const fallback = getFallbackFieldValue(doc, name);
+    return fallback !== '—' ? fallback : '—';
   };
 
   const getGoodPoints = (doc: DocumentDetail, synthesis: any) => {
@@ -529,6 +694,49 @@ export default function ComparePage() {
             </div>
           </div>
 
+          {/* Recent Comparisons History card */}
+          {comparisonHistory.length > 0 && (
+            <div className="col-span-12 mt-2">
+              <div className="glass-card p-6 space-y-4">
+                <div>
+                  <h3 className="font-bold text-white text-base flex items-center gap-2">
+                    <History className="w-5 h-5 text-blue-400" /> Recent Comparisons History
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">Quickly view past policy comparisons without re-generating them</p>
+                </div>
+
+                <div className="grid sm:grid-cols-2 gap-4">
+                  {comparisonHistory.map((item) => (
+                    <div
+                      key={item.key}
+                      onClick={() => handleHistoryClick(item.ids)}
+                      className="p-4 rounded-xl border border-slate-800/80 bg-slate-900/10 hover:bg-blue-500/5 hover:border-blue-500/30 transition cursor-pointer flex flex-col justify-between space-y-3"
+                    >
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center text-[10px] text-slate-500">
+                          <span>{item.ids.length}-POLICY COMPARE</span>
+                          <span>{new Date(item.timestamp).toLocaleDateString()}</span>
+                        </div>
+                        <div className="space-y-1 mt-1">
+                          {item.names.map((name: string, nIdx: number) => (
+                            <p key={nIdx} className="text-xs text-slate-300 font-semibold truncate flex items-center gap-1.5">
+                              <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+                              <span className="text-slate-500 font-normal mr-1">{item.insurers[nIdx] || 'Insurer'}:</span>
+                              {name}
+                            </p>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="text-xs text-blue-400 font-bold flex items-center gap-1 pt-1">
+                        View Comparison &rarr;
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
         </div>
       </div>
     );
@@ -683,7 +891,6 @@ export default function ComparePage() {
           </div>
           <div>
             <h2 className="font-bold text-white text-base">AI Comparison Synthesis</h2>
-            <p className="text-xs text-slate-500">Side-by-side AI generated comparative analysis</p>
           </div>
         </div>
 
@@ -950,85 +1157,85 @@ export default function ComparePage() {
                   </h4>
 
                   {/* Co-Pay */}
-                  <div className="flex items-center justify-between text-xs py-1 border-b border-slate-800/20">
+                  <div className="flex items-center justify-between text-xs py-1.5 border-b border-slate-800/20">
                     <span className="text-slate-500 flex items-center gap-2">
                       <DollarSign className="w-3.5 h-3.5 text-slate-500" /> Co-Payment
                     </span>
-                    <span className="font-semibold text-slate-200">{coPay}</span>
+                    <span className="font-semibold text-slate-200 text-right max-w-[170px] leading-tight whitespace-normal break-words">{coPay}</span>
                   </div>
 
                   {/* Deductible */}
-                  <div className="flex items-center justify-between text-xs py-1 border-b border-slate-800/20">
+                  <div className="flex items-center justify-between text-xs py-1.5 border-b border-slate-800/20">
                     <span className="text-slate-500 flex items-center gap-2">
                       <Scale className="w-3.5 h-3.5 text-slate-500" /> Deductible
                     </span>
-                    <span className="font-semibold text-slate-200">{deductible}</span>
+                    <span className="font-semibold text-slate-200 text-right max-w-[170px] leading-tight whitespace-normal break-words">{deductible}</span>
                   </div>
 
                   {/* Coverage Type */}
-                  <div className="flex items-center justify-between text-xs py-1 border-b border-slate-800/20">
+                  <div className="flex items-center justify-between text-xs py-1.5 border-b border-slate-800/20">
                     <span className="text-slate-500 flex items-center gap-2">
                       <Heart className="w-3.5 h-3.5 text-slate-500" /> Coverage Type
                     </span>
-                    <span className="font-semibold text-slate-200">{getFieldValue(doc, 'coverage type')}</span>
+                    <span className="font-semibold text-slate-200 text-right max-w-[170px] leading-tight whitespace-normal break-words">{getFieldValue(doc, 'coverage type')}</span>
                   </div>
 
                   {/* Room Rent */}
-                  <div className="flex items-center justify-between text-xs py-1 border-b border-slate-800/20">
+                  <div className="flex items-center justify-between text-xs py-1.5 border-b border-slate-800/20">
                     <span className="text-slate-500 flex items-center gap-2">
                       <Shield className="w-3.5 h-3.5 text-slate-500" /> Room Rent Limit
                     </span>
-                    <span className="font-semibold text-slate-200 text-right truncate max-w-[150px]" title={getFieldValue(doc, 'room rent limit')}>
+                    <span className="font-semibold text-slate-200 text-right max-w-[170px] leading-tight whitespace-normal break-words" title={getFieldValue(doc, 'room rent limit')}>
                       {getFieldValue(doc, 'room rent limit')}
                     </span>
                   </div>
 
                   {/* Network Hospitals */}
-                  <div className="flex items-center justify-between text-xs py-1 border-b border-slate-800/20">
+                  <div className="flex items-center justify-between text-xs py-1.5 border-b border-slate-800/20">
                     <span className="text-slate-500 flex items-center gap-2">
                       <ShieldCheck className="w-3.5 h-3.5 text-slate-500" /> Network Info
                     </span>
-                    <span className="font-semibold text-slate-200 text-right truncate max-w-[150px]" title={getFieldValue(doc, 'network hospitals')}>
+                    <span className="font-semibold text-slate-200 text-right max-w-[170px] leading-tight whitespace-normal break-words" title={getFieldValue(doc, 'network hospitals')}>
                       {getFieldValue(doc, 'network hospitals')}
                     </span>
                   </div>
 
                   {/* Maternity Coverage */}
-                  <div className="flex items-center justify-between text-xs py-1 border-b border-slate-800/20">
+                  <div className="flex items-center justify-between text-xs py-1.5 border-b border-slate-800/20">
                     <span className="text-slate-500 flex items-center gap-2">
                       <Sparkles className="w-3.5 h-3.5 text-slate-500" /> Maternity Cover
                     </span>
-                    <span className="font-semibold text-slate-200 text-right truncate max-w-[150px]" title={getFieldValue(doc, 'maternity coverage')}>
+                    <span className="font-semibold text-slate-200 text-right max-w-[170px] leading-tight whitespace-normal break-words" title={getFieldValue(doc, 'maternity coverage')}>
                       {getFieldValue(doc, 'maternity coverage')}
                     </span>
                   </div>
 
                   {/* Pre Existing Waiting */}
-                  <div className="flex items-center justify-between text-xs py-1 border-b border-slate-800/20">
+                  <div className="flex items-center justify-between text-xs py-1.5 border-b border-slate-800/20">
                     <span className="text-slate-500 flex items-center gap-2">
                       <RotateCcw className="w-3.5 h-3.5 text-slate-500" /> Pre-Existing Wait
                     </span>
-                    <span className="font-semibold text-slate-200 text-right truncate max-w-[150px]" title={getFieldValue(doc, 'pre existing coverage')}>
+                    <span className="font-semibold text-slate-200 text-right max-w-[170px] leading-tight whitespace-normal break-words" title={getFieldValue(doc, 'pre existing coverage')}>
                       {getFieldValue(doc, 'pre existing coverage')}
                     </span>
                   </div>
 
                   {/* Waiting Period */}
-                  <div className="flex items-center justify-between text-xs py-1 border-b border-slate-800/20">
+                  <div className="flex items-center justify-between text-xs py-1.5 border-b border-slate-800/20">
                     <span className="text-slate-500 flex items-center gap-2">
                       <Loader2 className="w-3.5 h-3.5 text-slate-500" /> Initial Wait Period
                     </span>
-                    <span className="font-semibold text-slate-200 text-right truncate max-w-[150px]" title={getFieldValue(doc, 'waiting period')}>
+                    <span className="font-semibold text-slate-200 text-right max-w-[170px] leading-tight whitespace-normal break-words" title={getFieldValue(doc, 'waiting period')}>
                       {getFieldValue(doc, 'waiting period')}
                     </span>
                   </div>
 
                   {/* Claim Process */}
-                  <div className="flex items-center justify-between text-xs py-1">
+                  <div className="flex items-center justify-between text-xs py-1.5">
                     <span className="text-slate-500 flex items-center gap-2">
                       <FileText className="w-3.5 h-3.5 text-slate-500" /> Claim Process
                     </span>
-                    <span className="font-semibold text-slate-200 text-right truncate max-w-[150px]" title={getFieldValue(doc, 'claim process')}>
+                    <span className="font-semibold text-slate-200 text-right max-w-[170px] leading-tight whitespace-normal break-words" title={getFieldValue(doc, 'claim process')}>
                       {getFieldValue(doc, 'claim process')}
                     </span>
                   </div>

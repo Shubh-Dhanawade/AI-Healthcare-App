@@ -963,17 +963,21 @@ def _build_fallback_risks(document_text: str) -> dict:
 # ─────────────────────────────────────────
 
 async def warmup_model() -> None:
-    """Send a tiny keep-alive prompt to Ollama so model weights stay resident in VRAM."""
+    """Send a tiny keep-alive prompt to Ollama so model weights stay resident in VRAM.
+    Uses /api/generate which is supported by all GGUF completion models.
+    """
     try:
         model = settings.OLLAMA_MODEL
-        url = f"{settings.OLLAMA_BASE_URL}/api/chat"
+        url = f"{settings.OLLAMA_BASE_URL}/api/generate"
         if "localhost" in url:
             url = url.replace("localhost", "127.0.0.1")
         payload = {
             "model": model,
-            "messages": [{"role": "user", "content": "hi"}],
+            "prompt": "hi",
             "stream": False,
-            "options": {"num_predict": 1, "num_ctx": 128, "temperature": 0},
+            "keep_alive": -1,
+            # Use num_ctx=2048: same as all inference calls to avoid costly reload on first request
+            "options": {"num_predict": 1, "num_ctx": 2048, "temperature": 0},
         }
         async with httpx.AsyncClient(timeout=30.0) as client:
             await client.post(url, json=payload)
@@ -1078,13 +1082,15 @@ async def generate_summary(document_text: str, force_regenerate: bool = False) -
         logger.info("Cache hit: summary")
         return _ai_cache[ck]
 
-    # Use up to 25000 chars — enough for key policy content, keeps input tokens low for speed
-    truncated = document_text[:25000] if len(document_text) > 25000 else document_text
+    # Cap at 5000 chars (~1250 tokens) to fit within num_ctx=2048.
+    # 2048 total tokens - ~400 for prompt instructions - ~750 for response = ~900 for doc text.
+    # At ~4 chars/token: 900 * 4 = 3600 chars minimum; 5000 chars provides richer context.
+    truncated = document_text[:5000] if len(document_text) > 5000 else document_text
     try:
         response = await call_ollama(
             SUMMARIZATION_PROMPT.format(document_text=truncated),
             num_predict=750,   # Concise JSON summary + 4 bullet sections
-            num_ctx=4096,
+            num_ctx=2048,
         )
         result = extract_json_from_response(response)
         if result.get("summary_text"):
@@ -1120,12 +1126,13 @@ async def extract_policy_fields(document_text: str, force_regenerate: bool = Fal
         logger.info("Cache hit: fields")
         return _ai_cache[ck]
 
-    truncated = document_text[:25000] if len(document_text) > 25000 else document_text
+    # Cap at 4000 chars to fit within num_ctx=2048 context window.
+    truncated = document_text[:4000] if len(document_text) > 4000 else document_text
     try:
         response = await call_ollama(
             FIELD_EXTRACTION_PROMPT.format(document_text=truncated),
             num_predict=400,
-            num_ctx=4096,
+            num_ctx=2048,
         )
         result = extract_json_from_response(response)
         if result:
@@ -1245,12 +1252,13 @@ async def analyze_risks(document_text: str, force_regenerate: bool = False) -> d
         logger.info("Cache hit: risks")
         return _ai_cache[ck]
 
-    truncated = document_text[:25000] if len(document_text) > 25000 else document_text
+    # Cap at 4000 chars to fit within num_ctx=2048 context window.
+    truncated = document_text[:4000] if len(document_text) > 4000 else document_text
     try:
         response = await call_ollama(
             RISK_ANALYSIS_PROMPT.format(document_text=truncated),
             num_predict=450,
-            num_ctx=4096,
+            num_ctx=2048,
         )
         result = extract_json_from_response(response)
         if result.get("risks"):
@@ -1693,31 +1701,29 @@ async def generate_claims_checklist(policy_name: str, fields_summary: str, treat
 
 
 async def call_ollama_stream(prompt: str, model: Optional[str] = None, num_predict: int = 200):
-    """Generate streaming tokens from Ollama — optimized for speed."""
+    """Generate streaming tokens from Ollama /api/generate — optimized for speed.
+    Uses /api/generate (completion) which works with all GGUF models including
+    fine-tuned models that only support 'completion' capability, not 'chat'.
+    """
     from app.services.ollama_client import parse_keep_alive
     
     model = model or settings.OLLAMA_MODEL
-    url = f"{settings.OLLAMA_BASE_URL}/api/chat"
+    url = f"{settings.OLLAMA_BASE_URL}/api/generate"
     
     if "localhost" in url:
         url = url.replace("localhost", "127.0.0.1")
 
     payload = {
         "model": model,
-        "messages": [
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
+        "prompt": prompt,
         "stream": True,
         "keep_alive": parse_keep_alive(settings.OLLAMA_KEEP_ALIVE),
         "options": {
-            "temperature": 0,  # CHANGED from 0.1 to 0 for greedy decoding
-            "num_predict": num_predict,  # REDUCED from 512
-            "num_ctx": 1024,  # REDUCED from 4096
+            "temperature": 0,
+            "num_predict": num_predict,
+            "num_ctx": 1024,
             "num_batch": 1024,
-            "top_k": 1,  # GREEDY only
+            "top_k": 1,
             "top_p": 1.0,
             "num_thread": settings.OLLAMA_NUM_THREAD,
             "num_gpu": settings.OLLAMA_NUM_GPU,
@@ -1733,7 +1739,10 @@ async def call_ollama_stream(prompt: str, model: Optional[str] = None, num_predi
                     if chunk:
                         try:
                             data = json.loads(chunk)
-                            yield data.get("message", {}).get("content", "")
+                            # /api/generate returns {"response": "token", "done": false}
+                            token = data.get("response", "")
+                            if token:
+                                yield token
                             if data.get("done", False):
                                 break
                         except Exception as e:

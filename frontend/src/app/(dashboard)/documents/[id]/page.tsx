@@ -9,8 +9,9 @@ import {
   ArrowLeft, Brain, Shield, FileText, Search, RefreshCw,
   AlertTriangle, Info, ChevronDown, ChevronUp,
   Send, MessageSquare, List, Loader2, Download, Mail,
-  Volume2, VolumeX, Clock, CheckCircle2, XCircle, Wallet
+  Volume2, VolumeX, Clock, CheckCircle2, XCircle, Wallet, RotateCcw
 } from 'lucide-react';
+import { useAuth } from '@/contexts/AuthContext';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import DocumentStatusBadge from '@/components/documents/DocumentStatusBadge';
@@ -475,6 +476,8 @@ const cleanSummaryFields = (summary: PolicySummary | null | undefined): PolicySu
 };
 
 export default function DocumentDetailPage() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
   const params = useParams();
   const docId = params.id as string;
   const router = useRouter();
@@ -603,7 +606,7 @@ export default function DocumentDetailPage() {
       };
 
       // 2. Generate the simple print HTML report template
-      const printHTML = generateSimplePrintHTML(docToPrint, selectedLanguage);
+      const printHTML = generateSimplePrintHTML(docToPrint as any, selectedLanguage);
 
       // 3. Create a temporary hidden iframe container
       const iframe = document.createElement('iframe');
@@ -756,6 +759,49 @@ export default function DocumentDetailPage() {
   const [isTranslating, setIsTranslating] = useState(false);
   const [speakingTab, setSpeakingTab] = useState<'summary' | 'fields' | 'risks' | 'checklist' | null>(null);
 
+  // TTS customization & word highlighting states
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [selectedVoiceName, setSelectedVoiceName] = useState<string>('');
+  const [ttsSentenceParts, setTtsSentenceParts] = useState({ before: '', word: '', after: '' });
+  const [speechRate, setSpeechRate] = useState(1.0);
+  const [currentSpokenCharIndex, setCurrentSpokenCharIndex] = useState<number>(-1);
+  const [isPaused, setIsPaused] = useState<boolean>(false);
+  const [savedSpeakIndex, setSavedSpeakIndex] = useState<number>(0);
+  const [lastSpokenText, setLastSpokenText] = useState('');
+  const [lastSpokenLang, setLastSpokenLang] = useState('');
+  const [lastSpokenOnStop, setLastSpokenOnStop] = useState<any>(null);
+
+  // Filter available voices based on active language prefix (en, hi, mr)
+  const filteredVoices = voices.filter(v => {
+    let langCode = 'en';
+    if (selectedLanguage === 'Hindi') langCode = 'hi';
+    else if (selectedLanguage === 'Marathi') langCode = 'mr';
+    return v.lang.toLowerCase().startsWith(langCode) || v.lang.toLowerCase().includes(langCode + '_');
+  });
+
+  // Load and update speechSynthesis voices on mount
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.speechSynthesis) return;
+
+    const updateVoices = () => {
+      const allVoices = window.speechSynthesis.getVoices();
+      setVoices(allVoices);
+      
+      const storedPref = localStorage.getItem('health_care_system_voice');
+      if (storedPref && allVoices.some(v => v.name === storedPref)) {
+        setSelectedVoiceName(storedPref);
+      } else if (allVoices.length > 0) {
+        const defaultVoice = allVoices.find(v => v.default) || allVoices[0];
+        setSelectedVoiceName(defaultVoice.name);
+      }
+    };
+
+    updateVoices();
+    if (window.speechSynthesis.onvoiceschanged !== undefined) {
+      window.speechSynthesis.onvoiceschanged = updateVoices;
+    }
+  }, []);
+
   const safeTranslate = async (text: string | undefined, lang: string) => {
     if (!text || !text.trim()) return { translated_text: '' };
     try {
@@ -775,35 +821,46 @@ export default function DocumentDetailPage() {
     try {
       const summary = doc.summary;
       const summaryPromises = summary ? [
-        safeTranslate(summary.summary_text, lang),
-        safeTranslate(summary.coverage_summary, lang),
-        safeTranslate(summary.exclusions_summary, lang),
-        safeTranslate(summary.waiting_period_summary, lang),
-        safeTranslate(summary.premium_summary, lang),
-      ] : Array(5).fill(Promise.resolve({ translated_text: '' }));
+        () => safeTranslate(summary.summary_text, lang),
+        () => safeTranslate(summary.coverage_summary, lang),
+        () => safeTranslate(summary.exclusions_summary, lang),
+        () => safeTranslate(summary.waiting_period_summary, lang),
+        () => safeTranslate(summary.premium_summary, lang),
+      ] : Array(5).fill(() => Promise.resolve({ translated_text: '' }));
 
       const fieldsPromises = (doc.extracted_fields || []).flatMap(f => [
-        safeTranslate(f.field_name, lang),
-        safeTranslate(f.field_value, lang),
+        () => safeTranslate(f.field_name, lang),
+        () => safeTranslate(f.field_value, lang),
       ]);
 
       const risksPromises = (doc.risk_analyses || []).flatMap(r => [
-        safeTranslate(r.clause_text, lang),
-        safeTranslate(r.explanation, lang),
-        safeTranslate(r.recommendation, lang),
+        () => safeTranslate(r.clause_text, lang),
+        () => safeTranslate(r.explanation, lang),
+        () => safeTranslate(r.recommendation, lang),
       ]);
 
       const checklistPromises = checklistData ? [
-        safeTranslate(checklistData.estimated_approval_days, lang),
+        () => safeTranslate(checklistData.estimated_approval_days, lang),
         ...checklistData.checklist.flatMap((item: any) => [
-          safeTranslate(item.document_name, lang),
-          safeTranslate(item.importance, lang),
-          safeTranslate(item.description, lang)
+          () => safeTranslate(item.document_name, lang),
+          () => safeTranslate(item.importance, lang),
+          () => safeTranslate(item.description, lang)
         ]),
-        ...checklistData.claim_steps.map((step: string) => safeTranslate(step, lang))
+        ...checklistData.claim_steps.map((step: string) => () => safeTranslate(step, lang))
       ] : [];
 
-      const results = await Promise.all([
+      // Run translation tasks sequentially with a small delay to avoid network rate limits / Axios timeouts
+      const runSequentially = async (tasks: (() => Promise<any>)[]) => {
+        const results = [];
+        for (const task of tasks) {
+          const res = await task();
+          results.push(res);
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        return results;
+      };
+
+      const results = await runSequentially([
         ...summaryPromises,
         ...fieldsPromises,
         ...risksPromises,
@@ -883,47 +940,116 @@ export default function DocumentDetailPage() {
     }
   };
 
-  const speakText = (text: string, lang: string, onStop?: () => void) => {
+  const restartSpeechWithSettings = (newVoiceName: string, newRate: number) => {
+    if (!speakingTab || !lastSpokenText) return;
+    if (typeof window === 'undefined' || !window.speechSynthesis) return;
+
+    if (!isPaused) {
+      window.speechSynthesis.cancel();
+      setTimeout(() => {
+        const textToSpeak = savedSpeakIndex > 0 ? lastSpokenText.substring(savedSpeakIndex) : lastSpokenText;
+        const utterance = new SpeechSynthesisUtterance(textToSpeak);
+        let langCode = 'en-US';
+        if (lastSpokenLang === 'Hindi') langCode = 'hi-IN';
+        else if (lastSpokenLang === 'Marathi') langCode = 'mr-IN';
+        utterance.lang = langCode;
+        
+        const chosenVoice = voices.find(v => v.name === newVoiceName);
+        if (chosenVoice) utterance.voice = chosenVoice;
+        utterance.rate = newRate;
+        utterance.pitch = 1.0;
+
+        utterance.onboundary = (event) => {
+          if (event.name === 'word') {
+            const charIndex = savedSpeakIndex + event.charIndex;
+            setCurrentSpokenCharIndex(charIndex);
+            setSavedSpeakIndex(charIndex);
+          }
+        };
+
+        const stopHandler = () => {
+          setCurrentSpokenCharIndex(-1);
+          setSavedSpeakIndex(0);
+          setIsPaused(false);
+          setSpeakingTab(null);
+          if (lastSpokenOnStop) lastSpokenOnStop();
+        };
+        utterance.onend = stopHandler;
+        utterance.onerror = (e) => {
+          console.warn("SpeechSynthesis error:", e.error);
+          if (e.error !== 'interrupted' && e.error !== 'canceled') {
+            stopHandler();
+          }
+        };
+        window.speechSynthesis.speak(utterance);
+      }, 50);
+    }
+  };
+
+  const speakText = (text: string, lang: string, startOffset = 0, onStop?: () => void) => {
     if (typeof window === 'undefined' || !window.speechSynthesis) return;
     window.speechSynthesis.cancel();
     if (!text) return;
-    const utterance = new SpeechSynthesisUtterance(text);
+
+    setLastSpokenText(text);
+    setLastSpokenLang(lang);
+    setLastSpokenOnStop(() => onStop);
+
+    const textToSpeak = startOffset > 0 ? text.substring(startOffset) : text;
+    const utterance = new SpeechSynthesisUtterance(textToSpeak);
     let langCode = 'en-US';
     if (lang === 'Hindi') langCode = 'hi-IN';
     else if (lang === 'Marathi') langCode = 'mr-IN';
     utterance.lang = langCode;
-    const voices = window.speechSynthesis.getVoices();
-    const matchingVoice = voices.find(v => v.lang.startsWith(langCode) || v.lang.includes(langCode.replace('-', '_')));
-    if (matchingVoice) utterance.voice = matchingVoice;
-    utterance.rate = 1.0;
+
+    if (selectedVoiceName) {
+      const chosenVoice = voices.find(v => v.name === selectedVoiceName);
+      if (chosenVoice) utterance.voice = chosenVoice;
+    } else {
+      const matchingVoice = voices.find(v => v.lang.startsWith(langCode) || v.lang.includes(langCode.replace('-', '_')));
+      if (matchingVoice) utterance.voice = matchingVoice;
+    }
+
+    utterance.rate = speechRate;
     utterance.pitch = 1.0;
-    if (onStop) { utterance.onend = onStop; utterance.onerror = onStop; }
+
+    utterance.onboundary = (event) => {
+      if (event.name === 'word') {
+        const charIndex = startOffset + event.charIndex;
+        setCurrentSpokenCharIndex(charIndex);
+        setSavedSpeakIndex(charIndex);
+      }
+    };
+
+    const stopHandler = () => {
+      setCurrentSpokenCharIndex(-1);
+      setSavedSpeakIndex(0);
+      setIsPaused(false);
+      setSpeakingTab(null);
+      if (onStop) onStop();
+    };
+
+    utterance.onend = () => {
+      setCurrentSpokenCharIndex(-1);
+      setSavedSpeakIndex(0);
+      setIsPaused(false);
+      setSpeakingTab(null);
+      if (onStop) onStop();
+    };
+
+    utterance.onerror = (e) => {
+      console.warn("SpeechSynthesis error:", e.error);
+      if (e.error !== 'interrupted' && e.error !== 'canceled') {
+        stopHandler();
+      }
+    };
+
     window.speechSynthesis.speak(utterance);
   };
 
   const getSummarySpeakText = (displayedSummary: any, lang: string) => {
     if (!displayedSummary) return '';
-    let text = '';
-    if (lang === 'Hindi') {
-      text += `दस्तावेज़ का सारांश: ${displayedSummary.summary_text || ''}\n\n`;
-      if (displayedSummary.coverage_summary) text += `कवरेज और लाभ: ${displayedSummary.coverage_summary}\n\n`;
-      if (displayedSummary.exclusions_summary) text += `बहिष्करण और सीमाएं: ${displayedSummary.exclusions_summary}\n\n`;
-      if (displayedSummary.waiting_period_summary) text += `प्रतीक्षा अवधि: ${displayedSummary.waiting_period_summary}\n\n`;
-      if (displayedSummary.premium_summary) text += `प्रीमियम और शुल्क: ${displayedSummary.premium_summary}\n\n`;
-    } else if (lang === 'Marathi') {
-      text += `दस्तएवजाचा सारांश: ${displayedSummary.summary_text || ''}\n\n`;
-      if (displayedSummary.coverage_summary) text += `कव्हरेज आणि फायदे: ${displayedSummary.coverage_summary}\n\n`;
-      if (displayedSummary.exclusions_summary) text += `वगळलेले मुद्दे आणि मर्यादा: ${displayedSummary.exclusions_summary}\n\n`;
-      if (displayedSummary.waiting_period_summary) text += `प्रतीक्षा कालावधी: ${displayedSummary.waiting_period_summary}\n\n`;
-      if (displayedSummary.premium_summary) text += `प्रीमियम आणि शुल्क: ${displayedSummary.premium_summary}\n\n`;
-    } else {
-      text += `Document Summary: ${displayedSummary.summary_text || ''}\n\n`;
-      if (displayedSummary.coverage_summary) text += `Coverage and Benefits: ${displayedSummary.coverage_summary}\n\n`;
-      if (displayedSummary.exclusions_summary) text += `Exclusions and Limits: ${displayedSummary.exclusions_summary}\n\n`;
-      if (displayedSummary.waiting_period_summary) text += `Waiting Periods: ${displayedSummary.waiting_period_summary}\n\n`;
-      if (displayedSummary.premium_summary) text += `Premium and Charges: ${displayedSummary.premium_summary}\n\n`;
-    }
-    return text;
+    return displayedSummary.summary_text || '';
   };
 
   const getFieldsSpeakText = (fields: any[], lang: string) => {
@@ -1015,11 +1141,24 @@ export default function DocumentDetailPage() {
 
   const handlePlaySpeech = (tab: 'summary' | 'fields' | 'risks' | 'checklist') => {
     if (!doc) return;
-    if (speakingTab === tab) {
-      if (typeof window !== 'undefined' && window.speechSynthesis) window.speechSynthesis.cancel();
-      setSpeakingTab(null);
+    
+    // 1. If currently speaking this tab and NOT paused, then Pause it!
+    if (speakingTab === tab && !isPaused) {
+      if (typeof window !== 'undefined' && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
+      setIsPaused(true);
       return;
     }
+    
+    // 2. If currently speaking this tab and IS paused, then Resume it!
+    if (speakingTab === tab && isPaused) {
+      setIsPaused(false);
+      speakText(lastSpokenText, lastSpokenLang, savedSpeakIndex, () => { setSpeakingTab(null); });
+      return;
+    }
+
+    // 3. Otherwise, start speaking from the beginning!
     let textToSpeak = '';
     if (tab === 'summary') {
       textToSpeak = getSummarySpeakText(displayedSummary, selectedLanguage);
@@ -1040,8 +1179,19 @@ export default function DocumentDetailPage() {
       textToSpeak = getChecklistSpeakText(currentChecklist, selectedLanguage);
     }
     if (!textToSpeak) return;
+
     setSpeakingTab(tab);
-    speakText(textToSpeak, selectedLanguage, () => { setSpeakingTab(null); });
+    setIsPaused(false);
+    setSavedSpeakIndex(0);
+    speakText(textToSpeak, selectedLanguage, 0, () => { setSpeakingTab(null); });
+  };
+
+  const handleRestartSpeech = (tab: 'summary' | 'fields' | 'risks' | 'checklist') => {
+    if (!lastSpokenText) return;
+    setIsPaused(false);
+    setSavedSpeakIndex(0);
+    setCurrentSpokenCharIndex(-1);
+    speakText(lastSpokenText, lastSpokenLang, 0, () => { setSpeakingTab(null); });
   };
 
   useEffect(() => {
@@ -1524,9 +1674,7 @@ export default function DocumentDetailPage() {
             </div>
           </div>
         </div>
-        <button onClick={() => refetch()} className="btn-secondary p-2">
-          <RefreshCw className="w-4 h-4" />
-        </button>
+
       </div>
 
       {/* Processing Banner */}
@@ -1840,17 +1988,24 @@ export default function DocumentDetailPage() {
                       {/* Text to Speech Button */}
                       <button
                         onClick={() => handlePlaySpeech('summary')}
-                        className={`btn-secondary text-xs py-2 px-3 flex items-center gap-1.5 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer border ${speakingTab === 'summary'
+                        className={`btn-secondary text-xs py-2 px-3 flex items-center gap-1.5 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer border ${speakingTab === 'summary' && !isPaused
                           ? 'border-red-500/30 text-red-400 bg-red-500/5'
                           : 'border-blue-500/30 text-blue-400'
                           }`}
-                        title={speakingTab === 'summary' ? 'Stop read aloud' : 'Read aloud summary'}
+                        title={speakingTab === 'summary' ? (isPaused ? 'Resume read aloud' : 'Pause read aloud') : 'Read aloud summary'}
                       >
                         {speakingTab === 'summary' ? (
-                          <>
-                            <VolumeX className="w-3.5 h-3.5 animate-pulse" />
-                            <span>Stop Speech</span>
-                          </>
+                          isPaused ? (
+                            <>
+                              <Volume2 className="w-3.5 h-3.5" />
+                              <span>Resume</span>
+                            </>
+                          ) : (
+                            <>
+                              <VolumeX className="w-3.5 h-3.5 animate-pulse" />
+                              <span>Pause</span>
+                            </>
+                          )
                         ) : (
                           <>
                             <Volume2 className="w-3.5 h-3.5" />
@@ -1859,18 +2014,72 @@ export default function DocumentDetailPage() {
                         )}
                       </button>
 
+                      {/* Restart Button */}
+                      {speakingTab === 'summary' && (
+                        <button
+                          onClick={() => handleRestartSpeech('summary')}
+                          className="btn-secondary text-xs py-2 px-2.5 flex items-center gap-1 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer border border-blue-500/30 text-blue-400 rounded-xl"
+                          title="Restart from beginning"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          <span>Restart</span>
+                        </button>
+                      )}
+
                       {/* Language Selector */}
-                      <div className="flex items-center gap-1.5 bg-slate-950/60 border border-slate-700/40 rounded-xl px-2.5 py-1.5 mr-2">
+                      <div className="flex items-center gap-1.5 bg-[#0c1322] border border-slate-700/40 rounded-xl px-2.5 py-1.5">
                         <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Language:</span>
                         <select
                           value={selectedLanguage}
                           onChange={(e) => handleLanguageChange(e.target.value)}
-                          className="glass-card border-none text-xs text-white focus:outline-none cursor-pointer"
+                          className="bg-transparent border-none text-xs text-white focus:outline-none cursor-pointer"
                         >
-                          <option value="English">English</option>
-                          <option value="Hindi">Hindi (हिंदी)</option>
-                          <option value="Marathi">Marathi (मराठी)</option>
+                          <option value="English" className="bg-[#0b0f19]">English</option>
+                          <option value="Hindi" className="bg-[#0b0f19]">Hindi (हिंदी)</option>
+                          <option value="Marathi" className="bg-[#0b0f19]">Marathi (मराठी)</option>
                         </select>
+                      </div>
+
+                      {/* Voice Selector (Admin Only) */}
+                      {isAdmin && (
+                        <div className="flex items-center gap-1.5 bg-[#0c1322] border border-slate-700/40 rounded-xl px-2.5 py-1.5">
+                          <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Voice:</span>
+                          <select
+                            value={selectedVoiceName}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setSelectedVoiceName(val);
+                              localStorage.setItem('health_care_system_voice', val);
+                              restartSpeechWithSettings(val, speechRate);
+                            }}
+                            className="bg-transparent border-none text-xs text-white focus:outline-none cursor-pointer max-w-[130px] md:max-w-[160px] truncate"
+                          >
+                            {(filteredVoices.length > 0 ? filteredVoices : voices).map(v => (
+                              <option key={v.name} value={v.name} className="bg-[#0b0f19]">
+                                {v.name.replace(/Microsoft|Google|Natural/g, '').trim()}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
+                      {/* Speed Slider */}
+                      <div className="flex items-center gap-1.5 bg-[#0c1322] border border-slate-700/40 rounded-xl px-2.5 py-1.5 mr-2">
+                        <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Speed:</span>
+                        <input
+                          type="range"
+                          min="0.5"
+                          max="2.0"
+                          step="0.1"
+                          value={speechRate}
+                          onChange={(e) => {
+                            const rate = parseFloat(e.target.value);
+                            setSpeechRate(rate);
+                            restartSpeechWithSettings(selectedVoiceName, rate);
+                          }}
+                          className="w-14 md:w-20 h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                        />
+                        <span className="font-semibold text-slate-300 text-[10px]">{speechRate.toFixed(1)}x</span>
                       </div>
 
                       {/* Dropdown Container */}
@@ -1971,15 +2180,55 @@ export default function DocumentDetailPage() {
                     ) : null}
 
                     {/* Final persisted summary — shown after stream completes and DB is updated */}
-                    {!isStreaming && displayedSummary?.summary_text && (
-                      <div className="space-y-4">
-                        {(displayedSummary.summary_text || '').split('\n\n').filter(Boolean).map((para: string, i: number) => (
-                          <p key={i} className="leading-7 text-slate-200 border-l-2 border-blue-500/20 pl-3 mb-1">
-                            {para}
-                          </p>
-                        ))}
-                      </div>
-                    )}
+                    {!isStreaming && displayedSummary?.summary_text && (() => {
+                      const paragraphs = (displayedSummary.summary_text || '').split('\n\n').filter(Boolean);
+                      let accumulatedOffset = 0;
+                      const paraInfos = paragraphs.map(p => {
+                        const info = {
+                          text: p,
+                          start: accumulatedOffset,
+                          end: accumulatedOffset + p.length
+                        };
+                        accumulatedOffset += p.length + 2;
+                        return info;
+                      });
+
+                      return (
+                        <div className="space-y-4">
+                          {paraInfos.map((paraInfo, i) => {
+                            const isSpeakingThisPara = speakingTab === 'summary' &&
+                              currentSpokenCharIndex >= paraInfo.start &&
+                              currentSpokenCharIndex < paraInfo.end;
+
+                            if (isSpeakingThisPara) {
+                              const localCharIndex = currentSpokenCharIndex - paraInfo.start;
+                              const textBefore = paraInfo.text.substring(0, localCharIndex);
+                              const textAfter = paraInfo.text.substring(localCharIndex);
+                              const wordMatch = textAfter.match(/^[\w\d\u0900-\u097F']+/);
+                              if (wordMatch) {
+                                const word = wordMatch[0];
+                                const textAfterWord = textAfter.substring(word.length);
+                                return (
+                                  <p key={i} className="leading-7 text-slate-200 border-l-2 border-blue-500 pl-3 mb-1">
+                                    <span className="text-slate-400">{textBefore}</span>
+                                    <span className="bg-yellow-400/25 text-yellow-300 font-extrabold px-1.5 py-0.5 rounded border border-yellow-500/40 shadow-[0_0_10px_rgba(250,204,21,0.3)] animate-pulse mx-0.5">
+                                      {word}
+                                    </span>
+                                    <span className="text-slate-200">{textAfterWord}</span>
+                                  </p>
+                                );
+                              }
+                            }
+
+                            return (
+                              <p key={i} className="leading-7 text-slate-200 border-l-2 border-blue-500/20 pl-3 mb-1">
+                                {paraInfo.text}
+                              </p>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
 
                     {/* Error state */}
                     {streamError && !isStreaming && !displayedSummary?.summary_text && (
