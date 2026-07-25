@@ -31,9 +31,16 @@ function parseSources(raw: string): string[] {
 }
 
 // ── Markdown-Style Renderer ───────────────────────────────────────────────────
-function FormattedMessage({ content }: { content: string }) {
+function FormattedMessage({ content, isLatestEmpty, isStreaming }: { content: string; isLatestEmpty?: boolean; isStreaming?: boolean }) {
   const cleaned = cleanResponse(content);
-  if (!cleaned) return null;
+  if (!cleaned) {
+    if (isLatestEmpty) {
+      return (
+        <span className="inline-block w-2.5 h-4 bg-teal-400 animate-pulse rounded-sm align-middle" />
+      );
+    }
+    return null;
+  }
 
   const lines = cleaned.split('\n');
 
@@ -62,12 +69,20 @@ function FormattedMessage({ content }: { content: string }) {
     if (bulletBuffer.length > 0) {
       elements.push(
         <ul key={`ul-${i}`} className="list-none space-y-1.5 my-2 pl-1">
-          {bulletBuffer.map((item, idx) => (
-            <li key={idx} className="flex items-start gap-2 text-slate-200">
-              <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-teal-400 flex-shrink-0" />
-              <span>{renderInline(item)}</span>
-            </li>
-          ))}
+          {bulletBuffer.map((item, idx) => {
+            const isLastOfStream = isStreaming && idx === bulletBuffer.length - 1 && i === lines.length;
+            return (
+              <li key={idx} className="flex items-start gap-2 text-slate-200">
+                <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-teal-400 flex-shrink-0" />
+                <span>
+                  {renderInline(item)}
+                  {isLastOfStream && (
+                    <span className="inline-block w-1.5 h-3.5 bg-teal-400 ml-1 align-middle animate-pulse" />
+                  )}
+                </span>
+              </li>
+            );
+          })}
         </ul>
       );
       bulletBuffer = [];
@@ -78,12 +93,20 @@ function FormattedMessage({ content }: { content: string }) {
     if (orderedBuffer.length > 0) {
       elements.push(
         <ol key={`ol-${i}`} className="space-y-1.5 my-2 pl-1">
-          {orderedBuffer.map((item, idx) => (
-            <li key={idx} className="flex items-start gap-2 text-slate-200">
-              <span className="font-semibold text-teal-400 flex-shrink-0 text-xs mt-0.5">{item.num}.</span>
-              <span>{renderInline(item.text)}</span>
-            </li>
-          ))}
+          {orderedBuffer.map((item, idx) => {
+            const isLastOfStream = isStreaming && idx === orderedBuffer.length - 1 && i === lines.length;
+            return (
+              <li key={idx} className="flex items-start gap-2 text-slate-200">
+                <span className="font-semibold text-teal-400 flex-shrink-0 text-xs mt-0.5">{item.num}.</span>
+                <span>
+                  {renderInline(item.text)}
+                  {isLastOfStream && (
+                    <span className="inline-block w-1.5 h-3.5 bg-teal-400 ml-1 align-middle animate-pulse" />
+                  )}
+                </span>
+              </li>
+            );
+          })}
         </ol>
       );
       orderedBuffer = [];
@@ -109,9 +132,35 @@ function FormattedMessage({ content }: { content: string }) {
     }
 
     const h3Match = trimmed.match(/^###\s+(.+)/);
-    if (h3Match) { flushBullets(); flushOrdered(); elements.push(<p key={i} className="font-semibold text-teal-300 mt-3 mb-1 text-sm">{h3Match[1]}</p>); continue; }
+    if (h3Match) {
+      flushBullets();
+      flushOrdered();
+      const isLastOfStream = isStreaming && i === lines.length - 1;
+      elements.push(
+        <p key={i} className="font-semibold text-teal-300 mt-3 mb-1 text-sm">
+          {h3Match[1]}
+          {isLastOfStream && (
+            <span className="inline-block w-1.5 h-3.5 bg-teal-400 ml-1 align-middle animate-pulse" />
+          )}
+        </p>
+      );
+      continue;
+    }
     const h2Match = trimmed.match(/^##\s+(.+)/);
-    if (h2Match) { flushBullets(); flushOrdered(); elements.push(<p key={i} className="font-bold text-white mt-3 mb-1">{h2Match[1]}</p>); continue; }
+    if (h2Match) {
+      flushBullets();
+      flushOrdered();
+      const isLastOfStream = isStreaming && i === lines.length - 1;
+      elements.push(
+        <p key={i} className="font-bold text-white mt-3 mb-1">
+          {h2Match[1]}
+          {isLastOfStream && (
+            <span className="inline-block w-1.5 h-3.5 bg-teal-400 ml-1 align-middle animate-pulse" />
+          )}
+        </p>
+      );
+      continue;
+    }
 
     if (trimmed === '') {
       flushBullets();
@@ -122,9 +171,13 @@ function FormattedMessage({ content }: { content: string }) {
 
     flushBullets();
     flushOrdered();
+    const isLastOfStream = isStreaming && i === lines.length - 1;
     elements.push(
       <p key={i} className="text-slate-200 leading-relaxed">
         {renderInline(trimmed)}
+        {isLastOfStream && (
+          <span className="inline-block w-1.5 h-3.5 bg-teal-400 ml-1 align-middle animate-pulse" />
+        )}
       </p>
     );
   }
@@ -334,6 +387,7 @@ export default function ChatPage() {
             };
             return updated;
           });
+          messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
         }
       }
 
@@ -641,7 +695,11 @@ export default function ChatPage() {
                           <p className="whitespace-pre-wrap">{message.content}</p>
                         ) : (
                           <>
-                            <FormattedMessage content={message.content} />
+                            <FormattedMessage 
+                              content={message.content} 
+                              isLatestEmpty={!message.content && index === messages.length - 1}
+                              isStreaming={isSending && index === messages.length - 1}
+                            />
                             {message.sources && message.sources.length > 0 && (
                               <SourceBadges sources={message.sources} />
                             )}

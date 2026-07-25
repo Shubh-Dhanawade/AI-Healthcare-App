@@ -385,77 +385,81 @@ async def search_vector_store(
     if not policies:
         return []
         
-    # Generate search-prefixed query embedding for nomic-embed-text
-    query_emb = await generate_single_embedding(f"search_query: {query}")
-    
-    # ── 1. PRIMARY SEARCH: Qdrant ──
-    retrieved = await search_qdrant_store(query_emb, policies, top_k=top_k * 2)
-    if retrieved:
-        logger.info(f"🟢 [HYBRID-RAG] Retrieved {len(retrieved)} matching chunks from Qdrant")
-    
-    # ── 2. SECONDARY SEARCH: pgvector ──
-    if not retrieved:
-        retrieved = await search_pgvector_store(db, query_emb, policies, top_k=top_k * 2)
+    try:
+        # Generate search-prefixed query embedding for nomic-embed-text
+        query_emb = await generate_single_embedding(f"search_query: {query}")
+        
+        # ── 1. PRIMARY SEARCH: Qdrant ──
+        retrieved = await search_qdrant_store(query_emb, policies, top_k=top_k * 2)
         if retrieved:
-            logger.info(f"🔵 [HYBRID-RAG] Retrieved {len(retrieved)} matching chunks from pgvector (PostgreSQL)")
+            logger.info(f"🟢 [HYBRID-RAG] Retrieved {len(retrieved)} matching chunks from Qdrant")
+        
+        # ── 2. SECONDARY SEARCH: pgvector ──
+        if not retrieved:
+            retrieved = await search_pgvector_store(db, query_emb, policies, top_k=top_k * 2)
+            if retrieved:
+                logger.info(f"🔵 [HYBRID-RAG] Retrieved {len(retrieved)} matching chunks from pgvector (PostgreSQL)")
 
-    # ── 3. FALLBACK SEARCH: Local FAISS Index files ──
-    if not retrieved:
-        logger.warning("🟡 [HYBRID-RAG] Qdrant and pgvector unavailable. Running local FAISS fallback search.")
-        query_vec = np.array([query_emb]).astype("float32")
-        faiss.normalize_L2(query_vec)
-        
-        for policy in policies:
-            doc_id = policy.get("id")
-            filename = policy.get("filename", "Policy")
+        # ── 3. FALLBACK SEARCH: Local FAISS Index files ──
+        if not retrieved:
+            logger.warning("🟡 [HYBRID-RAG] Qdrant and pgvector unavailable. Running local FAISS fallback search.")
+            query_vec = np.array([query_emb]).astype("float32")
+            faiss.normalize_L2(query_vec)
             
-            result = await db.execute(select(Document).where(Document.id == doc_id))
-            doc = result.scalar_one_or_none()
-            if not doc:
-                continue
+            for policy in policies:
+                doc_id = policy.get("id")
+                filename = policy.get("filename", "Policy")
                 
-            try:
-                index = await load_faiss_index(db, doc.user_id, doc_id)
-                fetch_k = min(top_k * 2, index.ntotal)
-                if fetch_k <= 0:
+                result = await db.execute(select(Document).where(Document.id == doc_id))
+                doc = result.scalar_one_or_none()
+                if not doc:
                     continue
                     
-                distances, indices = index.search(query_vec, fetch_k)
-                chunk_indices = [int(idx) for idx in indices[0] if idx >= 0]
-                if not chunk_indices:
-                    continue
+                try:
+                    index = await load_faiss_index(db, doc.user_id, doc_id)
+                    fetch_k = min(top_k * 2, index.ntotal)
+                    if fetch_k <= 0:
+                        continue
+                        
+                    distances, indices = index.search(query_vec, fetch_k)
+                    chunk_indices = [int(idx) for idx in indices[0] if idx >= 0]
+                    if not chunk_indices:
+                        continue
+                        
+                    chunk_res = await db.execute(
+                        select(DocumentChunk)
+                        .where(DocumentChunk.document_id == doc_id, DocumentChunk.chunk_index.in_(chunk_indices))
+                    )
+                    db_chunks = chunk_res.scalars().all()
+                    chunk_map = {c.chunk_index: c.text_content for c in db_chunks}
                     
-                chunk_res = await db.execute(
-                    select(DocumentChunk)
-                    .where(DocumentChunk.document_id == doc_id, DocumentChunk.chunk_index.in_(chunk_indices))
-                )
-                db_chunks = chunk_res.scalars().all()
-                chunk_map = {c.chunk_index: c.text_content for c in db_chunks}
-                
-                for score, chunk_idx in zip(distances[0], indices[0]):
-                    chunk_idx = int(chunk_idx)
-                    if chunk_idx in chunk_map:
-                        chunk_text_content = chunk_map[chunk_idx]
-                        page_num = 1
-                        match = re.search(r"\[Page (\d+)\]", chunk_text_content)
-                        if match:
-                            page_num = int(match.group(1))
-                            
-                        retrieved.append({
-                            "text": chunk_text_content,
-                            "source": filename,
-                            "page": page_num,
-                            "score": float(score),
-                            "raw_score": float(score),
-                            "document_id": doc_id,
-                            "chunk_id": f"faiss_{chunk_idx}"
-                        })
-            except Exception as fe:
-                logger.error(f"FAISS fallback search failed for {doc_id}: {fe}")
-                
-    # ── 4. Apply Keyword Boost Re-ranking ──
-    for hit in retrieved:
-        hit["score"] = _keyword_boost_score(hit["text"], query, hit["raw_score"])
-        
-    retrieved.sort(key=lambda x: x["score"], reverse=True)
-    return retrieved[:top_k]
+                    for score, chunk_idx in zip(distances[0], indices[0]):
+                        chunk_idx = int(chunk_idx)
+                        if chunk_idx in chunk_map:
+                            chunk_text_content = chunk_map[chunk_idx]
+                            page_num = 1
+                            match = re.search(r"\[Page (\d+)\]", chunk_text_content)
+                            if match:
+                                page_num = int(match.group(1))
+                                
+                            retrieved.append({
+                                "text": chunk_text_content,
+                                "source": filename,
+                                "page": page_num,
+                                "score": float(score),
+                                "raw_score": float(score),
+                                "document_id": doc_id,
+                                "chunk_id": f"faiss_{chunk_idx}"
+                            })
+                except Exception as fe:
+                    logger.error(f"FAISS fallback search failed for {doc_id}: {fe}")
+                    
+        # ── 4. Apply Keyword Boost Re-ranking ──
+        for hit in retrieved:
+            hit["score"] = _keyword_boost_score(hit["text"], query, hit["raw_score"])
+            
+        retrieved.sort(key=lambda x: x["score"], reverse=True)
+        return retrieved[:top_k]
+    except Exception as search_err:
+        logger.warning(f"search_vector_store encountered error (falling back to text search): {search_err}")
+        return []

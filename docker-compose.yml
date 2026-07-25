@@ -35,7 +35,9 @@ services:
       ACCESS_TOKEN_EXPIRE_MINUTES: 60
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_MODEL: hf.co/kkross/gemma-3-4b-cord19-finetuned-new:latest
-      OLLAMA_NUM_GPU: 999
+      # -1 = Ollama auto-fit: loads as many layers as possible into VRAM without GPU OOM
+      OLLAMA_NUM_GPU: -1
+      OLLAMA_KEEP_ALIVE: -1
       QDRANT_HOST: qdrant
       UPLOAD_DIR: /app/uploads
       MAX_FILE_SIZE_MB: 50

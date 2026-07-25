@@ -3,6 +3,11 @@ Ollama Client Service
 Manages HTTP connection pooling and optimized parameters for fast local LLM inference.
 GPU-accelerated: passes num_gpu=999 to all requests so Ollama offloads all layers
 to the detected Vulkan/ROCm device (AMD Radeon RX 6500M).
+
+NOTE: Uses /api/generate (completion endpoint) instead of /api/chat because the
+fine-tuned model hf.co/kkross/gemma-3-4b-cord19-finetuned-new:latest only exposes
+"completion" capability, not "chat" format. /api/generate accepts a plain `prompt`
+string and returns `response`, which is compatible with all GGUF completion models.
 """
 
 import json
@@ -52,6 +57,7 @@ async def warmup_model(model: Optional[str] = None) -> None:
     """Keep the model resident in VRAM by sending a dummy fast-completion prompt.
     Uses keep_alive=-1 so the model stays loaded indefinitely — eliminates the
     ~20s cold-start penalty that causes streaming timeouts during first chat query.
+    Uses /api/generate which is supported by all GGUF completion models.
     """
     model_name = model or settings.OLLAMA_MODEL
     logger.info(f"🔥 Warming up model {model_name}...")
@@ -59,19 +65,22 @@ async def warmup_model(model: Optional[str] = None) -> None:
         client = get_httpx_client()
         payload = {
             "model": model_name,
-            "messages": [{"role": "user", "content": "hi"}],
+            "prompt": "hi",
             "stream": False,
             # keep_alive=-1: model stays loaded indefinitely, no idle eviction.
             "keep_alive": -1,
             "options": {
                 "num_predict": 1,
-                "num_ctx": 128,
+                # IMPORTANT: Use num_ctx=2048 here — same as all inference calls.
+                # If warmup uses a different num_ctx (e.g. 128), Ollama reloads the
+                # model on every actual inference call (15-20s cold-start per request).
+                "num_ctx": 2048,
                 "temperature": 0,
                 "num_thread": settings.OLLAMA_NUM_THREAD,
                 "num_gpu": settings.OLLAMA_NUM_GPU,
             },
         }
-        await client.post("/api/chat", json=payload)
+        await client.post("/api/generate", json=payload)
         logger.info("✅ Ollama model is now loaded and permanently resident in VRAM.")
     except Exception as e:
         logger.warning(f"Ollama model warmup skipped: {e}")
@@ -123,15 +132,22 @@ async def call_ollama(
     prompt: str,
     model: Optional[str] = None,
     num_predict: int = 512,
-    num_ctx: int = 4096,
+    num_ctx: int = 2048,
 ) -> str:
-    """Call Ollama chat API synchronously with dynamic CPU/GPU layer allocation."""
+    """Call Ollama /api/generate endpoint synchronously with dynamic CPU/GPU layer allocation.
+    Uses /api/generate (completion) which works with all GGUF models including
+    fine-tuned models that only support 'completion' capability, not 'chat'.
+    
+    num_ctx capped at 2048: AMD RX 6500M has 4GB VRAM; model weights use ~3443 MiB,
+    leaving ~637 MiB for KV cache. At num_ctx=2048 the KV cache is ~272 MiB (safe).
+    At num_ctx=4096 the KV cache is ~544 MiB causing VRAM OOM (HTTP 500).
+    """
     client = get_httpx_client()
     model_name = model or settings.OLLAMA_MODEL
     
     payload = {
         "model": model_name,
-        "messages": [{"role": "user", "content": prompt}],
+        "prompt": prompt,
         "stream": False,
         "keep_alive": parse_keep_alive(settings.OLLAMA_KEEP_ALIVE),
         "options": {
@@ -146,22 +162,26 @@ async def call_ollama(
     }
     
     logger.debug(f"Ollama Call: {model_name} (predict={num_predict}, ctx={num_ctx})")
-    response = await client.post("/api/chat", json=payload)
+    response = await client.post("/api/generate", json=payload)
     response.raise_for_status()
-    return response.json().get("message", {}).get("content", "").strip()
+    return response.json().get("response", "").strip()
 
 async def call_ollama_stream(
     prompt: str,
     model: Optional[str] = None,
     num_predict: int = 450,
-    num_ctx: int = 4096,
+    num_ctx: int = 2048,
 ) -> AsyncGenerator[str, None]:
-    """Generate streaming tokens from Ollama with GPU-accelerated speed optimizations.
+    """Generate streaming tokens from Ollama /api/generate with GPU-accelerated speed optimizations.
+    
+    Uses /api/generate instead of /api/chat because the fine-tuned model
+    hf.co/kkross/gemma-3-4b-cord19-finetuned-new:latest only supports 'completion'
+    capability. /api/generate returns streaming JSON with a 'response' field.
     
     Key settings:
-    - num_ctx=4096: ensures full policy context, structured DB data, and summaries fit without truncation
+    - num_ctx=2048: safe for AMD RX 6500M (4GB VRAM); model weights ~3443 MiB + KV ~272 MiB = ~3758 MiB total
     - num_predict=450: concise, complete policy responses
-    - num_gpu=999: forces all layers to GPU
+    - num_gpu=999: forces all layers to GPU (Ollama auto-adjusts to fit VRAM)
     - keep_alive=-1: keeps model permanently in VRAM after first load, avoids cold-start
     """
     client = get_httpx_client()
@@ -169,7 +189,7 @@ async def call_ollama_stream(
     
     payload = {
         "model": model_name,
-        "messages": [{"role": "user", "content": prompt}],
+        "prompt": prompt,
         "stream": True,
         # keep_alive=-1: model stays loaded in VRAM indefinitely after first use.
         # This prevents the ~20s cold-load penalty on every chat request after idle.
@@ -188,7 +208,7 @@ async def call_ollama_stream(
     logger.debug(f"Ollama Stream Call: {model_name} (predict={num_predict}, ctx={num_ctx})")
     
     # Use build_request + send with stream=True for async token-by-token streaming
-    req = client.build_request("POST", "/api/chat", json=payload)
+    req = client.build_request("POST", "/api/generate", json=payload)
     response = await client.send(req, stream=True)
     try:
         response.raise_for_status()
@@ -196,7 +216,8 @@ async def call_ollama_stream(
             if chunk:
                 try:
                     data = json.loads(chunk)
-                    token = data.get("message", {}).get("content", "")
+                    # /api/generate returns {"response": "token", "done": false}
+                    token = data.get("response", "")
                     if token:
                         yield token
                     if data.get("done", False):

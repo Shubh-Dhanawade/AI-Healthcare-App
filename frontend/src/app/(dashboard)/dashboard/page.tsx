@@ -76,7 +76,7 @@ export default function DashboardPage() {
         document_id: editingReminder.document_id,
         renewal_date: editRenewalDate ? new Date(editRenewalDate).toISOString() : undefined,
         premium_due_date: editPremiumDueDate ? new Date(editPremiumDueDate).toISOString() : undefined,
-        premium_amount: editPremiumAmount ? parseFloat(editPremiumAmount.replace(/[^\d.]/g, '')) : undefined,
+        premium_amount: editPremiumAmount ? editPremiumAmount.replace(/[^\d.]/g, '') : undefined,
       });
       toast.success('Alert dates updated successfully!', { id: toastId });
       setEditingReminder(null);
