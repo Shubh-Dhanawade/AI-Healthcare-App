@@ -237,6 +237,7 @@ export const claimsApi = {
     coverage_tier: number;
     systolic_bp: number;
     diastolic_bp: number;
+    document_id?: string;
   }) => {
     const res = await apiClient.post('/claims/predict', data);
     return res.data;

@@ -7,7 +7,7 @@ history-based query rewriting, FAISS vector store retrieval, and token streaming
 import asyncio
 import re
 import time
-from typing import AsyncGenerator, List, Dict, Any, Optional
+from typing import AsyncGenerator, List, Dict, Any, Optional, Tuple
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -143,18 +143,23 @@ def classify_question(query: str) -> str:
 
 
 async def fetch_structured_policy_data(db: AsyncSession, policy_ids: List[str]) -> str:
-    """Fetch structured metadata, extracted fields, summaries, and risk analyses for target policies from PostgreSQL."""
+    """Fetch structured metadata, extracted fields, summaries, and risk analyses for target policies in a single query."""
+    if not policy_ids:
+        return ""
     from app.models.document import Document, ExtractedField
     from app.models.risk_analysis import Summary
     from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    
+    stmt = select(Document).where(Document.id.in_(policy_ids)).options(
+        selectinload(Document.extracted_fields),
+        selectinload(Document.summary)
+    )
+    res = await db.execute(stmt)
+    docs = res.scalars().all()
     
     structured_blocks = []
-    for pid in policy_ids:
-        doc_res = await db.execute(select(Document).where(Document.id == pid))
-        doc = doc_res.scalar_one_or_none()
-        if not doc:
-            continue
-            
+    for doc in docs:
         block = [
             f"=== STRUCTURED DETAILS FOR {doc.original_filename} ===",
             f"Policy Name: {doc.original_filename}",
@@ -162,15 +167,11 @@ async def fetch_structured_policy_data(db: AsyncSession, policy_ids: List[str]) 
             f"Premium Due Date: {doc.premium_due_date.strftime('%Y-%m-%d') if doc.premium_due_date else 'Not Mentioned'}"
         ]
         
-        fields_res = await db.execute(
-            select(ExtractedField).where(ExtractedField.document_id == pid)
-        )
-        fields = fields_res.scalars().all()
-        for field in fields:
-            block.append(f"{field.field_name}: {field.field_value}")
+        for field in doc.extracted_fields:
+            if field.field_name and field.field_value:
+                block.append(f"{field.field_name}: {field.field_value}")
 
-        summary_res = await db.execute(select(Summary).where(Summary.document_id == pid))
-        sum_obj = summary_res.scalar_one_or_none()
+        sum_obj = doc.summary
         if sum_obj:
             if sum_obj.coverage_summary:
                 block.append(f"Coverage Summary: {sum_obj.coverage_summary}")
@@ -203,10 +204,8 @@ async def run_chat_query(
         logger.info(f"Chitchat/Guidance query short-circuited: '{query}'")
         return chitchat_reply
         
-    # 2. Query Rewriting: determine if query depends on previous turns
+    # 2. Fast query setup (Conversation history is built into prompt directly — no extra blocking LLM call)
     search_query = query
-    if history and _needs_query_rewriting(query, history):
-        search_query = await rewrite_query_with_history(query, history)
         
     # 3. Cache lookup
     policy_ids = [p.get("id") for p in policies if p.get("id")]
@@ -216,15 +215,16 @@ async def run_chat_query(
         logger.info(f"Cache hit for query: '{search_query}'")
         return cached_response
         
-    # 4. Hybrid RAG Retrieval (Vector Search + Direct Keyword Match)
+    # 4. Parallel Hybrid RAG Retrieval (Vector Search + Keyword Match + Structured DB Data)
     is_comparison = _is_comparison_query(search_query) and len(policies) > 1
     top_k = 10 if is_comparison else 8
     
     retrieval_start = time.time()
-    # Vector Search
-    vector_chunks = await search_vector_store(db, search_query, policies, top_k=top_k)
-    # Keyword Match Search
+    vector_task = search_vector_store(db, search_query, policies, top_k=top_k)
+    structured_task = fetch_structured_policy_data(db, policy_ids)
     keyword_chunks = _text_search_fallback(search_query, policies, top_k=top_k)
+    
+    vector_chunks, structured_context = await asyncio.gather(vector_task, structured_task)
     
     # Merge & Deduplicate vector + keyword results
     seen_texts: set = set()
@@ -250,9 +250,6 @@ async def run_chat_query(
         f"Hybrid retrieval retrieved {len(combined_chunks)} combined chunks in {retrieval_time:.4f}s. "
         f"Selected top {len(filtered_chunks)} chunks for LLM context."
     )
-    
-    # ── Always supplement with structured DB fields & summaries ──
-    structured_context = await fetch_structured_policy_data(db, [p.get("id") for p in policies if p.get("id")])
         
     # 5. Build prompt
     prompt = build_chat_prompt(
@@ -294,94 +291,102 @@ async def run_chat_query(
     return response
 
 
-async def run_chat_query_stream(
+async def prepare_chat_rag_prompt(
     policies: List[Dict[str, Any]],
     query: str,
     db: AsyncSession,
     history: List[Dict[str, str]],
     user_name: str = "there",
-    user_id: Optional[str] = None,
+) -> Tuple[str, List[Dict[str, Any]], bool]:
+    """
+    Perform hybrid retrieval and build RAG prompt while DB session is open.
+    Returns (prompt_or_chitchat, filtered_chunks, is_chitchat).
+    """
+    try:
+        # 1. Intent check: handle greetings, guidance, and thanks immediately
+        chitchat_reply = _get_chitchat_response(query, user_name)
+        if chitchat_reply:
+            logger.info(f"Chitchat/Guidance query short-circuited: '{query}'")
+            return chitchat_reply, [], True
+            
+        search_query = query
+        policy_ids = [p.get("id") for p in policies if p.get("id")]
+
+        # Check cache
+        cache_key = CacheManager.get_rag_cache_key(search_query, policy_ids)
+        cached_response = CacheManager.get(cache_key)
+        if cached_response:
+            return "CACHED:" + cached_response, [], True
+
+        # Hybrid Retrieval
+        is_comparison = _is_comparison_query(search_query) and len(policies) > 1
+        top_k = 10 if is_comparison else 8
+
+        vector_task = search_vector_store(db, search_query, policies, top_k=top_k)
+        structured_task = fetch_structured_policy_data(db, policy_ids)
+        keyword_chunks = _text_search_fallback(search_query, policies, top_k=top_k)
+
+        results = await asyncio.gather(vector_task, structured_task, return_exceptions=True)
+        vector_chunks = results[0] if not isinstance(results[0], Exception) and results[0] else []
+        structured_context = results[1] if not isinstance(results[1], Exception) and results[1] else ""
+
+        seen_texts: set = set()
+        combined_chunks: List[Dict[str, Any]] = []
+
+        for kc in keyword_chunks:
+            kc_key = kc["text"][:80].lower().strip()
+            if kc_key not in seen_texts:
+                seen_texts.add(kc_key)
+                combined_chunks.append(kc)
+
+        for vc in vector_chunks:
+            vc_key = vc["text"][:80].lower().strip()
+            if vc_key not in seen_texts:
+                seen_texts.add(vc_key)
+                combined_chunks.append(vc)
+
+        combined_chunks.sort(key=lambda x: x.get("score", 0.0), reverse=True)
+        filtered_chunks = combined_chunks[:top_k]
+
+        prompt = build_chat_prompt(
+            query=query,
+            retrieved_chunks=filtered_chunks,
+            history=history,
+            policies=policies,
+            user_name=user_name,
+            is_comparison=is_comparison,
+            structured_context=structured_context
+        )
+
+        return prompt, filtered_chunks, False
+    except Exception as prep_err:
+        logger.error(f"Error in prepare_chat_rag_prompt: {prep_err}", exc_info=True)
+        fallback_prompt = (
+            f"You are HealthPolicyLens, a healthcare insurance assistant helping {user_name}.\n"
+            f"User Query: {query}\n\nAnswer directly based on standard health insurance policy rules."
+        )
+        return fallback_prompt, [], False
+
+
+async def run_chat_query_stream_with_prompt(
+    prompt: str,
+    filtered_chunks: List[Dict[str, Any]],
+    is_chitchat: bool = False,
+    is_comparison: bool = False,
 ) -> AsyncGenerator[str, None]:
-    """Streaming Conversational RAG execution yielding tokens progressively."""
+    """Stream LLM tokens using a pre-constructed prompt (zero DB dependency during streaming)."""
     start_time = time.time()
-    
-    # 1. Intent check: handle greetings, guidance, and thanks immediately
-    chitchat_reply = _get_chitchat_response(query, user_name)
-    if chitchat_reply:
-        logger.info(f"Chitchat/Guidance query short-circuited: '{query}'")
-        for word in chitchat_reply.split(" "):
+
+    if is_chitchat:
+        text_to_yield = prompt[7:] if prompt.startswith("CACHED:") else prompt
+        for word in text_to_yield.split(" "):
             yield word + " "
             await asyncio.sleep(0.012)
         return
-        
-    # 2. Query Rewriting: determine if query depends on previous turns
-    search_query = query
-    if history and _needs_query_rewriting(query, history):
-        search_query = await rewrite_query_with_history(query, history)
-        
-    # 3. Cache lookup
-    policy_ids = [p.get("id") for p in policies if p.get("id")]
-    cache_key = CacheManager.get_rag_cache_key(search_query, policy_ids)
-    cached_response = CacheManager.get(cache_key)
-    if cached_response:
-        logger.info(f"Cache hit for query stream: '{search_query}'")
-        for word in cached_response.split(" "):
-            yield word + " "
-        return
-        
-    # 4. Hybrid RAG Retrieval (Vector Search + Direct Keyword Match)
-    is_comparison = _is_comparison_query(search_query) and len(policies) > 1
-    top_k = 10 if is_comparison else 8
-    
-    retrieval_start = time.time()
-    # Vector Search
-    vector_chunks = await search_vector_store(db, search_query, policies, top_k=top_k)
-    # Keyword Match Search
-    keyword_chunks = _text_search_fallback(search_query, policies, top_k=top_k)
-    
-    # Merge & Deduplicate vector + keyword results
-    seen_texts: set = set()
-    combined_chunks: List[Dict[str, Any]] = []
-    
-    for kc in keyword_chunks:
-        kc_key = kc["text"][:80].lower().strip()
-        if kc_key not in seen_texts:
-            seen_texts.add(kc_key)
-            combined_chunks.append(kc)
 
-    for vc in vector_chunks:
-        vc_key = vc["text"][:80].lower().strip()
-        if vc_key not in seen_texts:
-            seen_texts.add(vc_key)
-            combined_chunks.append(vc)
-
-    combined_chunks.sort(key=lambda x: x.get("score", 0.0), reverse=True)
-    filtered_chunks = combined_chunks[:top_k]
-    retrieval_time = time.time() - retrieval_start
-    
-    logger.info(
-        f"Hybrid retrieval retrieved {len(combined_chunks)} combined chunks in {retrieval_time:.4f}s. "
-        f"Selected top {len(filtered_chunks)} chunks for LLM context."
-    )
-
-    # ── Always supplement with structured DB fields & summaries ──
-    structured_context = await fetch_structured_policy_data(db, [p.get("id") for p in policies if p.get("id")])
-        
-    # 5. Build prompt
-    prompt = build_chat_prompt(
-        query=query,
-        retrieved_chunks=filtered_chunks,
-        history=history,
-        policies=policies,
-        user_name=user_name,
-        is_comparison=is_comparison,
-        structured_context=structured_context
-    )
-    
-    # 6. Stream tokens from Ollama client using num_ctx=4096
     full_response_parts: List[str] = []
     first_token_time: Optional[float] = None
-    
+
     try:
         max_tokens = 700 if is_comparison else 500
         async for token in call_ollama_stream(prompt, num_predict=max_tokens, num_ctx=4096):
@@ -410,68 +415,8 @@ async def run_chat_query_stream(
                 yield sources_tag
                 full_response_parts.append(sources_tag)
             
-        # Cache full response (valid for 10 minutes)
-        full_response = "".join(full_response_parts)
-        CacheManager.set(cache_key, full_response, ttl_seconds=600)
-        
         total_time = time.time() - start_time
-        logger.info(f"⏱️ Streaming complete in {total_time:.4f}s [Retrieval: {retrieval_time:.4f}s, First Token: {first_token_time:.4f}s]")
-        
-        # Evaluate & log in background — does NOT block the next user message
-        if user_id and filtered_chunks:
-            async def _log_rag_eval_background():
-                try:
-                    context_str = "\n\n".join(c["text"] for c in filtered_chunks)
-                    faithfulness_score = 1.0
-                    faithfulness_reason = "Evaluation skipped for speed."
-                    relevance_score = 1.0
-                    relevance_reason = "Evaluation skipped for speed."
-                    context_relevance = sum(c.get("score", 0.0) for c in filtered_chunks) / len(filtered_chunks) if filtered_chunks else 1.0
-
-                    from app.services.ai_service import extract_json_from_response
-                    from app.services.rag_service import FAITHFULNESS_PROMPT, RELEVANCE_PROMPT
-                    faith_prompt = FAITHFULNESS_PROMPT.format(context=context_str, answer=full_response)
-                    rel_prompt = RELEVANCE_PROMPT.format(query=query, answer=full_response)
-
-                    faith_res, rel_res = await asyncio.gather(
-                        call_ollama(faith_prompt, num_predict=80),
-                        call_ollama(rel_prompt, num_predict=80),
-                        return_exceptions=True
-                    )
-
-                    if not isinstance(faith_res, Exception):
-                        faith_json = extract_json_from_response(faith_res)
-                        if "score" in faith_json:
-                            faithfulness_score = float(faith_json["score"])
-                            faithfulness_reason = faith_json.get("reasoning", "Faithfulness check complete.")
-
-                    if not isinstance(rel_res, Exception):
-                        rel_json = extract_json_from_response(rel_res)
-                        if "score" in rel_json:
-                            relevance_score = float(rel_json["score"])
-                            relevance_reason = rel_json.get("reasoning", "Relevance check complete.")
-
-                    from app.models.rag_query_log import RAGQueryLog
-                    from app.core.database import AsyncSessionLocal
-                    async with AsyncSessionLocal() as bg_db:
-                        log_entry = RAGQueryLog(
-                            user_id=user_id,
-                            query=query,
-                            answer=full_response,
-                            faithfulness=min(max(faithfulness_score, 0.0), 1.0),
-                            faithfulness_reasoning=faithfulness_reason,
-                            answer_relevance=min(max(relevance_score, 0.0), 1.0),
-                            answer_relevance_reasoning=relevance_reason,
-                            context_relevance=min(max(context_relevance, 0.0), 1.0),
-                            latency=round(total_time, 2)
-                        )
-                        bg_db.add(log_entry)
-                        await bg_db.commit()
-                    logger.info("✅ Background: Logged streamed RAG query evaluation to database")
-                except Exception as log_err:
-                    logger.error(f"Background RAG eval logging failed: {log_err}")
-
-            asyncio.create_task(_log_rag_eval_background())
+        logger.info(f"⏱️ Streaming complete in {total_time:.4f}s [First Token: {first_token_time:.4f}s]")
 
     except Exception as e:
         error_str = str(e).lower()
@@ -482,3 +427,26 @@ async def run_chat_query_stream(
             logger.error(f"Streaming failed: {e}")
             fallback_msg = "\n❌ Failed to generate a response. Please try again in a moment."
         yield fallback_msg
+
+
+async def run_chat_query_stream(
+    policies: List[Dict[str, Any]],
+    query: str,
+    db: AsyncSession,
+    history: List[Dict[str, str]],
+    user_name: str = "there",
+    user_id: Optional[str] = None,
+) -> AsyncGenerator[str, None]:
+    """Streaming Conversational RAG execution yielding tokens progressively."""
+    prompt, filtered_chunks, is_short = await prepare_chat_rag_prompt(
+        policies=policies,
+        query=query,
+        db=db,
+        history=history,
+        user_name=user_name
+    )
+    is_comparison = _is_comparison_query(query) and len(policies) > 1
+    async for token in run_chat_query_stream_with_prompt(prompt, filtered_chunks, is_chitchat=is_short, is_comparison=is_comparison):
+        yield token
+
+

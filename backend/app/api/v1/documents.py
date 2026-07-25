@@ -805,7 +805,7 @@ async def process_multi_image_background(doc_id: str, image_paths: list[str]) ->
 
     Phase 1: Extract text from each image concurrently via OCR,
              concatenate in page order → store in Document.extracted_text.
-    Phase 2: Same as single-file: chunking + embeddings + summary + fields + risks.
+    Phase 2: Full parallel analysis (chunking + embeddings + summary + fields + risks).
     """
     import asyncio
     from app.core.database import AsyncSessionLocal
@@ -875,35 +875,40 @@ async def process_multi_image_background(doc_id: str, image_paths: list[str]) ->
                     await err_db.commit()
             return
 
-    # --- Phase 2: Optimized zero-swap LLM + embedding pipeline -------------
-    text = combined_text  # captured from above
+    # --- Phase 2: Concurrent LLM Analysis + Embedding Pipeline -------------
+    text = combined_text
 
-    # A. LLM Analysis Phase (Gemma resident in VRAM - zero swaps)
-    try:
-        async with AsyncSessionLocal() as db_sum:
-            from app.services.summary_service import generate_and_store_summary
-            await generate_and_store_summary(db_sum, doc_id, text)
-            await db_sum.commit()
-            logger.info(f"[MULTI-IMG] ⚡ Auto-summary done for {doc_id}")
-
-        await _run_fields_background(doc_id)
-        logger.info(f"[MULTI-IMG] ⚡ Auto-fields done for {doc_id}")
-
-        await _run_risks_background(doc_id)
-        logger.info(f"[MULTI-IMG] ⚡ Auto-risks done for {doc_id}")
-
-    except Exception as llm_err:
-        logger.error(f"[MULTI-IMG] LLM analysis phase failed for {doc_id}: {llm_err}")
-
-    # B. Single-Batch Vector Embedding Indexing (Nomic)
-    async with AsyncSessionLocal() as db_emb:
+    async def _run_summary_task():
         try:
-            from app.services.rag_service import generate_document_chunks
-            await generate_document_chunks(doc_id, text, db_emb)
-            await db_emb.commit()
-            logger.info(f"[MULTI-IMG] ⚡ Chunking & vector embedding indexing done for {doc_id}")
+            async with AsyncSessionLocal() as db_sum:
+                from app.services.summary_service import generate_and_store_summary
+                await generate_and_store_summary(db_sum, doc_id, text)
+                await db_sum.commit()
+            logger.info(f"[MULTI-IMG] ⚡ Auto-summary done for {doc_id}")
         except Exception as e:
-            logger.error(f"[MULTI-IMG] Chunking/embedding failed for {doc_id}: {e}")
+            logger.error(f"[MULTI-IMG] Summary failed for {doc_id}: {e}")
+
+    async def _run_embedding_task():
+        try:
+            async with AsyncSessionLocal() as db_emb:
+                from app.services.rag_service import generate_document_chunks
+                await generate_document_chunks(doc_id, text, db_emb)
+                await db_emb.commit()
+            logger.info(f"[MULTI-IMG] ⚡ Chunking & embedding done for {doc_id}")
+        except Exception as e:
+            logger.error(f"[MULTI-IMG] Embedding failed for {doc_id}: {e}")
+
+    try:
+        await asyncio.gather(
+            _run_summary_task(),
+            _run_fields_background(doc_id),
+            _run_risks_background(doc_id),
+            _run_embedding_task(),
+            return_exceptions=True,
+        )
+        logger.info(f"[MULTI-IMG] ⚡ All parallel tasks complete for {doc_id}")
+    except Exception as llm_err:
+        logger.error(f"[MULTI-IMG] Analysis phase failed for {doc_id}: {llm_err}")
 
     async with AsyncSessionLocal() as db_final:
         try:

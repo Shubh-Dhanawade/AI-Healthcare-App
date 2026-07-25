@@ -284,7 +284,10 @@ def _extract_sentences_with_keywords(text: str, keywords: list[str], max_results
 
         if any(kw.lower() in s_lower for kw in keywords):
             seen.add(key)
-            hits.append(s_clean[:300])
+            # Clean up newlines/carriage returns and collapse spaces
+            s_clean_final = re.sub(r'[\r\n]+', ' ', s_clean)
+            s_clean_final = re.sub(r'\s+', ' ', s_clean_final).strip()
+            hits.append(s_clean_final[:300])
 
         if len(hits) >= max_results:
             break
@@ -1029,6 +1032,45 @@ def _clean_field(val):
     return str(val)
 
 
+def clean_newlines_in_text(text: str) -> str:
+    if not text:
+        return ""
+    paragraphs = text.split("\n\n")
+    cleaned_paragraphs = []
+    for p in paragraphs:
+        p_clean = re.sub(r'[\r\n]+', ' ', p)
+        p_clean = re.sub(r'\s+', ' ', p_clean).strip()
+        if p_clean:
+            cleaned_paragraphs.append(p_clean)
+    return "\n\n".join(cleaned_paragraphs)
+
+
+def clean_newlines_in_bullets(text: str) -> str:
+    if not text:
+        return ""
+    lines = text.split('\n')
+    cleaned_bullets = []
+    current_bullet = ""
+    for line in lines:
+        line_str = line.strip()
+        if not line_str:
+            continue
+        if re.match(r'^[•\-\*\u2022\uf0b7●]', line_str):
+            if current_bullet:
+                cleaned_bullets.append(current_bullet)
+            bullet_content = re.sub(r'^[•\-\*\u2022\uf0b7●\s]+', '', line_str).strip()
+            current_bullet = f"• {bullet_content}"
+        else:
+            if current_bullet:
+                line_clean = re.sub(r'\s+', ' ', line_str).strip()
+                current_bullet += f" {line_clean}"
+            else:
+                current_bullet = f"• {line_str}"
+    if current_bullet:
+        cleaned_bullets.append(current_bullet)
+    return "\n".join(cleaned_bullets)
+
+
 async def generate_summary(document_text: str, force_regenerate: bool = False) -> dict:
     """Generate AI summary. Cached per document hash, falls back to demo data."""
     ck = _cache_key("summary", document_text)
@@ -1041,18 +1083,18 @@ async def generate_summary(document_text: str, force_regenerate: bool = False) -
     try:
         response = await call_ollama(
             SUMMARIZATION_PROMPT.format(document_text=truncated),
-            num_predict=1200,   # Concise JSON summary + 4 bullet sections
+            num_predict=750,   # Concise JSON summary + 4 bullet sections
             num_ctx=4096,
         )
         result = extract_json_from_response(response)
         if result.get("summary_text"):
             logger.info("Ollama summarization successful")
             out = {
-                "summary_text": _clean_field(result.get("summary_text", "")),
-                "coverage_summary": _clean_field(result.get("coverage_summary")),
-                "exclusions_summary": _clean_field(result.get("exclusions_summary")),
-                "waiting_period_summary": _clean_field(result.get("waiting_period_summary")),
-                "premium_summary": _clean_field(result.get("premium_summary")),
+                "summary_text": clean_newlines_in_text(_clean_field(result.get("summary_text", ""))),
+                "coverage_summary": clean_newlines_in_bullets(_clean_field(result.get("coverage_summary"))),
+                "exclusions_summary": clean_newlines_in_bullets(_clean_field(result.get("exclusions_summary"))),
+                "waiting_period_summary": clean_newlines_in_bullets(_clean_field(result.get("waiting_period_summary"))),
+                "premium_summary": clean_newlines_in_bullets(_clean_field(result.get("premium_summary"))),
             }
             _ai_cache[ck] = out
             return out
@@ -1060,8 +1102,15 @@ async def generate_summary(document_text: str, force_regenerate: bool = False) -
         logger.warning(f"Ollama unavailable ({e}), extracting summary from document text")
     # Ollama offline: extract real content from the uploaded document instead of returning hardcoded demo data
     fallback = _build_fallback_summary(document_text)
-    _ai_cache[ck] = fallback
-    return fallback
+    cleaned_fallback = {
+        "summary_text": clean_newlines_in_text(fallback["summary_text"]),
+        "coverage_summary": clean_newlines_in_bullets(fallback["coverage_summary"]),
+        "exclusions_summary": clean_newlines_in_bullets(fallback["exclusions_summary"]),
+        "waiting_period_summary": clean_newlines_in_bullets(fallback["waiting_period_summary"]),
+        "premium_summary": clean_newlines_in_bullets(fallback["premium_summary"]),
+    }
+    _ai_cache[ck] = cleaned_fallback
+    return cleaned_fallback
 
 
 async def extract_policy_fields(document_text: str, force_regenerate: bool = False) -> list[dict]:
@@ -1075,7 +1124,7 @@ async def extract_policy_fields(document_text: str, force_regenerate: bool = Fal
     try:
         response = await call_ollama(
             FIELD_EXTRACTION_PROMPT.format(document_text=truncated),
-            num_predict=500,
+            num_predict=400,
             num_ctx=4096,
         )
         result = extract_json_from_response(response)

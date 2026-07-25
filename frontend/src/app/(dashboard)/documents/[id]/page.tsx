@@ -419,6 +419,61 @@ const generateSimplePrintHTML = (doc: DocumentDetail, selectedLanguage: string) 
   `;
 };
 
+interface PolicySummary {
+  summary_text: string;
+  coverage_summary?: string;
+  exclusions_summary?: string;
+  waiting_period_summary?: string;
+  premium_summary?: string;
+}
+
+const cleanSummaryFields = (summary: PolicySummary | null | undefined): PolicySummary | null => {
+  if (!summary) return null;
+
+  const cleanText = (text: string | undefined): string => {
+    if (!text) return '';
+    return text
+      .split(/\n{2,}/)
+      .filter(Boolean)
+      .map(p => p.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim())
+      .join('\n\n');
+  };
+
+  const cleanBullets = (bulletsText: string | undefined): string => {
+    if (!bulletsText) return '';
+    const lines = bulletsText.split('\n').map(l => l.trim()).filter(Boolean);
+    const hasBullets = lines.some(line => /^[•\-\*\u2022\uf0b7●]/.test(line));
+    if (!hasBullets) {
+      return lines.map(line => `• ${line.replace(/\s+/g, ' ').trim()}`).join('\n');
+    }
+    const result: string[] = [];
+    let current = '';
+    for (let line of lines) {
+      const isNewBullet = /^[•\-\*\u2022\uf0b7●]/.test(line);
+      if (isNewBullet) {
+        if (current) result.push(current);
+        current = line.replace(/^[•\-\*\u2022\uf0b7●\s]+/, '').trim();
+      } else {
+        if (current) {
+          current += ' ' + line;
+        } else {
+          current = line;
+        }
+      }
+    }
+    if (current) result.push(current);
+    return result.map(b => `• ${b.replace(/\s+/g, ' ').trim()}`).join('\n');
+  };
+
+  return {
+    summary_text: cleanText(summary.summary_text),
+    coverage_summary: cleanBullets(summary.coverage_summary),
+    exclusions_summary: cleanBullets(summary.exclusions_summary),
+    waiting_period_summary: cleanBullets(summary.waiting_period_summary),
+    premium_summary: cleanBullets(summary.premium_summary),
+  };
+};
+
 export default function DocumentDetailPage() {
   const params = useParams();
   const docId = params.id as string;
@@ -430,6 +485,22 @@ export default function DocumentDetailPage() {
   const [chatHistory, setChatHistory] = useState<any[]>([]);
   const [chatLoading, setChatLoading] = useState(false);
   const sessionIdRef = useRef<string | null>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const scrollToChatBottom = useCallback((smooth = true) => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto' });
+    } else if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'query') {
+      scrollToChatBottom(true);
+    }
+  }, [chatHistory, isQuerying, activeTab, scrollToChatBottom]);
 
   // ── Real-time SSE streaming summary state ──
   const [streamingText, setStreamingText] = useState('');
@@ -526,7 +597,7 @@ export default function DocumentDetailPage() {
 
       const docToPrint = {
         ...doc,
-        summary: displayedSummary || doc.summary,
+        summary: displayedSummary || cleanSummaryFields(doc.summary),
         extracted_fields: currentFields,
         risk_analyses: currentRisks
       };
@@ -609,7 +680,7 @@ export default function DocumentDetailPage() {
       ? doc.risk_analyses
       : (translations[selectedLanguage]?.risk_analyses || doc.risk_analyses);
 
-    const currentSummary = displayedSummary || doc.summary;
+    const currentSummary = displayedSummary || cleanSummaryFields(doc.summary);
 
     let text = `🏥 *HealthPolicyLens Policy Audit Report*\n`;
     text += `*Policy Name:* ${doc.original_filename}\n\n`;
@@ -1053,7 +1124,8 @@ export default function DocumentDetailPage() {
     refetchInterval: (query) => {
       const d = query.state.data;
       if (!d) return false;
-      if (['uploaded', 'processing', 'text_extracted'].includes(d.status)) return 2000;
+      if (['uploaded', 'processing'].includes(d.status)) return 500; // Poll fast (500ms) to detect extraction completion immediately
+      if (d.status === 'text_extracted') return 1500;
       // Keep polling until ALL auto-generated results are present
       const anyMissing = !d.summary || d.extracted_fields.length === 0 || d.risk_analyses.length === 0;
       if (anyMissing && ['completed', 'summarized'].includes(d.status)) return 3000;
@@ -1068,7 +1140,7 @@ export default function DocumentDetailPage() {
     if (readyStatuses.includes(doc.status) && !doc.summary && !hasStreamedRef.current) {
       startSummaryStream(docId);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc?.status, doc?.summary, docId, startSummaryStream]);
 
   const summarizeMutation = useMutation({
@@ -1079,6 +1151,29 @@ export default function DocumentDetailPage() {
     },
     onError: (err: any) => toast.error(err.response?.data?.detail || 'Summarization failed'),
   });
+
+  const handleReSummarize = () => {
+    // Clear display summary in client state immediately so it triggers the loading spinner
+    queryClient.setQueryData(['document', docId], (oldData: any) => {
+      if (!oldData) return oldData;
+      return {
+        ...oldData,
+        summary: null
+      };
+    });
+
+    // Reset SSE stream flags
+    hasStreamedRef.current = false;
+    setStreamingText('');
+    setStreamError(null);
+    setIsStreaming(false);
+
+    // Switch tab and start the stream
+    setActiveTab('summary');
+    setTimeout(() => {
+      startSummaryStream(docId);
+    }, 100);
+  };
 
   const runFieldsMutation = useMutation({
     mutationFn: () => documentsApi.runFields(docId),
@@ -1326,6 +1421,7 @@ export default function DocumentDetailPage() {
             }
             return updated;
           });
+          scrollToChatBottom(false);
         }
       }
     } catch (err: any) {
@@ -1386,11 +1482,13 @@ export default function DocumentDetailPage() {
     </div>
   );
 
-  const displayedSummary = doc.summary
+  const displayedSummaryRaw = doc.summary
     ? (selectedLanguage === 'English'
       ? doc.summary
       : translations[selectedLanguage] || doc.summary) as any
     : null;
+
+  const displayedSummary = cleanSummaryFields(displayedSummaryRaw);
 
   const displayedChecklist = selectedLanguage === 'English'
     ? checklistData
@@ -1546,11 +1644,11 @@ export default function DocumentDetailPage() {
               {/* Re-summarize */}
               <button
                 id="summarize-btn"
-                onClick={() => { summarizeMutation.mutate(); setActiveTab('summary'); }}
-                disabled={summarizeMutation.isPending || !canRunAI}
+                onClick={handleReSummarize}
+                disabled={isStreaming || !canRunAI}
                 className="btn-secondary justify-center py-2.5"
               >
-                {summarizeMutation.isPending
+                {isStreaming
                   ? <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Summarizing...</>
                   : <><Brain className="w-4 h-4" /> Re-summarize</>
                 }
@@ -1687,6 +1785,34 @@ export default function DocumentDetailPage() {
           {activeTab === 'summary' && (() => {
             // Show empty state ONLY if not streaming AND no summary exists
             if (!displayedSummary && !isStreaming && !streamingText) {
+              if (['uploaded', 'processing'].includes(doc.status)) {
+                return (
+                  <div className="text-center py-12 glass-card space-y-4">
+                    <div className="relative w-16 h-16 mx-auto">
+                      <div className="absolute inset-0 rounded-full border-4 border-blue-500/20 border-t-blue-500 animate-spin" />
+                      <Brain className="w-8 h-8 text-blue-400 absolute inset-0 m-auto animate-pulse" />
+                    </div>
+                    <div>
+                      <p className="text-slate-200 font-bold text-sm">Analyzing Report...</p>
+                      <p className="text-slate-400 text-xs mt-1">Extracting policy text to prepare your live summary.</p>
+                    </div>
+                  </div>
+                );
+              }
+              if (doc.status === 'text_extracted') {
+                return (
+                  <div className="text-center py-12 glass-card space-y-4">
+                    <div className="relative w-16 h-16 mx-auto">
+                      <div className="absolute inset-0 rounded-full border-4 border-emerald-500/20 border-t-emerald-500 animate-spin" />
+                      <Brain className="w-8 h-8 text-emerald-400 absolute inset-0 m-auto animate-bounce" />
+                    </div>
+                    <div>
+                      <p className="text-slate-200 font-bold text-sm">Preparing live summary...</p>
+                      <p className="text-slate-400 text-xs mt-1">The AI is connecting to stream your policy analysis.</p>
+                    </div>
+                  </div>
+                );
+              }
               return (
                 <div className="text-center py-12 glass-card">
                   <Brain className="w-12 h-12 text-slate-600 mx-auto mb-3" />
@@ -1703,12 +1829,7 @@ export default function DocumentDetailPage() {
                     <div>
                       <h2 className="text-lg font-bold text-white flex items-center gap-2">
                         <Brain className="w-5 h-5 text-blue-400 animate-pulse" /> Summary
-                        {isStreaming && (
-                          <span className="flex items-center gap-1.5 text-xs font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/25 px-2 py-0.5 rounded-full">
-                            <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full" style={{ animation: 'blink 1s step-end infinite' }} />
-                            Generating live...
-                          </span>
-                        )}
+
                       </h2>
                       <p className="text-slate-400 text-xs mt-0.5">
                         {isStreaming ? 'AI is writing your summary in real-time — reading directly from your document' : 'Executive summary of the policy (comprehensive review)'}
@@ -1720,8 +1841,8 @@ export default function DocumentDetailPage() {
                       <button
                         onClick={() => handlePlaySpeech('summary')}
                         className={`btn-secondary text-xs py-2 px-3 flex items-center gap-1.5 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer border ${speakingTab === 'summary'
-                            ? 'border-red-500/30 text-red-400 bg-red-500/5'
-                            : 'border-blue-500/30 text-blue-400'
+                          ? 'border-red-500/30 text-red-400 bg-red-500/5'
+                          : 'border-blue-500/30 text-blue-400'
                           }`}
                         title={speakingTab === 'summary' ? 'Stop read aloud' : 'Read aloud summary'}
                       >
@@ -1744,7 +1865,7 @@ export default function DocumentDetailPage() {
                         <select
                           value={selectedLanguage}
                           onChange={(e) => handleLanguageChange(e.target.value)}
-                          className="bg-black border-none text-xs text-white focus:outline-none cursor-pointer"
+                          className="glass-card border-none text-xs text-white focus:outline-none cursor-pointer"
                         >
                           <option value="English">English</option>
                           <option value="Hindi">Hindi (हिंदी)</option>
@@ -1820,11 +1941,24 @@ export default function DocumentDetailPage() {
                       </div>
                     )}
                     {/* Live streaming text — shown while LLM is generating */}
-                    {(isStreaming || (streamingText && !displayedSummary?.summary_text)) && (
+                    {isStreaming && !streamingText && (
+                      <div className="flex flex-col items-center justify-center py-12 space-y-4">
+                        <div className="relative w-12 h-12">
+                          <div className="absolute inset-0 rounded-full border-4 border-blue-500/20 border-t-blue-500 animate-spin" />
+                          <Brain className="w-6 h-6 text-blue-400 absolute inset-0 m-auto animate-pulse" />
+                        </div>
+                        <div className="text-center">
+                          <p className="text-slate-200 font-bold text-sm">AI is writing your summary...</p>
+                          <p className="text-slate-400 text-xs mt-1">Reading policy documents to generate analysis.</p>
+                        </div>
+                      </div>
+                    )}
+
+                    {((isStreaming && streamingText) || (streamingText && !displayedSummary?.summary_text)) ? (
                       <div className="space-y-4">
                         {streamingText.split(/\n{2,}/).filter(Boolean).map((para: string, i: number) => (
                           <p key={i} className="leading-7 text-slate-200 border-l-2 border-blue-500/20 pl-3">
-                            {para.trim()}
+                            {para.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim()}
                           </p>
                         ))}
                         {isStreaming && (
@@ -1834,14 +1968,14 @@ export default function DocumentDetailPage() {
                           />
                         )}
                       </div>
-                    )}
+                    ) : null}
 
                     {/* Final persisted summary — shown after stream completes and DB is updated */}
                     {!isStreaming && displayedSummary?.summary_text && (
                       <div className="space-y-4">
-                        {(displayedSummary.summary_text || '').split(/\n{2,}|\n(?=\S)/).filter(Boolean).map((para: string, i: number) => (
+                        {(displayedSummary.summary_text || '').split('\n\n').filter(Boolean).map((para: string, i: number) => (
                           <p key={i} className="leading-7 text-slate-200 border-l-2 border-blue-500/20 pl-3 mb-1">
-                            {para.trim()}
+                            {para}
                           </p>
                         ))}
                       </div>
@@ -1855,38 +1989,38 @@ export default function DocumentDetailPage() {
 
                   {/* Detailed Policy Breakdowns — only shown once structured summary is saved to DB */}
                   {displayedSummary && (
-                  <div className="mt-6 border-t border-white/5 pt-6 space-y-4">
-                    <h3 className="text-xs font-bold text-slate-400 tracking-wider uppercase">Policy Details &amp; Exclusions</h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {[
-                        { title: 'Coverage & Benefits', icon: CheckCircle2, value: displayedSummary?.coverage_summary, color: '#10b981', border: 'border-emerald-500/20', bg: 'bg-emerald-500/5', dotColor: 'bg-emerald-400' },
-                        { title: 'Exclusions & Limits', icon: XCircle, value: displayedSummary?.exclusions_summary, color: '#ef4444', border: 'border-red-500/20', bg: 'bg-red-500/5', dotColor: 'bg-red-400' },
-                        { title: 'Waiting Periods', icon: Clock, value: displayedSummary?.waiting_period_summary, color: '#f59e0b', border: 'border-amber-500/20', bg: 'bg-amber-500/5', dotColor: 'bg-amber-400' },
-                        { title: 'Premium & Charges', icon: Wallet, value: displayedSummary?.premium_summary, color: '#3b82f6', border: 'border-blue-500/20', bg: 'bg-blue-500/5', dotColor: 'bg-blue-400' },
-                      ].filter(s => s.value).map((section) => {
-                        const bullets = (section.value || '')
-                          .split(/\n/)
-                          .map((line: string) => line.replace(/^[•\-*\s\u2022\uf0b7]+/, '').trim())
-                          .filter((line: string) => line.length > 0);
-                        return (
-                          <div key={section.title} className={`p-4 rounded-xl border ${section.border} ${section.bg}`}>
-                            <h4 className="font-bold text-xs uppercase tracking-wider mb-3 flex items-center gap-1.5" style={{ color: section.color }}>
-                              <section.icon className="w-4 h-4" />
-                              {section.title}
-                            </h4>
-                            <ul className="space-y-2">
-                              {bullets.map((bullet: string, idx: number) => (
-                                <li key={idx} className="flex items-start gap-2 text-xs text-slate-200 leading-relaxed">
-                                  <span className={`mt-1.5 w-1.5 h-1.5 rounded-full flex-shrink-0 ${section.dotColor}`} />
-                                  <span>{bullet}</span>
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                        );
-                      })}
+                    <div className="mt-6 border-t border-white/5 pt-6 space-y-4">
+                      <h3 className="text-xs font-bold text-slate-400 tracking-wider uppercase">Policy Details &amp; Exclusions</h3>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {[
+                          { title: 'Coverage & Benefits', icon: CheckCircle2, value: displayedSummary?.coverage_summary, color: '#10b981', border: 'border-emerald-500/20', bg: 'bg-emerald-500/5', dotColor: 'bg-emerald-400' },
+                          { title: 'Exclusions & Limits', icon: XCircle, value: displayedSummary?.exclusions_summary, color: '#ef4444', border: 'border-red-500/20', bg: 'bg-red-500/5', dotColor: 'bg-red-400' },
+                          { title: 'Waiting Periods', icon: Clock, value: displayedSummary?.waiting_period_summary, color: '#f59e0b', border: 'border-amber-500/20', bg: 'bg-amber-500/5', dotColor: 'bg-amber-400' },
+                          { title: 'Premium & Charges', icon: Wallet, value: displayedSummary?.premium_summary, color: '#3b82f6', border: 'border-blue-500/20', bg: 'bg-blue-500/5', dotColor: 'bg-blue-400' },
+                        ].filter(s => s.value).map((section) => {
+                          const bullets = (section.value || '')
+                            .split(/\n/)
+                            .map((line: string) => line.replace(/^[•\-*\s\u2022\uf0b7]+/, '').trim())
+                            .filter((line: string) => line.length > 0);
+                          return (
+                            <div key={section.title} className={`p-4 rounded-xl border ${section.border} ${section.bg}`}>
+                              <h4 className="font-bold text-xs uppercase tracking-wider mb-3 flex items-center gap-1.5" style={{ color: section.color }}>
+                                <section.icon className="w-4 h-4" />
+                                {section.title}
+                              </h4>
+                              <ul className="space-y-2">
+                                {bullets.map((bullet: string, idx: number) => (
+                                  <li key={idx} className="flex items-start gap-2 text-xs text-slate-200 leading-relaxed">
+                                    <span className={`mt-1.5 w-1.5 h-1.5 rounded-full flex-shrink-0 ${section.dotColor}`} />
+                                    <span>{bullet}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
-                  </div>
                   )} {/* end displayedSummary breakdown section */}
 
                   {/* Email Inline Form */}
@@ -1939,8 +2073,8 @@ export default function DocumentDetailPage() {
                   <button
                     onClick={() => handlePlaySpeech('fields')}
                     className={`btn-secondary text-xs py-2 px-3.5 flex items-center gap-1.5 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer border flex-shrink-0 ${speakingTab === 'fields'
-                        ? 'border-red-500/30 text-red-400 bg-red-500/5'
-                        : 'border-blue-500/30 text-blue-400'
+                      ? 'border-red-500/30 text-red-400 bg-red-500/5'
+                      : 'border-blue-500/30 text-blue-400'
                       }`}
                     title={speakingTab === 'fields' ? 'Stop read aloud' : 'Read aloud fields'}
                   >
@@ -2030,8 +2164,8 @@ export default function DocumentDetailPage() {
                     <button
                       onClick={() => handlePlaySpeech('risks')}
                       className={`btn-secondary text-xs py-2 px-3.5 flex items-center gap-1.5 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer border flex-shrink-0 ${speakingTab === 'risks'
-                          ? 'border-red-500/30 text-red-400 bg-red-500/5'
-                          : 'border-blue-500/30 text-blue-400'
+                        ? 'border-red-500/30 text-red-400 bg-red-500/5'
+                        : 'border-blue-500/30 text-blue-400'
                         }`}
                       title={speakingTab === 'risks' ? 'Stop read aloud' : 'Read aloud risks'}
                     >
@@ -2091,8 +2225,8 @@ export default function DocumentDetailPage() {
                   <button
                     onClick={() => handlePlaySpeech('checklist')}
                     className={`btn-secondary text-xs py-2 px-3.5 flex items-center gap-1.5 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer border flex-shrink-0 ${speakingTab === 'checklist'
-                        ? 'border-red-500/30 text-red-400 bg-red-500/5'
-                        : 'border-blue-500/30 text-blue-400'
+                      ? 'border-red-500/30 text-red-400 bg-red-500/5'
+                      : 'border-blue-500/30 text-blue-400'
                       }`}
                     title={speakingTab === 'checklist' ? 'Stop read aloud' : 'Read aloud claims checklist'}
                   >
@@ -2174,8 +2308,8 @@ export default function DocumentDetailPage() {
                               <td className="px-5 py-3.5 text-sm font-medium text-slate-300">{item.document_name}</td>
                               <td className="px-5 py-3.5 text-xs">
                                 <span className={`px-2 py-0.5 rounded-full font-bold border capitalize ${item.importance.toLowerCase().includes('mandatory') || item.importance.includes('अनिवार्य')
-                                    ? 'bg-red-500/10 text-red-400 border-red-500/20'
-                                    : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                                  ? 'bg-red-500/10 text-red-400 border-red-500/20'
+                                  : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
                                   }`}>
                                   {item.importance}
                                 </span>
@@ -2387,7 +2521,7 @@ export default function DocumentDetailPage() {
               </div>
 
               {/* Chat history */}
-              <div className="space-y-4 max-h-[450px] overflow-y-auto pr-1 border border-white/5 rounded-xl p-3 bg-slate-950/25">
+              <div ref={chatContainerRef} className="space-y-4 max-h-[450px] overflow-y-auto pr-1 border border-white/5 rounded-xl p-3 bg-slate-950/25">
                 {chatLoading ? (
                   <div className="flex items-center justify-center py-12 gap-3">
                     <span className="w-5 h-5 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
@@ -2428,6 +2562,7 @@ export default function DocumentDetailPage() {
                     )}
                   </div>
                 )}
+                <div ref={messagesEndRef} />
               </div>
 
               {/* Query Input Box */}

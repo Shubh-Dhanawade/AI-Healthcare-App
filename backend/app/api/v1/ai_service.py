@@ -176,7 +176,7 @@ DOCUMENT:
         try:
             async for token in call_ollama_stream(
                 prompt,
-                num_predict=900,
+                num_predict=650,
                 num_ctx=4096,
             ):
                 accumulated.append(token)
@@ -584,7 +584,8 @@ async def query_chatbot_stream(
         session.title = title_suggestion or "New Chat"
     
     session.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
-    await db.flush()
+    await db.commit()
+    session_id_val = session.id
 
     # 2. Fetch user documents (filtering by IDs if provided)
     from sqlalchemy.orm import selectinload
@@ -603,16 +604,17 @@ async def query_chatbot_stream(
     if not docs:
         async def empty_generator():
             response_text = "No policies found in your library. Please upload policy documents first."
-            # Save assistant message
-            assistant_message = ChatMessage(
-                session_id=session.id,
-                role="assistant",
-                content=response_text
-            )
-            db.add(assistant_message)
-            await db.commit()
+            from app.core.database import AsyncSessionLocal
+            async with AsyncSessionLocal() as save_db:
+                assistant_message = ChatMessage(
+                    session_id=session_id_val,
+                    role="assistant",
+                    content=response_text
+                )
+                save_db.add(assistant_message)
+                await save_db.commit()
             yield response_text
-        return StreamingResponse(empty_generator(), media_type="text/plain", headers={"X-Chat-Session-Id": session.id})
+        return StreamingResponse(empty_generator(), media_type="text/plain", headers={"X-Chat-Session-Id": session_id_val})
 
     # 3. Package policy data for RAG
     policies_data = [
@@ -631,17 +633,32 @@ async def query_chatbot_stream(
         for d in docs
     ]
 
-    # 4. Stream response
+    user_name_val = current_user.full_name or "krushna"
+
+    # 4. Prepare RAG prompt while DB session is open
+    from app.services.chat_service import prepare_chat_rag_prompt, run_chat_query_stream_with_prompt
+    prompt, filtered_chunks, is_short = await prepare_chat_rag_prompt(
+        policies_data,
+        request.query,
+        db,
+        history_data,
+        user_name=user_name_val
+    )
+
+    # 5. Commit user message and session updates
+    await db.commit()
+    session_id_val = session.id
+    is_comparison_val = len(policies_data) > 1
+
+    # 6. Stream response (zero DB session dependency during token streaming)
     async def stream_generator():
         try:
             full_response = ""
-            async for token in query_policy_rag_stream(
-                policies_data, 
-                request.query, 
-                db, 
-                history_data,
-                user_name=current_user.full_name or "krushna",
-                user_id=current_user.id
+            async for token in run_chat_query_stream_with_prompt(
+                prompt,
+                filtered_chunks,
+                is_chitchat=is_short,
+                is_comparison=is_comparison_val
             ):
                 yield token
                 full_response += token
@@ -654,15 +671,17 @@ async def query_chatbot_stream(
                 if match:
                     sources = [s.strip() for s in match.group(1).split('|') if s.strip()]
             
-            # Save assistant message to the database
-            assistant_message = ChatMessage(
-                session_id=session.id,
-                role="assistant",
-                content=full_response,
-                sources=json.dumps(sources) if sources else None
-            )
-            db.add(assistant_message)
-            await db.commit()
+            # Save assistant message using a fresh, dedicated DB session (isolated from route lifecycle)
+            from app.core.database import AsyncSessionLocal
+            async with AsyncSessionLocal() as save_db:
+                assistant_message = ChatMessage(
+                    session_id=session_id_val,
+                    role="assistant",
+                    content=full_response,
+                    sources=json.dumps(sources) if sources else None
+                )
+                save_db.add(assistant_message)
+                await save_db.commit()
             
         except Exception as e:
             logger.error(f"Error in stream generator: {e}")
@@ -671,7 +690,7 @@ async def query_chatbot_stream(
     return StreamingResponse(
         stream_generator(),
         media_type="text/plain",
-        headers={"X-Chat-Session-Id": session.id}
+        headers={"X-Chat-Session-Id": session_id_val}
     )
 
 
