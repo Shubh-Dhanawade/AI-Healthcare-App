@@ -786,7 +786,7 @@ export default function DocumentDetailPage() {
     const updateVoices = () => {
       const allVoices = window.speechSynthesis.getVoices();
       setVoices(allVoices);
-      
+
       const storedPref = localStorage.getItem('health_care_system_voice');
       if (storedPref && allVoices.some(v => v.name === storedPref)) {
         setSelectedVoiceName(storedPref);
@@ -953,7 +953,7 @@ export default function DocumentDetailPage() {
         if (lastSpokenLang === 'Hindi') langCode = 'hi-IN';
         else if (lastSpokenLang === 'Marathi') langCode = 'mr-IN';
         utterance.lang = langCode;
-        
+
         const chosenVoice = voices.find(v => v.name === newVoiceName);
         if (chosenVoice) utterance.voice = chosenVoice;
         utterance.rate = newRate;
@@ -1141,7 +1141,7 @@ export default function DocumentDetailPage() {
 
   const handlePlaySpeech = (tab: 'summary' | 'fields' | 'risks' | 'checklist') => {
     if (!doc) return;
-    
+
     // 1. If currently speaking this tab and NOT paused, then Pause it!
     if (speakingTab === tab && !isPaused) {
       if (typeof window !== 'undefined' && window.speechSynthesis) {
@@ -1150,7 +1150,7 @@ export default function DocumentDetailPage() {
       setIsPaused(true);
       return;
     }
-    
+
     // 2. If currently speaking this tab and IS paused, then Resume it!
     if (speakingTab === tab && isPaused) {
       setIsPaused(false);
@@ -1979,9 +1979,7 @@ export default function DocumentDetailPage() {
                         <Brain className="w-5 h-5 text-blue-400 animate-pulse" /> Summary
 
                       </h2>
-                      <p className="text-slate-400 text-xs mt-0.5">
-                        {isStreaming ? 'AI is writing your summary in real-time — reading directly from your document' : 'Executive summary of the policy (comprehensive review)'}
-                      </p>
+
                     </div>
                     {/* Export, Share and Language Actions */}
                     <div className="flex items-center gap-2 relative" data-html2canvas-ignore="true">
