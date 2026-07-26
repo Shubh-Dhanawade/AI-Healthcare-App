@@ -41,7 +41,7 @@ services:
       QDRANT_HOST: qdrant
       UPLOAD_DIR: /app/uploads
       MAX_FILE_SIZE_MB: 50
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost}
+      ALLOWED_ORIGINS: '${ALLOWED_ORIGINS:-["http://localhost:3000","http://localhost","http://127.0.0.1:3000"]}'
     volumes:
       - upload_data:/app/uploads
     ports:
