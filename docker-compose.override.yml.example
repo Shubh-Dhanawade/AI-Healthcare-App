@@ -1,0 +1,13 @@
+# Docker Compose Override Example for NVIDIA GPU Users (e.g. RTX 3050 / RTX 4090)
+# Copy this file to `docker-compose.override.yml` on systems with NVIDIA GPUs and NVIDIA Container Toolkit installed.
+# Docker Compose automatically reads `docker-compose.override.yml` alongside `docker-compose.yml`.
+
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
