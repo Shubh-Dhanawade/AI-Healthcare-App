@@ -1,0 +1,79 @@
+{
+  "dataset_info": {
+    "total_samples": 1338,
+    "features": [
+      "age",
+      "bmi",
+      "smoker",
+      "pre_existing_conditions",
+      "coverage_tier",
+      "systolic_bp",
+      "diastolic_bp"
+    ]
+  },
+  "smote_proportions": {
+    "before": [
+      {
+        "class": "Approved (0)",
+        "count": 388,
+        "percentage": 41.45
+      },
+      {
+        "class": "Denied (1)",
+        "count": 548,
+        "percentage": 58.55
+      }
+    ],
+    "after": [
+      {
+        "class": "Approved (0)",
+        "count": 548,
+        "percentage": 50.0
+      },
+      {
+        "class": "Denied (1)",
+        "count": 548,
+        "percentage": 50.0
+      }
+    ]
+  },
+  "benchmarks": [
+    {
+      "model_name": "Logistic Regression",
+      "precision": 69.5,
+      "recall": 97.0,
+      "f1_score": 81.0,
+      "auc_roc": 0.813,
+      "is_selected": false
+    },
+    {
+      "model_name": "Decision Tree",
+      "precision": 74.1,
+      "recall": 96.2,
+      "f1_score": 83.7,
+      "auc_roc": 0.848,
+      "is_selected": false
+    },
+    {
+      "model_name": "Random Forest",
+      "precision": 80.2,
+      "recall": 87.7,
+      "f1_score": 83.7,
+      "auc_roc": 0.861,
+      "is_selected": false
+    },
+    {
+      "model_name": "Gradient Boosting",
+      "precision": 72.1,
+      "recall": 97.9,
+      "f1_score": 83.0,
+      "auc_roc": 0.863,
+      "is_selected": true
+    }
+  ],
+  "plots": {
+    "roc_curves": "/data_science_analysis/roc_curves.png",
+    "shap_summary": "/data_science_analysis/shap_summary.png",
+    "lime_explanation": "/data_science_analysis/lime_explanation.png"
+  }
+}
