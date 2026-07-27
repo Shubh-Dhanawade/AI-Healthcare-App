@@ -44,6 +44,7 @@ services:
       ALLOWED_ORIGINS: '${ALLOWED_ORIGINS:-["http://localhost:3000","http://localhost","http://127.0.0.1:3000"]}'
     volumes:
       - upload_data:/app/uploads
+      - ./data_science_analysis:/app/data_science_analysis
     ports:
       - "8000:8000"
     depends_on:
