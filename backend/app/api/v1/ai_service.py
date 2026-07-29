@@ -167,8 +167,9 @@ Paragraph 6: Explain cashless and reimbursement claim procedures, customer helpl
 DOCUMENT:
 {document_text}"""
 
-    truncated = doc.extracted_text[:5000]
-    prompt = STREAM_SUMMARY_PROMPT.format(document_text=truncated)
+    from app.services.ai_service import _extract_key_context_for_summary
+    context = _extract_key_context_for_summary(doc.extracted_text, max_chars=4000)
+    prompt = STREAM_SUMMARY_PROMPT.format(document_text=context)
 
     async def event_generator():
         from app.services.ollama_client import call_ollama_stream
@@ -176,8 +177,8 @@ DOCUMENT:
         try:
             async for token in call_ollama_stream(
                 prompt,
-                num_predict=650,
-                num_ctx=2048,
+                num_predict=600,
+                num_ctx=1536,
             ):
                 accumulated.append(token)
                 yield f"data: {json.dumps({'token': token})}\n\n"

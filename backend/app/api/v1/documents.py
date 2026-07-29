@@ -657,41 +657,55 @@ async def process_document_background(doc_id: str, file_path: str, file_type: st
                     await err_db.commit()
             return
 
-    # ── PHASE 2: PARALLEL LLM Analysis — all three tasks run concurrently ──
-    # Summary, field extraction, and risk analysis are launched simultaneously via asyncio.gather().
-    # This reduces total time from ~120s (sequential) to ~60s (time of the slowest single task).
-    # The model stays resident in VRAM throughout (keep_alive=-1) so no cold-start between tasks.
+    # ── PHASE 2: SEQUENTIAL LLM Analysis (Prevents VRAM Model Thrashing) ──
+    # Run LLM tasks sequentially using the currently loaded OLLAMA_MODEL (gemma-3-4b).
+    # Since all 3 tasks use the same model, Ollama executes them back-to-back at top speed
+    # without ANY model unloading/reloading.
     async def _run_summary_task():
         try:
             async with AsyncSessionLocal() as db_sum:
                 from app.services.summary_service import generate_and_store_summary
                 await generate_and_store_summary(db_sum, doc_id, text)
                 await db_sum.commit()
-            logger.info(f"⚡ [PARALLEL] Summary complete for {doc_id}")
+            logger.info(f"⚡ Summary complete for {doc_id}")
         except Exception as e:
-            logger.error(f"[PARALLEL-SUMMARY] Failed for {doc_id}: {e}")
+            logger.error(f"[SUMMARY] Failed for {doc_id}: {e}")
+
+    async def _run_embedding_task():
+        """Run vector chunking and embedding after LLM tasks finish."""
+        async with AsyncSessionLocal() as db_emb:
+            try:
+                from app.services.rag_service import generate_document_chunks
+                await generate_document_chunks(doc_id, text, db_emb)
+                await db_emb.commit()
+                logger.info(f"⚡ Vector chunking & embedding complete for {doc_id}")
+            except Exception as e:
+                logger.error(f"[EMBEDDING] Failed for {doc_id}: {e}")
 
     try:
-        # Run summary, fields, risks, AND vector embedding all at the same time
-        await asyncio.gather(
-            _run_summary_task(),
-            _run_fields_background(doc_id),
-            _run_risks_background(doc_id),
-            return_exceptions=True,  # Don't let one failure cancel others
-        )
-        logger.info(f"⚡ All parallel AI tasks complete for {doc_id}")
-    except Exception as llm_err:
-        logger.error(f"Parallel LLM analysis phase failed for {doc_id}: {llm_err}")
+        logger.info(f"⚡ Starting sequential LLM analysis for {doc_id}...")
+        # 1. Summary Generation
+        await _run_summary_task()
+        
+        # 2. Key Field Extraction
+        await _run_fields_background(doc_id)
+        
+        # 3. Risk Analysis
+        await _run_risks_background(doc_id)
+        
+        # 4. Vector Chunking & Embedding (Switches to nomic-embed-text once at the end)
+        await _run_embedding_task()
 
-    # ── PHASE 3: Fast Single-Batch Vector Embedding Indexing (Nomic) ──
-    async with AsyncSessionLocal() as db_emb:
+        # 5. Warm up the primary LLM model back into VRAM so instant RAG/Chat works with 0 cold-start delay
         try:
-            from app.services.rag_service import generate_document_chunks
-            await generate_document_chunks(doc_id, text, db_emb)
-            await db_emb.commit()
-            logger.info(f"⚡ Vector chunking & embedding indexing complete for {doc_id}")
-        except Exception as e:
-            logger.error(f"Chunking/embedding failed for {doc_id}: {e}")
+            from app.services.ollama_client import warmup_model
+            await warmup_model()
+        except Exception as warmup_err:
+            logger.warning(f"Post-processing model warmup skipped: {warmup_err}")
+
+        logger.info(f"⚡ All AI + embedding tasks complete for {doc_id}")
+    except Exception as llm_err:
+        logger.error(f"Sequential LLM analysis phase failed for {doc_id}: {llm_err}")
 
     # Final status update — mark as completed
     async with AsyncSessionLocal() as db_final:

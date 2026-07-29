@@ -991,7 +991,7 @@ async def call_ollama(
     prompt: str,
     model: Optional[str] = None,
     num_predict: int = 512,
-    num_ctx: int = 1536,
+    num_ctx: int = 1024,
 ) -> str:
     """Call Ollama API using shared connection pool with GPU-accelerated settings."""
     from app.services.ollama_client import call_ollama as _pooled_call
@@ -1075,39 +1075,79 @@ def clean_newlines_in_bullets(text: str) -> str:
     return "\n".join(cleaned_bullets)
 
 
+def _extract_key_context_for_summary(text: str, max_chars: int = 4500) -> str:
+    """Extract optimal document text context for LLM summarization.
+    Combines initial policy schedule details with key clauses for coverage, exclusions, waiting periods, and claims.
+    """
+    if len(text) <= max_chars:
+        return text
+    
+    # 1. Take first 2500 chars (policy schedule, insured names, premiums, sum insured)
+    header_part = text[:2500]
+    
+    # 2. Extract key sentences for coverage, exclusions, waiting periods, and claims from remaining text
+    remainder = text[2500:]
+    keywords = [
+        "inpatient", "day care", "daycare", "hospitalisation", "room rent",
+        "pre-hospitalisation", "post-hospitalisation", "waiting period", "pre-existing",
+        "exclusion", "not covered", "co-payment", "deductible", "claim", "cashless", "helpline"
+    ]
+    
+    matched_chunks = []
+    lines = remainder.split("\n")
+    for line in lines:
+        l_lower = line.lower()
+        if any(kw in l_lower for kw in keywords):
+            cleaned = line.strip()
+            if len(cleaned) > 20 and cleaned not in matched_chunks:
+                matched_chunks.append(cleaned)
+                if sum(len(c) for c in matched_chunks) >= (max_chars - 2500):
+                    break
+                    
+    body_part = "\n".join(matched_chunks)
+    combined = f"{header_part}\n\n--- KEY POLICY CLAUSES ---\n{body_part}"
+    return combined[:max_chars]
+
+
 async def generate_summary(document_text: str, force_regenerate: bool = False) -> dict:
-    """Generate AI summary. Cached per document hash, falls back to demo data."""
+    """Generate AI summary with hybrid fact enrichment for maximum data quality and speed."""
     ck = _cache_key("summary", document_text)
     if not force_regenerate and ck in _ai_cache:
         logger.info("Cache hit: summary")
         return _ai_cache[ck]
 
-    # Cap at 5000 chars (~1250 tokens) to fit within num_ctx=2048.
-    # 2048 total tokens - ~400 for prompt instructions - ~750 for response = ~900 for doc text.
-    # At ~4 chars/token: 900 * 4 = 3600 chars minimum; 5000 chars provides richer context.
-    truncated = document_text[:5000] if len(document_text) > 5000 else document_text
+    context = _extract_key_context_for_summary(document_text, max_chars=4500)
+    fallback = _build_fallback_summary(document_text)
+
     try:
         response = await call_ollama(
-            SUMMARIZATION_PROMPT.format(document_text=truncated),
-            num_predict=750,   # Concise JSON summary + 4 bullet sections
-            num_ctx=2048,
+            SUMMARIZATION_PROMPT.format(document_text=context),
+            num_predict=650,   # Concise JSON summary + 4 bullet sections
+            num_ctx=1536,
         )
         result = extract_json_from_response(response)
         if result.get("summary_text"):
             logger.info("Ollama summarization successful")
+            
+            # Hybrid enrichment: supplement any empty/missing bullet section from fallback facts
+            cov = clean_newlines_in_bullets(_clean_field(result.get("coverage_summary")))
+            excl = clean_newlines_in_bullets(_clean_field(result.get("exclusions_summary")))
+            wait = clean_newlines_in_bullets(_clean_field(result.get("waiting_period_summary")))
+            prem = clean_newlines_in_bullets(_clean_field(result.get("premium_summary")))
+
             out = {
                 "summary_text": clean_newlines_in_text(_clean_field(result.get("summary_text", ""))),
-                "coverage_summary": clean_newlines_in_bullets(_clean_field(result.get("coverage_summary"))),
-                "exclusions_summary": clean_newlines_in_bullets(_clean_field(result.get("exclusions_summary"))),
-                "waiting_period_summary": clean_newlines_in_bullets(_clean_field(result.get("waiting_period_summary"))),
-                "premium_summary": clean_newlines_in_bullets(_clean_field(result.get("premium_summary"))),
+                "coverage_summary": cov or clean_newlines_in_bullets(fallback.get("coverage_summary", "")),
+                "exclusions_summary": excl or clean_newlines_in_bullets(fallback.get("exclusions_summary", "")),
+                "waiting_period_summary": wait or clean_newlines_in_bullets(fallback.get("waiting_period_summary", "")),
+                "premium_summary": prem or clean_newlines_in_bullets(fallback.get("premium_summary", "")),
             }
             _ai_cache[ck] = out
             return out
     except Exception as e:
         logger.warning(f"Ollama unavailable ({e}), extracting summary from document text")
-    # Ollama offline: extract real content from the uploaded document instead of returning hardcoded demo data
-    fallback = _build_fallback_summary(document_text)
+
+    # Ollama offline or partial: use fallback summary extracted from document text
     cleaned_fallback = {
         "summary_text": clean_newlines_in_text(fallback["summary_text"]),
         "coverage_summary": clean_newlines_in_bullets(fallback["coverage_summary"]),
@@ -1126,13 +1166,14 @@ async def extract_policy_fields(document_text: str, force_regenerate: bool = Fal
         logger.info("Cache hit: fields")
         return _ai_cache[ck]
 
-    # Cap at 4000 chars to fit within num_ctx=2048 context window.
-    truncated = document_text[:4000] if len(document_text) > 4000 else document_text
+    # Cap at 3000 chars to fit within num_ctx=1024 context window.
+    # Field extraction produces short JSON — smaller input = faster prompt processing.
+    truncated = document_text[:3000] if len(document_text) > 3000 else document_text
     try:
         response = await call_ollama(
             FIELD_EXTRACTION_PROMPT.format(document_text=truncated),
-            num_predict=400,
-            num_ctx=2048,
+            num_predict=350,
+            num_ctx=1024,
         )
         result = extract_json_from_response(response)
         if result:
@@ -1252,13 +1293,14 @@ async def analyze_risks(document_text: str, force_regenerate: bool = False) -> d
         logger.info("Cache hit: risks")
         return _ai_cache[ck]
 
-    # Cap at 4000 chars to fit within num_ctx=2048 context window.
-    truncated = document_text[:4000] if len(document_text) > 4000 else document_text
+    # Cap at 3000 chars to fit within num_ctx=1024 context window.
+    # Risk analysis extracts up to 3 JSON risk items — short output, small input is fine.
+    truncated = document_text[:3000] if len(document_text) > 3000 else document_text
     try:
         response = await call_ollama(
             RISK_ANALYSIS_PROMPT.format(document_text=truncated),
-            num_predict=450,
-            num_ctx=2048,
+            num_predict=300,
+            num_ctx=1024,
         )
         result = extract_json_from_response(response)
         if result.get("risks"):
