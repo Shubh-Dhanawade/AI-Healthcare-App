@@ -23,7 +23,7 @@ _model = None
 _scaler = None
 
 def load_ml_model():
-    """Load pre-trained Random Forest model and standard scaler from storage."""
+    """Load pre-trained XGBoost model and standard scaler from storage."""
     global _model, _scaler
     if _model is None or _scaler is None:
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -224,7 +224,7 @@ async def get_claims_stats() -> Dict[str, Any]:
             {"model_name": "Logistic Regression", "precision": 75.1, "recall": 90.4, "f1_score": 82.1, "auc_roc": 0.823, "is_selected": False},
             {"model_name": "Decision Tree", "precision": 75.7, "recall": 91.1, "f1_score": 82.7, "auc_roc": 0.841, "is_selected": False},
             {"model_name": "Random Forest", "precision": 77.2, "recall": 93.0, "f1_score": 84.4, "auc_roc": 0.859, "is_selected": False},
-            {"model_name": "Gradient Boosting", "precision": 73.6, "recall": 97.5, "f1_score": 83.8, "auc_roc": 0.864, "is_selected": True}
+            {"model_name": "XGBoost", "precision": 73.6, "recall": 97.5, "f1_score": 83.8, "auc_roc": 0.864, "is_selected": True}
         ],
         "plots": {
             "roc_curves": "/data_science_analysis/roc_curves.png",

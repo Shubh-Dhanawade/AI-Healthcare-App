@@ -107,6 +107,8 @@ export default function AnalyticsPage() {
     );
   }
 
+  const selectedModel = stats.benchmarks.find((b) => b.is_selected)?.model_name || 'XGBoost';
+
   return (
     <div className="space-y-8 fade-in">
       {/* Header */}
@@ -132,8 +134,8 @@ export default function AnalyticsPage() {
                   <span className="text-slate-400 font-semibold">{item.count} samples ({item.percentage.toFixed(2)}%)</span>
                 </div>
                 <div className="w-full bg-slate-800 h-2.5 rounded-full overflow-hidden">
-                  <div 
-                    className="h-full rounded-full bg-red-500/80" 
+                  <div
+                    className="h-full rounded-full bg-red-500/80"
                     style={{ width: `${item.percentage}%` }}
                   />
                 </div>
@@ -157,8 +159,8 @@ export default function AnalyticsPage() {
                   <span className="text-slate-400 font-semibold">{item.count} samples ({item.percentage.toFixed(2)}%)</span>
                 </div>
                 <div className="w-full bg-slate-800 h-2.5 rounded-full overflow-hidden">
-                  <div 
-                    className="h-full rounded-full bg-emerald-500/80" 
+                  <div
+                    className="h-full rounded-full bg-emerald-500/80"
                     style={{ width: `${item.percentage}%` }}
                   />
                 </div>
@@ -174,8 +176,8 @@ export default function AnalyticsPage() {
           <BarChart3 className="w-5 h-5 text-blue-400" />
           <h3 className="font-bold text-white">Model Evaluation & Benchmarking</h3>
         </div>
-        <p className="text-xs text-slate-400 mb-5">Performance scores calculated on the test split. The selected model (Random Forest) was chosen based on its superior AUC-ROC score and stability with explainability frameworks.</p>
-        
+        <p className="text-xs text-slate-400 mb-5">Performance scores calculated on the test split. The selected model ({selectedModel}) was chosen based on its superior AUC-ROC score and stability with explainability frameworks.</p>
+
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-sm">
             <thead>
@@ -190,7 +192,7 @@ export default function AnalyticsPage() {
             </thead>
             <tbody className="divide-y divide-slate-800/40">
               {stats.benchmarks.map((row) => (
-                <tr 
+                <tr
                   key={row.model_name}
                   className={`transition-colors ${row.is_selected ? 'bg-blue-500/5 text-white border-l-2 border-blue-500' : 'text-slate-300 hover:bg-white/5'}`}
                 >
@@ -237,11 +239,10 @@ export default function AnalyticsPage() {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id as any)}
-                className={`flex items-center gap-2 px-4 py-2.5 -mb-px font-semibold text-sm border-b-2 transition-all whitespace-nowrap ${
-                  isActive 
-                    ? 'border-blue-500 text-blue-400' 
+                className={`flex items-center gap-2 px-4 py-2.5 -mb-px font-semibold text-sm border-b-2 transition-all whitespace-nowrap ${isActive
+                    ? 'border-blue-500 text-blue-400'
                     : 'border-transparent text-slate-400 hover:text-white hover:border-slate-600'
-                }`}
+                  }`}
               >
                 <Icon className="w-4 h-4" />
                 {tab.label}
@@ -255,8 +256,8 @@ export default function AnalyticsPage() {
           {activeTab === 'roc' && (
             <div className="text-center max-w-2xl w-full mx-auto">
               <p className="text-sm text-slate-300 mb-4 font-medium">ROC Curve analysis comparing true positive rates vs false positive rates for model benchmarking.</p>
-              <img 
-                src={`${apiBaseUrl}${stats.plots.roc_curves}`} 
+              <img
+                src={`${apiBaseUrl}${stats.plots.roc_curves}?v=xgboost`}
                 alt="ROC Curves Comparison Chart"
                 className="rounded-xl border border-slate-700/40 bg-white mx-auto shadow-2xl max-h-[500px] object-contain"
               />
@@ -266,8 +267,8 @@ export default function AnalyticsPage() {
           {activeTab === 'shap' && (
             <div className="text-center max-w-2xl w-full mx-auto">
               <p className="text-sm text-slate-300 mb-4 font-medium">SHAP Global Summary plot detailing mean absolute impact of features (like smoking and BP) across all claims.</p>
-              <img 
-                src={`${apiBaseUrl}${stats.plots.shap_summary}`} 
+              <img
+                src={`${apiBaseUrl}${stats.plots.shap_summary}?v=xgboost`}
                 alt="SHAP Global Explanations Summary Plot"
                 className="rounded-xl border border-slate-700/40 bg-white mx-auto shadow-2xl max-h-[500px] object-contain"
               />
@@ -277,8 +278,8 @@ export default function AnalyticsPage() {
           {activeTab === 'lime' && (
             <div className="text-center max-w-2xl w-full mx-auto">
               <p className="text-sm text-slate-300 mb-4 font-medium">LIME Local Explanation showing exactly why a single patient's claim was denied based on specific thresholds.</p>
-              <img 
-                src={`${apiBaseUrl}${stats.plots.lime_explanation}`} 
+              <img
+                src={`${apiBaseUrl}${stats.plots.lime_explanation}?v=xgboost`}
                 alt="LIME Local Explanation Attribution Plot"
                 className="rounded-xl border border-slate-700/40 bg-white mx-auto shadow-2xl max-h-[500px] object-contain"
               />
@@ -296,31 +297,31 @@ export default function AnalyticsPage() {
                   <form onSubmit={handlePredict} className="space-y-4 text-xs">
                     <div>
                       <label className="block text-slate-400 mb-1 font-medium">Age of Policyholder</label>
-                      <input 
-                        type="number" 
-                        min="0" 
+                      <input
+                        type="number"
+                        min="0"
                         max="120"
-                        value={age} 
+                        value={age}
                         onChange={(e) => setAge(parseInt(e.target.value) || 0)}
                         className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white text-xs outline-none focus:border-blue-500 transition-colors"
                       />
                     </div>
                     <div>
                       <label className="block text-slate-400 mb-1 font-medium">Body Mass Index (BMI)</label>
-                      <input 
-                        type="number" 
-                        step="0.1" 
-                        min="10" 
+                      <input
+                        type="number"
+                        step="0.1"
+                        min="10"
                         max="60"
-                        value={bmi} 
+                        value={bmi}
                         onChange={(e) => setBmi(parseFloat(e.target.value) || 0)}
                         className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white text-xs outline-none focus:border-blue-500 transition-colors"
                       />
                     </div>
                     <div>
                       <label className="block text-slate-400 mb-1 font-medium">Active Smoker Status</label>
-                      <select 
-                        value={smoker} 
+                      <select
+                        value={smoker}
                         onChange={(e) => setSmoker(parseInt(e.target.value) || 0)}
                         className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white text-xs outline-none focus:border-blue-500 transition-colors"
                       >
@@ -330,19 +331,19 @@ export default function AnalyticsPage() {
                     </div>
                     <div>
                       <label className="block text-slate-400 mb-1 font-medium">Pre-existing Health Conditions Count</label>
-                      <input 
-                        type="number" 
-                        min="0" 
+                      <input
+                        type="number"
+                        min="0"
                         max="10"
-                        value={preExisting} 
+                        value={preExisting}
                         onChange={(e) => setPreExisting(parseInt(e.target.value) || 0)}
                         className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white text-xs outline-none focus:border-blue-500 transition-colors"
                       />
                     </div>
                     <div>
                       <label className="block text-slate-400 mb-1 font-medium">Policy Coverage Tier</label>
-                      <select 
-                        value={coverageTier} 
+                      <select
+                        value={coverageTier}
                         onChange={(e) => setCoverageTier(parseInt(e.target.value) || 2)}
                         className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white text-xs outline-none focus:border-blue-500 transition-colors"
                       >
@@ -354,22 +355,22 @@ export default function AnalyticsPage() {
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label className="block text-slate-400 mb-1 font-medium">Systolic BP (mmHg)</label>
-                        <input 
-                          type="number" 
-                          min="80" 
+                        <input
+                          type="number"
+                          min="80"
                           max="200"
-                          value={systolic} 
+                          value={systolic}
                           onChange={(e) => setSystolic(parseInt(e.target.value) || 120)}
                           className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white text-xs outline-none focus:border-blue-500 transition-colors"
                         />
                       </div>
                       <div>
                         <label className="block text-slate-400 mb-1 font-medium">Diastolic BP (mmHg)</label>
-                        <input 
-                          type="number" 
-                          min="50" 
+                        <input
+                          type="number"
+                          min="50"
                           max="130"
-                          value={diastolic} 
+                          value={diastolic}
                           onChange={(e) => setDiastolic(parseInt(e.target.value) || 80)}
                           className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white text-xs outline-none focus:border-blue-500 transition-colors"
                         />
@@ -440,16 +441,16 @@ export default function AnalyticsPage() {
                                 <div className="w-full bg-slate-900 h-2 rounded-full overflow-hidden flex">
                                   <div className="w-1/2 flex justify-end bg-slate-950">
                                     {!isPositive && (
-                                      <div 
-                                        className="h-full bg-emerald-500" 
+                                      <div
+                                        className="h-full bg-emerald-500"
                                         style={{ width: `${pctWidth}%` }}
                                       />
                                     )}
                                   </div>
                                   <div className="w-1/2 bg-slate-950">
                                     {isPositive && (
-                                      <div 
-                                        className="h-full bg-red-500" 
+                                      <div
+                                        className="h-full bg-red-500"
                                         style={{ width: `${pctWidth}%` }}
                                       />
                                     )}

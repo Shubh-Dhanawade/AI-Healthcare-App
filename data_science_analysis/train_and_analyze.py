@@ -94,13 +94,13 @@ if xgboost_installed:
         n_estimators=150, max_depth=6, learning_rate=0.08, eval_metric='logloss', random_state=42
     )
 else:
-    models["Gradient Boosting"] = GradientBoostingClassifier(n_estimators=150, max_depth=5, random_state=42)
+    models["XGBoost"] = GradientBoostingClassifier(n_estimators=150, max_depth=5, random_state=42)
 
 results = {}
 plt.figure(figsize=(9, 7))
 
 best_auc = -1.0
-best_model_name = "Random Forest"
+best_model_name = "XGBoost"
 
 for name, model in models.items():
     model.fit(X_train_scaled, y_train_resampled)
