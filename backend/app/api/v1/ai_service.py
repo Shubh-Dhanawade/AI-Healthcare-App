@@ -22,7 +22,9 @@ from app.schemas.schemas import (
     QueryRequest, QueryResponse, ChatSessionResponse, ChatMessageResponse,
     ChatSessionCreate,
 )
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
+from urllib.parse import quote
+import httpx
 from app.services.rag_service import query_rag_pipeline
 from app.services.ai_service import (
     generate_summary, extract_policy_fields, analyze_risks,
@@ -1135,3 +1137,45 @@ async def delete_chat_session(
     await db.delete(session)
     await db.commit()
     return
+
+
+@router.get("/tts")
+async def text_to_speech(
+    text: str,
+    lang: str = "en",
+):
+    """
+    Generate MP3 speech audio for given text in requested language (en, hi, mr).
+    Acts as a high-fidelity TTS stream for English, Hindi, and Marathi.
+    """
+    if not text or not text.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Text parameter is required")
+
+    lang_map = {
+        "english": "en",
+        "hindi": "hi",
+        "marathi": "mr",
+        "en": "en",
+        "hi": "hi",
+        "mr": "mr",
+    }
+    target_lang = lang_map.get(lang.lower(), "en")
+    clean_text = text.strip()[:400]
+
+    tts_url = f"https://translate.google.com/translate_tts?ie=UTF-8&q={quote(clean_text)}&tl={target_lang}&client=tw-ob"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        try:
+            resp = await client.get(tts_url, headers=headers)
+            if resp.status_code == 200:
+                return Response(content=resp.content, media_type="audio/mpeg")
+            else:
+                logger.warning(f"TTS endpoint returned status {resp.status_code}")
+                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="TTS service unavailable")
+        except Exception as e:
+            logger.error(f"TTS fetch error: {e}")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"TTS error: {str(e)}")
+
