@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-# Install system dependencies for PaddleOCR and PyMuPDF
+# Install system dependencies for PaddleOCR, PyMuPDF, PyTesseract, and OpenCV
 RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     libsm6 \
@@ -8,6 +8,9 @@ RUN apt-get update && apt-get install -y \
     libxrender-dev \
     libgl1 \
     libgomp1 \
+    tesseract-ocr \
+    libtesseract-dev \
+    poppler-utils \
     wget \
     curl \
     && rm -rf /var/lib/apt/lists/*

@@ -25,6 +25,7 @@ paddleocr==2.7.3
 paddlepaddle==2.6.2
 Pillow==10.3.0
 easyocr>=1.7.0
+pytesseract>=0.3.10
 
 # Utilities
 python-dotenv==1.0.1

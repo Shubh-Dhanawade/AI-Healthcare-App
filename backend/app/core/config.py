@@ -31,11 +31,12 @@ class Settings(BaseSettings):
     # Ollama AI
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "gemma3:4b"
-    OLLAMA_NUM_THREAD: int = 8
-    # num_gpu=-1: Ollama auto-fits as many layers as possible into VRAM without OOM.
-    # DO NOT use 999 (force all layers) on a 4GB GPU — the 3.88B Q8_0 model weights
-    # alone need ~3443 MiB, leaving insufficient room for the KV cache (500 Internal Server Error).
-    OLLAMA_NUM_GPU: int = -1
+    # 4 CPU threads: reduces RAM pressure (currently at 95%) when some layers fall back to CPU.
+    # With Q4_K_M all layers on GPU, this becomes irrelevant but safe to keep.
+    OLLAMA_NUM_THREAD: int = 4
+    # 999 = force ALL layers to GPU. Ollama auto-clamps to max available VRAM.
+    # With Q4_K_M (~2.5GB), all 35 layers fit in the RTX 3050's ~2.8GB free VRAM.
+    OLLAMA_NUM_GPU: int = 999
     OLLAMA_KEEP_ALIVE: str = "-1"
 
     # File Uploads

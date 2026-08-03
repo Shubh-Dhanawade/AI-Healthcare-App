@@ -22,12 +22,17 @@ aiofiles==23.2.1
 PyMuPDF==1.24.3
 Pillow==10.3.0
 easyocr>=1.7.0
+pytesseract>=0.3.10
 
 # Utilities
 python-dotenv==1.0.1
 pydantic==2.7.4
 pydantic-settings==2.2.1
 loguru==0.7.2
+
+# Vector Store & Local Embeddings
+faiss-cpu==1.10.0
+numpy==1.26.4
 
 # LangChain components for context-aware summarization
 langchain-core==1.4.9

@@ -30,7 +30,8 @@ async def generate_embeddings_batch(texts: List[str]) -> List[List[float]]:
         prefixed_sub_batch = [f"search_document: {t}" for t in sub_batch]
         payload = {
             "model": "nomic-embed-text",
-            "input": prefixed_sub_batch
+            "input": prefixed_sub_batch,
+            "keep_alive": "1m"
         }
         
         try:
