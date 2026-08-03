@@ -490,6 +490,7 @@ export default function DocumentDetailPage() {
   const sessionIdRef = useRef<string | null>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const scrollToChatBottom = useCallback((smooth = true) => {
     if (messagesEndRef.current) {
@@ -771,12 +772,84 @@ export default function DocumentDetailPage() {
   const [lastSpokenLang, setLastSpokenLang] = useState('');
   const [lastSpokenOnStop, setLastSpokenOnStop] = useState<any>(null);
 
+  // Tokenize text into words with char offsets for precision real-time highlighting
+  const tokenizeTextIntoWords = (text: string, baseOffset: number) => {
+    const tokens: Array<{ word: string; prefix: string; suffix: string; start: number; end: number }> = [];
+    const wordRegex = /[\w\d\u0900-\u097F']+/g;
+    let match: RegExpExecArray | null;
+    let lastIndex = 0;
+
+    while ((match = wordRegex.exec(text)) !== null) {
+      const word = match[0];
+      const matchStart = match.index;
+      const matchEnd = matchStart + word.length;
+      const prefix = text.substring(lastIndex, matchStart);
+
+      tokens.push({
+        word,
+        prefix,
+        suffix: '',
+        start: baseOffset + matchStart,
+        end: baseOffset + matchEnd,
+      });
+      lastIndex = matchEnd;
+    }
+
+    const trailingText = lastIndex < text.length ? text.substring(lastIndex) : '';
+    return { tokens, trailingText };
+  };
+
+  // Helper to select the appropriate TTS voice based on target language
+  const getVoiceForLanguage = (allVoices: SpeechSynthesisVoice[], lang: string, preferredVoiceName?: string): SpeechSynthesisVoice | null => {
+    if (!allVoices || allVoices.length === 0) return null;
+
+    let targetPrefix = 'en';
+    if (lang === 'Hindi') targetPrefix = 'hi';
+    else if (lang === 'Marathi') targetPrefix = 'mr';
+
+    // 1. If preferredVoiceName is provided, check if it matches target language (or hi for mr)
+    if (preferredVoiceName) {
+      const pref = allVoices.find(v => v.name === preferredVoiceName);
+      if (pref) {
+        const prefLang = pref.lang.toLowerCase();
+        const matchesTarget = targetPrefix === 'mr'
+          ? (prefLang.startsWith('mr') || prefLang.startsWith('hi'))
+          : prefLang.startsWith(targetPrefix);
+        if (matchesTarget) return pref;
+      }
+    }
+
+    // 2. Exact match for targetPrefix (e.g. hi-IN or mr-IN)
+    let match = allVoices.find(v => v.lang.toLowerCase().startsWith(targetPrefix));
+    if (match) return match;
+
+    // 3. Fallback for Marathi to Hindi if no specific Marathi voice exists
+    if (targetPrefix === 'mr') {
+      match = allVoices.find(v => v.lang.toLowerCase().startsWith('hi'));
+      if (match) return match;
+    }
+
+    // 4. Fallback to English if non-English requested but no Indian voice found
+    if (targetPrefix !== 'en') {
+      match = allVoices.find(v => v.lang.toLowerCase().startsWith('en'));
+      if (match) return match;
+    }
+
+    // 5. Default voice or first available
+    return allVoices.find(v => v.default) || allVoices[0] || null;
+  };
+
   // Filter available voices based on active language prefix (en, hi, mr)
   const filteredVoices = voices.filter(v => {
     let langCode = 'en';
     if (selectedLanguage === 'Hindi') langCode = 'hi';
     else if (selectedLanguage === 'Marathi') langCode = 'mr';
-    return v.lang.toLowerCase().startsWith(langCode) || v.lang.toLowerCase().includes(langCode + '_');
+
+    const vLang = v.lang.toLowerCase();
+    if (langCode === 'mr') {
+      return vLang.startsWith('mr') || vLang.startsWith('hi');
+    }
+    return vLang.startsWith(langCode) || vLang.includes(langCode + '_');
   });
 
   // Load and update speechSynthesis voices on mount
@@ -788,11 +861,9 @@ export default function DocumentDetailPage() {
       setVoices(allVoices);
 
       const storedPref = localStorage.getItem('health_care_system_voice');
-      if (storedPref && allVoices.some(v => v.name === storedPref)) {
-        setSelectedVoiceName(storedPref);
-      } else if (allVoices.length > 0) {
-        const defaultVoice = allVoices.find(v => v.default) || allVoices[0];
-        setSelectedVoiceName(defaultVoice.name);
+      const bestVoice = getVoiceForLanguage(allVoices, selectedLanguage, storedPref || undefined);
+      if (bestVoice) {
+        setSelectedVoiceName(bestVoice.name);
       }
     };
 
@@ -800,7 +871,7 @@ export default function DocumentDetailPage() {
     if (window.speechSynthesis.onvoiceschanged !== undefined) {
       window.speechSynthesis.onvoiceschanged = updateVoices;
     }
-  }, []);
+  }, [selectedLanguage]);
 
   const safeTranslate = async (text: string | undefined, lang: string) => {
     if (!text || !text.trim()) return { translated_text: '' };
@@ -813,7 +884,22 @@ export default function DocumentDetailPage() {
   };
 
   const handleLanguageChange = async (lang: string) => {
+    // Cancel active speech when changing language
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+    setSpeakingTab(null);
+    setIsPaused(false);
+    setCurrentSpokenCharIndex(-1);
+    setSavedSpeakIndex(0);
+
     setSelectedLanguage(lang);
+
+    const bestVoice = getVoiceForLanguage(voices, lang);
+    if (bestVoice) {
+      setSelectedVoiceName(bestVoice.name);
+    }
+
     if (lang === 'English' || !doc) return;
     if (translations[lang]) return;
     setIsTranslating(true);
@@ -942,109 +1028,159 @@ export default function DocumentDetailPage() {
 
   const restartSpeechWithSettings = (newVoiceName: string, newRate: number) => {
     if (!speakingTab || !lastSpokenText) return;
-    if (typeof window === 'undefined' || !window.speechSynthesis) return;
-
-    if (!isPaused) {
-      window.speechSynthesis.cancel();
-      setTimeout(() => {
-        const textToSpeak = savedSpeakIndex > 0 ? lastSpokenText.substring(savedSpeakIndex) : lastSpokenText;
-        const utterance = new SpeechSynthesisUtterance(textToSpeak);
-        let langCode = 'en-US';
-        if (lastSpokenLang === 'Hindi') langCode = 'hi-IN';
-        else if (lastSpokenLang === 'Marathi') langCode = 'mr-IN';
-        utterance.lang = langCode;
-
-        const chosenVoice = voices.find(v => v.name === newVoiceName);
-        if (chosenVoice) utterance.voice = chosenVoice;
-        utterance.rate = newRate;
-        utterance.pitch = 1.0;
-
-        utterance.onboundary = (event) => {
-          if (event.name === 'word') {
-            const charIndex = savedSpeakIndex + event.charIndex;
-            setCurrentSpokenCharIndex(charIndex);
-            setSavedSpeakIndex(charIndex);
-          }
-        };
-
-        const stopHandler = () => {
-          setCurrentSpokenCharIndex(-1);
-          setSavedSpeakIndex(0);
-          setIsPaused(false);
-          setSpeakingTab(null);
-          if (lastSpokenOnStop) lastSpokenOnStop();
-        };
-        utterance.onend = stopHandler;
-        utterance.onerror = (e) => {
-          console.warn("SpeechSynthesis error:", e.error);
-          if (e.error !== 'interrupted' && e.error !== 'canceled') {
-            stopHandler();
-          }
-        };
-        window.speechSynthesis.speak(utterance);
-      }, 50);
-    }
+    speakText(lastSpokenText, lastSpokenLang, savedSpeakIndex, () => { setSpeakingTab(null); });
   };
 
   const speakText = (text: string, lang: string, startOffset = 0, onStop?: () => void) => {
-    if (typeof window === 'undefined' || !window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
-    if (!text) return;
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+    if (!text || !text.trim()) return;
 
     setLastSpokenText(text);
     setLastSpokenLang(lang);
     setLastSpokenOnStop(() => onStop);
 
     const textToSpeak = startOffset > 0 ? text.substring(startOffset) : text;
-    const utterance = new SpeechSynthesisUtterance(textToSpeak);
-    let langCode = 'en-US';
-    if (lang === 'Hindi') langCode = 'hi-IN';
-    else if (lang === 'Marathi') langCode = 'mr-IN';
-    utterance.lang = langCode;
-
-    if (selectedVoiceName) {
-      const chosenVoice = voices.find(v => v.name === selectedVoiceName);
-      if (chosenVoice) utterance.voice = chosenVoice;
-    } else {
-      const matchingVoice = voices.find(v => v.lang.startsWith(langCode) || v.lang.includes(langCode.replace('-', '_')));
-      if (matchingVoice) utterance.voice = matchingVoice;
-    }
-
-    utterance.rate = speechRate;
-    utterance.pitch = 1.0;
-
-    utterance.onboundary = (event) => {
-      if (event.name === 'word') {
-        const charIndex = startOffset + event.charIndex;
-        setCurrentSpokenCharIndex(charIndex);
-        setSavedSpeakIndex(charIndex);
-      }
-    };
 
     const stopHandler = () => {
-      setCurrentSpokenCharIndex(-1);
-      setSavedSpeakIndex(0);
-      setIsPaused(false);
-      setSpeakingTab(null);
-      if (onStop) onStop();
-    };
-
-    utterance.onend = () => {
-      setCurrentSpokenCharIndex(-1);
-      setSavedSpeakIndex(0);
-      setIsPaused(false);
-      setSpeakingTab(null);
-      if (onStop) onStop();
-    };
-
-    utterance.onerror = (e) => {
-      console.warn("SpeechSynthesis error:", e.error);
-      if (e.error !== 'interrupted' && e.error !== 'canceled') {
-        stopHandler();
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
       }
+      if (typeof window !== 'undefined' && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
+      setCurrentSpokenCharIndex(-1);
+      setSavedSpeakIndex(0);
+      setIsPaused(false);
+      setSpeakingTab(null);
+      if (onStop) onStop();
     };
 
-    window.speechSynthesis.speak(utterance);
+    const fallbackToWebSpeech = (textForSpeech: string, offset: number) => {
+      if (typeof window === 'undefined' || !window.speechSynthesis) {
+        stopHandler();
+        return;
+      }
+      const utterance = new SpeechSynthesisUtterance(textForSpeech);
+      let langCode = 'en-US';
+      if (lang === 'Hindi') langCode = 'hi-IN';
+      else if (lang === 'Marathi') langCode = 'mr-IN';
+      utterance.lang = langCode;
+
+      const chosenVoice = getVoiceForLanguage(voices, lang, selectedVoiceName);
+      if (chosenVoice) utterance.voice = chosenVoice;
+      utterance.rate = speechRate;
+
+      utterance.onboundary = (event) => {
+        if (event.name === 'word') {
+          const charIdx = offset + event.charIndex;
+          setCurrentSpokenCharIndex(charIdx);
+          setSavedSpeakIndex(charIdx);
+        }
+      };
+      utterance.onend = stopHandler;
+      utterance.onerror = (e) => {
+        if (e.error !== 'interrupted' && e.error !== 'canceled') {
+          stopHandler();
+        }
+      };
+      window.speechSynthesis.speak(utterance);
+    };
+
+    interface SentenceChunk {
+      text: string;
+      start: number;
+      end: number;
+    }
+
+    const sentenceRegex = /[^.!?\n।]+[.!?\n।]*|[\n]+/g;
+    const chunks: SentenceChunk[] = [];
+    let match: RegExpExecArray | null;
+
+    while ((match = sentenceRegex.exec(textToSpeak)) !== null) {
+      const chunkText = match[0];
+      if (chunkText.trim().length > 0) {
+        chunks.push({
+          text: chunkText.trim(),
+          start: startOffset + match.index,
+          end: startOffset + match.index + chunkText.length
+        });
+      }
+    }
+
+    if (chunks.length === 0 && textToSpeak.length > 0) {
+      chunks.push({
+        text: textToSpeak.trim(),
+        start: startOffset,
+        end: startOffset + textToSpeak.length
+      });
+    }
+
+    const playNextChunk = (index: number) => {
+      if (index >= chunks.length) {
+        stopHandler();
+        return;
+      }
+
+      const chunk = chunks[index];
+      if (!chunk || !chunk.text) {
+        playNextChunk(index + 1);
+        return;
+      }
+
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+      const ttsUrl = `${API_URL}/ai/tts?text=${encodeURIComponent(chunk.text)}&lang=${encodeURIComponent(lang)}`;
+
+      const audio = new Audio(ttsUrl);
+      audio.playbackRate = speechRate;
+      audioRef.current = audio;
+
+      setCurrentSpokenCharIndex(chunk.start);
+      setSavedSpeakIndex(chunk.start);
+
+      let animId: number;
+
+      const updateProgressTicker = () => {
+        if (audioRef.current && !audioRef.current.paused && audioRef.current.duration) {
+          const ratio = audioRef.current.currentTime / audioRef.current.duration;
+          const localOffset = Math.min(chunk.text.length, Math.floor(ratio * chunk.text.length));
+          setCurrentSpokenCharIndex(chunk.start + localOffset);
+          animId = requestAnimationFrame(updateProgressTicker);
+        }
+      };
+
+      audio.onplay = () => {
+        animId = requestAnimationFrame(updateProgressTicker);
+      };
+
+      audio.onpause = () => {
+        cancelAnimationFrame(animId);
+      };
+
+      audio.onended = () => {
+        cancelAnimationFrame(animId);
+        playNextChunk(index + 1);
+      };
+
+      audio.onerror = () => {
+        cancelAnimationFrame(animId);
+        fallbackToWebSpeech(textToSpeak, startOffset);
+      };
+
+      audio.play().catch((err) => {
+        cancelAnimationFrame(animId);
+        console.warn("Audio play blocked or error, falling back to Web Speech API:", err);
+        fallbackToWebSpeech(textToSpeak, startOffset);
+      });
+    };
+
+    playNextChunk(0);
   };
 
   const getSummarySpeakText = (displayedSummary: any, lang: string) => {
@@ -1144,6 +1280,9 @@ export default function DocumentDetailPage() {
 
     // 1. If currently speaking this tab and NOT paused, then Pause it!
     if (speakingTab === tab && !isPaused) {
+      if (audioRef.current) {
+        audioRef.current.pause();
+      }
       if (typeof window !== 'undefined' && window.speechSynthesis) {
         window.speechSynthesis.cancel();
       }
@@ -1154,7 +1293,13 @@ export default function DocumentDetailPage() {
     // 2. If currently speaking this tab and IS paused, then Resume it!
     if (speakingTab === tab && isPaused) {
       setIsPaused(false);
-      speakText(lastSpokenText, lastSpokenLang, savedSpeakIndex, () => { setSpeakingTab(null); });
+      if (audioRef.current && audioRef.current.paused) {
+        audioRef.current.play().catch(() => {
+          speakText(lastSpokenText, lastSpokenLang, savedSpeakIndex, () => { setSpeakingTab(null); });
+        });
+      } else {
+        speakText(lastSpokenText, lastSpokenLang, savedSpeakIndex, () => { setSpeakingTab(null); });
+      }
       return;
     }
 
@@ -2178,55 +2323,15 @@ export default function DocumentDetailPage() {
                     ) : null}
 
                     {/* Final persisted summary — shown after stream completes and DB is updated */}
-                    {!isStreaming && displayedSummary?.summary_text && (() => {
-                      const paragraphs = (displayedSummary.summary_text || '').split('\n\n').filter(Boolean);
-                      let accumulatedOffset = 0;
-                      const paraInfos = paragraphs.map(p => {
-                        const info = {
-                          text: p,
-                          start: accumulatedOffset,
-                          end: accumulatedOffset + p.length
-                        };
-                        accumulatedOffset += p.length + 2;
-                        return info;
-                      });
-
-                      return (
-                        <div className="space-y-4">
-                          {paraInfos.map((paraInfo, i) => {
-                            const isSpeakingThisPara = speakingTab === 'summary' &&
-                              currentSpokenCharIndex >= paraInfo.start &&
-                              currentSpokenCharIndex < paraInfo.end;
-
-                            if (isSpeakingThisPara) {
-                              const localCharIndex = currentSpokenCharIndex - paraInfo.start;
-                              const textBefore = paraInfo.text.substring(0, localCharIndex);
-                              const textAfter = paraInfo.text.substring(localCharIndex);
-                              const wordMatch = textAfter.match(/^[\w\d\u0900-\u097F']+/);
-                              if (wordMatch) {
-                                const word = wordMatch[0];
-                                const textAfterWord = textAfter.substring(word.length);
-                                return (
-                                  <p key={i} className="leading-7 text-slate-200 border-l-2 border-blue-500 pl-3 mb-1">
-                                    <span className="text-slate-400">{textBefore}</span>
-                                    <span className="bg-yellow-400/25 text-yellow-300 font-extrabold px-1.5 py-0.5 rounded border border-yellow-500/40 shadow-[0_0_10px_rgba(250,204,21,0.3)] animate-pulse mx-0.5">
-                                      {word}
-                                    </span>
-                                    <span className="text-slate-200">{textAfterWord}</span>
-                                  </p>
-                                );
-                              }
-                            }
-
-                            return (
-                              <p key={i} className="leading-7 text-slate-200 border-l-2 border-blue-500/20 pl-3 mb-1">
-                                {paraInfo.text}
-                              </p>
-                            );
-                          })}
-                        </div>
-                      );
-                    })()}
+                    {!isStreaming && displayedSummary?.summary_text && (
+                      <div className="space-y-4">
+                        {displayedSummary.summary_text.split('\n\n').filter(Boolean).map((para: string, i: number) => (
+                          <p key={i} className="leading-7 text-slate-200 border-l-2 border-blue-500/20 pl-3">
+                            {para.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim()}
+                          </p>
+                        ))}
+                      </div>
+                    )}
 
                     {/* Error state */}
                     {streamError && !isStreaming && !displayedSummary?.summary_text && (

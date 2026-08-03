@@ -173,7 +173,7 @@ The system is fully containerized using **Docker Compose** and structured as fol
 - **Details**:
   - Models training script (`train_and_analyze.py`) trains a classification model to predict `claim_denied` using mock claims data.
   - Solves severe class imbalance using SMOTE over-sampling.
-  - Compares benchmark statistics (Precision, Recall, F1, and AUC-ROC) of **Logistic Regression, Decision Tree, Random Forest,** and **XGBoost**. Selected Random Forest as best-performing.
+  - Compares benchmark statistics (Precision, Recall, F1, and AUC-ROC) of **Logistic Regression, Decision Tree, Random Forest,** and **XGBoost**. Selected XGBoost as best-performing.
   - Generates and serves static plots for Explainable AI (XAI):
     - **ROC Curves**: Performance comparison across models.
     - **SHAP Summary Plot**: Global feature impact attribution.
