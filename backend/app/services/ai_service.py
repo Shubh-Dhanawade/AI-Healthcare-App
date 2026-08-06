@@ -287,7 +287,13 @@ def _extract_sentences_with_keywords(text: str, keywords: list[str], max_results
             # Clean up newlines/carriage returns and collapse spaces
             s_clean_final = re.sub(r'[\r\n]+', ' ', s_clean)
             s_clean_final = re.sub(r'\s+', ' ', s_clean_final).strip()
-            hits.append(s_clean_final[:300])
+            if len(s_clean_final) <= 300:
+                hits.append(s_clean_final)
+            else:
+                cutoff = s_clean_final[:300].rfind(' ')
+                if cutoff == -1:
+                    cutoff = 300
+                hits.append(s_clean_final[:cutoff].rstrip(",.-:; ") + "...")
 
         if len(hits) >= max_results:
             break
@@ -549,7 +555,7 @@ def _build_fallback_summary(document_text: str) -> dict:
     if coverage_type:
         cov_bullets.append(f"Coverage type: {coverage_type} — all insured members share the sum insured")
     for s in cov_sentences:
-        snippet = s[:140].rstrip(".")
+        snippet = s.rstrip(".")
         if snippet not in cov_bullets:
             cov_bullets.append(snippet)
     coverage_summary = (
@@ -559,7 +565,7 @@ def _build_fallback_summary(document_text: str) -> dict:
     )
 
     # Exclusions & Limits bullets
-    excl_bullets = [s[:160].rstrip(".") for s in excl_sentences]
+    excl_bullets = [s.rstrip(".") for s in excl_sentences]
     exclusions_summary = (
         "\n".join(f"\u2022 {b}." for b in excl_bullets[:3])
         if excl_bullets else
@@ -571,7 +577,7 @@ def _build_fallback_summary(document_text: str) -> dict:
     if waiting_period:
         wait_bullets.append(f"Waiting period of {waiting_period} for specific listed conditions")
     for s in wait_sentences:
-        snippet = s[:160].rstrip(".")
+        snippet = s.rstrip(".")
         if snippet not in wait_bullets:
             wait_bullets.append(snippet)
     waiting_period_summary = (
@@ -587,7 +593,7 @@ def _build_fallback_summary(document_text: str) -> dict:
     if co_pay:
         prem_bullets.append(f"Co-payment clause: {co_pay} of eligible claim amount")
     for s in prem_sentences:
-        snippet = s[:160].rstrip(".")
+        snippet = s.rstrip(".")
         if snippet not in prem_bullets:
             prem_bullets.append(snippet)
     premium_summary = (
