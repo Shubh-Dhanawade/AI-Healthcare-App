@@ -85,9 +85,17 @@ export default function ComparePage() {
     const ids = searchParams.get('ids');
     if (ids) {
       const parsed = ids.split(',').filter(Boolean);
-      if (parsed.length >= 2) {
+      if (parsed.length >= 2 && parsed.length <= 3) {
         setSelectedIds(parsed);
         setIsComparing(true);
+      } else if (parsed.length > 3) {
+        setSelectedIds(parsed.slice(0, 3));
+        setIsComparing(true);
+        toast.error('Maximum 3 policy selections allowed for comparison.');
+      } else if (parsed.length < 2) {
+        setSelectedIds(parsed);
+        setIsComparing(false);
+        toast.error('Minimum 2 policies should be selected for comparison.');
       }
     } else {
       setIsComparing(false);
@@ -118,8 +126,8 @@ export default function ComparePage() {
 
       return fresh;
     },
-    enabled: isComparing && selectedIds.length >= 2,
-    retry: false,
+    enabled: isComparing && selectedIds.length >= 2 && selectedIds.length <= 3,
+    staleTime: Infinity,
   });
 
   // Save successful comparisons to history list
@@ -300,7 +308,11 @@ export default function ComparePage() {
 
   const handleCompareClick = () => {
     if (selectedIds.length < 2) {
-      toast.error('Please select at least 2 policies to compare.');
+      toast.error('Minimum 2 policies should be selected for comparison.');
+      return;
+    }
+    if (selectedIds.length > 3) {
+      toast.error('Maximum 3 policy selections allowed for comparison.');
       return;
     }
     router.push(`/compare?ids=${selectedIds.join(',')}`);
@@ -322,7 +334,7 @@ export default function ComparePage() {
         return prev.filter(id => id !== docId);
       }
       if (prev.length >= 3) {
-        toast.error('You can compare a maximum of 3 policies.');
+        toast.error('Maximum 3 policy selections allowed for comparison.');
         return prev;
       }
       return [...prev, docId];

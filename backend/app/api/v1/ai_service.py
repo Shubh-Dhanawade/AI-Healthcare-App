@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from loguru import logger
 import asyncio
+import re
 from collections import defaultdict
 
 from app.core.database import get_db
@@ -1140,6 +1141,52 @@ async def delete_chat_session(
     return
 
 
+def _chunk_text_for_tts(text: str, max_chars: int = 170) -> list[str]:
+    """
+    Split text into chunks of at most max_chars without cutting words in half.
+    Splits preferentially by newlines, sentence punctuation (. ! ? ।), then spaces.
+    """
+    if not text or not text.strip():
+        return []
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    raw_chunks = []
+    for line in lines:
+        if len(line) <= max_chars:
+            raw_chunks.append(line)
+        else:
+            sentences = [s.strip() for s in re.split(r'([.!?।]+)', line) if s.strip()]
+            curr_chunk = ""
+            for i in range(0, len(sentences), 2):
+                sentence = sentences[i]
+                delim = sentences[i+1] if i+1 < len(sentences) else ""
+                full_sent = (sentence + delim).strip()
+                if not full_sent:
+                    continue
+                if len(curr_chunk) + len(full_sent) + 1 <= max_chars:
+                    curr_chunk = f"{curr_chunk} {full_sent}".strip()
+                else:
+                    if curr_chunk:
+                        raw_chunks.append(curr_chunk)
+                        curr_chunk = ""
+                    if len(full_sent) <= max_chars:
+                        curr_chunk = full_sent
+                    else:
+                        words = full_sent.split()
+                        w_chunk = ""
+                        for w in words:
+                            if len(w_chunk) + len(w) + 1 <= max_chars:
+                                w_chunk = f"{w_chunk} {w}".strip()
+                            else:
+                                if w_chunk:
+                                    raw_chunks.append(w_chunk)
+                                w_chunk = w
+                        if w_chunk:
+                            curr_chunk = w_chunk
+            if curr_chunk:
+                raw_chunks.append(curr_chunk)
+    return raw_chunks
+
+
 @router.get("/tts")
 async def text_to_speech(
     text: str,
@@ -1148,6 +1195,7 @@ async def text_to_speech(
     """
     Generate MP3 speech audio for given text in requested language (en, hi, mr).
     Acts as a high-fidelity TTS stream for English, Hindi, and Marathi.
+    Handles texts of arbitrary length by splitting into sub-chunks and concatenating audio.
     """
     if not text or not text.strip():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Text parameter is required")
@@ -1161,22 +1209,36 @@ async def text_to_speech(
         "mr": "mr",
     }
     target_lang = lang_map.get(lang.lower(), "en")
-    clean_text = text.strip()[:400]
+    
+    # Sub-chunk text so Google Translate TTS endpoint (max 200 chars) doesn't return 400 Bad Request
+    sub_chunks = _chunk_text_for_tts(text.strip(), max_chars=170)
+    if not sub_chunks:
+        sub_chunks = [text.strip()[:170]]
 
-    tts_url = f"https://translate.google.com/translate_tts?ie=UTF-8&q={quote(clean_text)}&tl={target_lang}&client=tw-ob"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        try:
-            resp = await client.get(tts_url, headers=headers)
-            if resp.status_code == 200:
-                return Response(content=resp.content, media_type="audio/mpeg")
-            else:
-                logger.warning(f"TTS endpoint returned status {resp.status_code}")
-                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="TTS service unavailable")
-        except Exception as e:
-            logger.error(f"TTS fetch error: {e}")
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"TTS error: {str(e)}")
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        async def fetch_chunk(chunk_str: str) -> bytes:
+            tts_url = f"https://translate.google.com/translate_tts?ie=UTF-8&q={quote(chunk_str)}&tl={target_lang}&client=tw-ob"
+            try:
+                resp = await client.get(tts_url, headers=headers)
+                if resp.status_code == 200:
+                    return resp.content
+                else:
+                    logger.warning(f"TTS Google chunk error {resp.status_code} for: {chunk_str[:30]}")
+                    return b""
+            except Exception as ex:
+                logger.error(f"TTS fetch error for sub-chunk: {ex}")
+                return b""
+
+        results = await asyncio.gather(*[fetch_chunk(c) for c in sub_chunks])
+        combined_audio = b"".join(results)
+        
+        if combined_audio:
+            return Response(content=combined_audio, media_type="audio/mpeg")
+        else:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="TTS service unavailable")
+
 

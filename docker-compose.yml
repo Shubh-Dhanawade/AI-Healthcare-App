@@ -46,7 +46,11 @@ services:
       QDRANT_HOST: qdrant
       UPLOAD_DIR: /app/uploads
       MAX_FILE_SIZE_MB: 50
-      ALLOWED_ORIGINS: '${ALLOWED_ORIGINS:-["http://localhost:3000","http://localhost","http://127.0.0.1:3000"]}'
+      SMTP_SERVER: '${SMTP_SERVER:-smtp.gmail.com}'
+      SMTP_PORT: '${SMTP_PORT:-587}'
+      SMTP_USER: '${SMTP_USER:-krushnakharat.official@gmail.com}'
+      SMTP_PASSWORD: '${SMTP_PASSWORD:-pbcgjleqmvcjsoho}'
+      ALLOWED_ORIGINS: '${ALLOWED_ORIGINS:-["http://localhost:3000","http://localhost:3001","http://localhost","http://127.0.0.1:3000","http://127.0.0.1:3001"]}'
     volumes:
       - upload_data:/app/uploads
       - ./data_science_analysis:/app/data_science_analysis

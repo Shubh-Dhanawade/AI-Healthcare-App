@@ -584,7 +584,7 @@ export default function DocumentDetailPage() {
 
   const handleDownload = async () => {
     if (!doc) return;
-    const toastId = toast.loading('Generating and downloading PDF report...');
+    const toastId = toast.loading('Generating PDF report...', { position: 'top-right' });
 
     try {
       // 1. Load html2pdf from CDN
@@ -644,7 +644,7 @@ export default function DocumentDetailPage() {
           // @ts-ignore
           await html2pdf().from(iframeDoc.documentElement).set(opt).save();
 
-          toast.success('PDF report downloaded successfully!', { id: toastId });
+          toast.success('PDF report generated and downloaded successfully!', { id: toastId, position: 'top-right', duration: 4000 });
         } catch (pdfError) {
           console.error('PDF generation inside iframe failed, falling back to window print:', pdfError);
           const printWindow = window.open('', '_blank');
@@ -655,9 +655,9 @@ export default function DocumentDetailPage() {
             setTimeout(() => {
               printWindow.print();
             }, 800);
-            toast.success('Print to PDF dialog opened successfully!', { id: toastId });
+            toast.success('Print to PDF dialog opened successfully!', { id: toastId, position: 'top-right', duration: 4000 });
           } else {
-            toast.error('Pop-up blocked. Please allow pop-ups to print the PDF report.', { id: toastId });
+            toast.error('Pop-up blocked. Please allow pop-ups to print the PDF report.', { id: toastId, position: 'top-right', duration: 5000 });
           }
         } finally {
           // Cleanup iframe
@@ -669,7 +669,7 @@ export default function DocumentDetailPage() {
 
     } catch (error) {
       console.error('Download error:', error);
-      toast.error('Failed to generate PDF report', { id: toastId });
+      toast.error('Failed to generate PDF report', { id: toastId, position: 'top-right', duration: 5000 });
     }
   };
 
@@ -728,25 +728,30 @@ export default function DocumentDetailPage() {
     if (!emailInput.trim()) return;
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(emailInput.trim())) {
-      toast.error('Please enter a valid email address');
+      toast.error('Please enter a valid email address', { position: 'top-right' });
       return;
     }
     setSendingEmail(true);
-    const toastId = toast.loading(`Sending email to ${emailInput}...`);
+    const toastId = toast.loading(`Sending PDF report to ${emailInput}...`, { position: 'top-right' });
     try {
       const res = await exportApi.emailReport(docId, emailInput);
-      toast.success(res.message || 'Email sent successfully!', { id: toastId });
+      toast.success(res.message || `PDF report sent successfully to ${emailInput}!`, { id: toastId, position: 'top-right', duration: 4000 });
       setShowEmailForm(false);
       setEmailInput('');
     } catch (error: any) {
       console.error('Email error:', error);
-      toast.error(error.response?.data?.detail || 'Failed to send email', { id: toastId });
+      toast.error(error.response?.data?.detail || `Failed to send PDF report to ${emailInput}`, { id: toastId, position: 'top-right', duration: 5000 });
     } finally {
       setSendingEmail(false);
     }
   };
 
-  const [selectedLanguage, setSelectedLanguage] = useState<string>('English');
+  const [selectedLanguage, setSelectedLanguage] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('health_care_system_language') || 'English';
+    }
+    return 'English';
+  });
   const [translations, setTranslations] = useState<Record<string, {
     summary_text: string;
     coverage_summary?: string;
@@ -772,33 +777,6 @@ export default function DocumentDetailPage() {
   const [lastSpokenLang, setLastSpokenLang] = useState('');
   const [lastSpokenOnStop, setLastSpokenOnStop] = useState<any>(null);
 
-  // Tokenize text into words with char offsets for precision real-time highlighting
-  const tokenizeTextIntoWords = (text: string, baseOffset: number) => {
-    const tokens: Array<{ word: string; prefix: string; suffix: string; start: number; end: number }> = [];
-    const wordRegex = /[\w\d\u0900-\u097F']+/g;
-    let match: RegExpExecArray | null;
-    let lastIndex = 0;
-
-    while ((match = wordRegex.exec(text)) !== null) {
-      const word = match[0];
-      const matchStart = match.index;
-      const matchEnd = matchStart + word.length;
-      const prefix = text.substring(lastIndex, matchStart);
-
-      tokens.push({
-        word,
-        prefix,
-        suffix: '',
-        start: baseOffset + matchStart,
-        end: baseOffset + matchEnd,
-      });
-      lastIndex = matchEnd;
-    }
-
-    const trailingText = lastIndex < text.length ? text.substring(lastIndex) : '';
-    return { tokens, trailingText };
-  };
-
   // Helper to select the appropriate TTS voice based on target language
   const getVoiceForLanguage = (allVoices: SpeechSynthesisVoice[], lang: string, preferredVoiceName?: string): SpeechSynthesisVoice | null => {
     if (!allVoices || allVoices.length === 0) return null;
@@ -807,7 +785,6 @@ export default function DocumentDetailPage() {
     if (lang === 'Hindi') targetPrefix = 'hi';
     else if (lang === 'Marathi') targetPrefix = 'mr';
 
-    // 1. If preferredVoiceName is provided, check if it matches target language (or hi for mr)
     if (preferredVoiceName) {
       const pref = allVoices.find(v => v.name === preferredVoiceName);
       if (pref) {
@@ -819,23 +796,19 @@ export default function DocumentDetailPage() {
       }
     }
 
-    // 2. Exact match for targetPrefix (e.g. hi-IN or mr-IN)
     let match = allVoices.find(v => v.lang.toLowerCase().startsWith(targetPrefix));
     if (match) return match;
 
-    // 3. Fallback for Marathi to Hindi if no specific Marathi voice exists
     if (targetPrefix === 'mr') {
       match = allVoices.find(v => v.lang.toLowerCase().startsWith('hi'));
       if (match) return match;
     }
 
-    // 4. Fallback to English if non-English requested but no Indian voice found
     if (targetPrefix !== 'en') {
       match = allVoices.find(v => v.lang.toLowerCase().startsWith('en'));
       if (match) return match;
     }
 
-    // 5. Default voice or first available
     return allVoices.find(v => v.default) || allVoices[0] || null;
   };
 
@@ -883,25 +856,9 @@ export default function DocumentDetailPage() {
     }
   };
 
-  const handleLanguageChange = async (lang: string) => {
-    // Cancel active speech when changing language
-    if (typeof window !== 'undefined' && window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-    }
-    setSpeakingTab(null);
-    setIsPaused(false);
-    setCurrentSpokenCharIndex(-1);
-    setSavedSpeakIndex(0);
-
-    setSelectedLanguage(lang);
-
-    const bestVoice = getVoiceForLanguage(voices, lang);
-    if (bestVoice) {
-      setSelectedVoiceName(bestVoice.name);
-    }
-
+  const executeTranslation = async (lang: string) => {
     if (lang === 'English' || !doc) return;
-    if (translations[lang]) return;
+    if (translations[lang] || isTranslating) return;
     setIsTranslating(true);
     const toastId = toast.loading(`Translating page content to ${lang}...`);
     try {
@@ -935,7 +892,6 @@ export default function DocumentDetailPage() {
         ...checklistData.claim_steps.map((step: string) => () => safeTranslate(step, lang))
       ] : [];
 
-      // Run translation tasks sequentially with a small delay to avoid network rate limits / Axios timeouts
       const runSequentially = async (tasks: (() => Promise<any>)[]) => {
         const results = [];
         for (const task of tasks) {
@@ -1021,17 +977,40 @@ export default function DocumentDetailPage() {
       console.error(error);
       toast.error(`Failed to translate. Please check if Ollama is running.`, { id: toastId });
       setSelectedLanguage('English');
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('health_care_system_language', 'English');
+      }
     } finally {
       setIsTranslating(false);
     }
   };
 
-  const restartSpeechWithSettings = (newVoiceName: string, newRate: number) => {
-    if (!speakingTab || !lastSpokenText) return;
-    speakText(lastSpokenText, lastSpokenLang, savedSpeakIndex, () => { setSpeakingTab(null); });
+  const handleLanguageChange = (lang: string) => {
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+    setSpeakingTab(null);
+    setIsPaused(false);
+    setCurrentSpokenCharIndex(-1);
+    setSavedSpeakIndex(0);
+
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('health_care_system_language', lang);
+      window.location.reload();
+    }
   };
 
-  const speakText = (text: string, lang: string, startOffset = 0, onStop?: () => void) => {
+
+  const restartSpeechWithSettings = (newVoiceName: string, newRate: number) => {
+    if (audioRef.current) {
+      audioRef.current.playbackRate = newRate;
+    }
+    if (!speakingTab || !lastSpokenText) return;
+    speakText(lastSpokenText, lastSpokenLang, savedSpeakIndex, () => { setSpeakingTab(null); }, newRate);
+  };
+
+  const speakText = (text: string, lang: string, startOffset = 0, onStop?: () => void, rateOverride?: number) => {
+    const activeRate = rateOverride ?? speechRate;
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
@@ -1062,12 +1041,12 @@ export default function DocumentDetailPage() {
       if (onStop) onStop();
     };
 
-    const fallbackToWebSpeech = (textForSpeech: string, offset: number) => {
+    const fallbackToWebSpeechChunk = (chunkText: string, offset: number, onChunkEnd: () => void) => {
       if (typeof window === 'undefined' || !window.speechSynthesis) {
-        stopHandler();
+        onChunkEnd();
         return;
       }
-      const utterance = new SpeechSynthesisUtterance(textForSpeech);
+      const utterance = new SpeechSynthesisUtterance(chunkText);
       let langCode = 'en-US';
       if (lang === 'Hindi') langCode = 'hi-IN';
       else if (lang === 'Marathi') langCode = 'mr-IN';
@@ -1075,7 +1054,7 @@ export default function DocumentDetailPage() {
 
       const chosenVoice = getVoiceForLanguage(voices, lang, selectedVoiceName);
       if (chosenVoice) utterance.voice = chosenVoice;
-      utterance.rate = speechRate;
+      utterance.rate = activeRate;
 
       utterance.onboundary = (event) => {
         if (event.name === 'word') {
@@ -1084,10 +1063,10 @@ export default function DocumentDetailPage() {
           setSavedSpeakIndex(charIdx);
         }
       };
-      utterance.onend = stopHandler;
+      utterance.onend = () => onChunkEnd();
       utterance.onerror = (e) => {
         if (e.error !== 'interrupted' && e.error !== 'canceled') {
-          stopHandler();
+          onChunkEnd();
         }
       };
       window.speechSynthesis.speak(utterance);
@@ -1138,7 +1117,7 @@ export default function DocumentDetailPage() {
       const ttsUrl = `${API_URL}/ai/tts?text=${encodeURIComponent(chunk.text)}&lang=${encodeURIComponent(lang)}`;
 
       const audio = new Audio(ttsUrl);
-      audio.playbackRate = speechRate;
+      audio.playbackRate = activeRate;
       audioRef.current = audio;
 
       setCurrentSpokenCharIndex(chunk.start);
@@ -1156,6 +1135,9 @@ export default function DocumentDetailPage() {
       };
 
       audio.onplay = () => {
+        if (audioRef.current) {
+          audioRef.current.playbackRate = activeRate;
+        }
         animId = requestAnimationFrame(updateProgressTicker);
       };
 
@@ -1170,13 +1152,13 @@ export default function DocumentDetailPage() {
 
       audio.onerror = () => {
         cancelAnimationFrame(animId);
-        fallbackToWebSpeech(textToSpeak, startOffset);
+        fallbackToWebSpeechChunk(chunk.text, chunk.start, () => playNextChunk(index + 1));
       };
 
       audio.play().catch((err) => {
         cancelAnimationFrame(animId);
         console.warn("Audio play blocked or error, falling back to Web Speech API:", err);
-        fallbackToWebSpeech(textToSpeak, startOffset);
+        fallbackToWebSpeechChunk(chunk.text, chunk.start, () => playNextChunk(index + 1));
       });
     };
 
@@ -1185,7 +1167,30 @@ export default function DocumentDetailPage() {
 
   const getSummarySpeakText = (displayedSummary: any, lang: string) => {
     if (!displayedSummary) return '';
-    return displayedSummary.summary_text || '';
+    let text = displayedSummary.summary_text || '';
+
+    const details: string[] = [];
+    if (displayedSummary.coverage_summary) {
+      const heading = lang === 'Hindi' ? 'कवर की गई सुविधाएं:' : lang === 'Marathi' ? 'समाविष्ट बाबी:' : 'Coverage & Benefits:';
+      details.push(`${heading}\n${displayedSummary.coverage_summary}`);
+    }
+    if (displayedSummary.exclusions_summary) {
+      const heading = lang === 'Hindi' ? 'अपवाद और सीमाएं:' : lang === 'Marathi' ? 'अपवाद आणि मर्यादा:' : 'Exclusions & Limits:';
+      details.push(`${heading}\n${displayedSummary.exclusions_summary}`);
+    }
+    if (displayedSummary.waiting_period_summary) {
+      const heading = lang === 'Hindi' ? 'प्रतीक्षा अवधि:' : lang === 'Marathi' ? 'प्रतीक्षा कालावधी:' : 'Waiting Periods:';
+      details.push(`${heading}\n${displayedSummary.waiting_period_summary}`);
+    }
+    if (displayedSummary.premium_summary) {
+      const heading = lang === 'Hindi' ? 'प्रीमियम विवरण:' : lang === 'Marathi' ? 'प्रीमियम तपशील:' : 'Premium Details:';
+      details.push(`${heading}\n${displayedSummary.premium_summary}`);
+    }
+
+    if (details.length > 0) {
+      text += '\n\n' + details.join('\n\n');
+    }
+    return text;
   };
 
   const getFieldsSpeakText = (fields: any[], lang: string) => {
@@ -1437,6 +1442,13 @@ export default function DocumentDetailPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc?.status, doc?.summary, docId, startSummaryStream]);
+
+  // Automatically translate page on initial load if non-English language is set in localStorage
+  useEffect(() => {
+    if (doc && selectedLanguage !== 'English' && !translations[selectedLanguage] && !isTranslating) {
+      executeTranslation(selectedLanguage);
+    }
+  }, [doc, selectedLanguage, translations, isTranslating]);
 
   const summarizeMutation = useMutation({
     mutationFn: () => documentsApi.runSummary(docId),
@@ -2218,6 +2230,9 @@ export default function DocumentDetailPage() {
                           onChange={(e) => {
                             const rate = parseFloat(e.target.value);
                             setSpeechRate(rate);
+                            if (audioRef.current) {
+                              audioRef.current.playbackRate = rate;
+                            }
                             restartSpeechWithSettings(selectedVoiceName, rate);
                           }}
                           className="w-14 md:w-20 h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
@@ -2269,7 +2284,10 @@ export default function DocumentDetailPage() {
                             {/* Email Option */}
                             <button
                               onClick={() => {
-                                setShowEmailForm(!showEmailForm);
+                                if (!emailInput && user?.email) {
+                                  setEmailInput(user.email);
+                                }
+                                setShowEmailForm(true);
                                 setShowExportDropdown(false);
                               }}
                               className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-left rounded-lg text-slate-200 hover:bg-blue-600/20 hover:text-blue-400 transition-all cursor-pointer"
@@ -2375,37 +2393,7 @@ export default function DocumentDetailPage() {
                     </div>
                   )} {/* end displayedSummary breakdown section */}
 
-                  {/* Email Inline Form */}
-                  {showEmailForm && (
-                    <div className="border border-white/5 bg-slate-950/30 rounded-xl p-4 flex flex-col sm:flex-row items-center gap-3 max-w-md">
-                      <input
-                        type="email"
-                        placeholder="Enter recipient email..."
-                        value={emailInput}
-                        onChange={(e) => setEmailInput(e.target.value)}
-                        className="form-input text-xs py-2 px-3 flex-1 bg-slate-950/50"
-                      />
-                      <div className="flex gap-2 w-full sm:w-auto">
-                        <button
-                          onClick={handleSendEmail}
-                          disabled={sendingEmail || !emailInput.trim()}
-                          className="btn-primary text-xs py-2 px-4 flex-1 sm:flex-initial justify-center cursor-pointer"
-                        >
-                          {sendingEmail ? (
-                            <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                          ) : (
-                            'Send'
-                          )}
-                        </button>
-                        <button
-                          onClick={() => { setShowEmailForm(false); setEmailInput(''); }}
-                          className="btn-secondary text-xs py-2 px-3 flex-1 sm:flex-initial justify-center cursor-pointer border-transparent"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  )}
+
                 </div>
                 <p className="text-xs text-slate-500 text-right">Generated on {doc.summary?.created_at ? new Date(doc.summary.created_at).toLocaleString() : ''}</p>
               </div>
@@ -2945,6 +2933,85 @@ export default function DocumentDetailPage() {
           )}
         </div>
       </div>
+
+      {/* Send Email Modal */}
+      {showEmailForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="bg-[#0f172a] border border-slate-700/60 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200">
+            {/* Header */}
+            <div className="flex items-center justify-between p-5 border-b border-slate-800">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">
+                  <Mail className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold text-white">Send Summary via Email</h3>
+                  <p className="text-xs text-slate-400">Send document report directly to an email address</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setShowEmailForm(false); setEmailInput(''); }}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors"
+              >
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleSendEmail();
+              }}
+              className="p-5 space-y-4"
+            >
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                  Recipient Email Address
+                </label>
+                <input
+                  type="email"
+                  placeholder="e.g. user@example.com"
+                  value={emailInput}
+                  onChange={(e) => setEmailInput(e.target.value)}
+                  autoFocus
+                  required
+                  className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700/70 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
+                />
+              </div>
+
+              {/* Actions */}
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => { setShowEmailForm(false); setEmailInput(''); }}
+                  className="px-4 py-2 text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-800 rounded-xl transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={sendingEmail || !emailInput.trim()}
+                  className="btn-primary text-xs py-2 px-5 flex items-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {sendingEmail ? (
+                    <>
+                      <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      <span>Sending...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-3.5 h-3.5" />
+                      <span>Send Email</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

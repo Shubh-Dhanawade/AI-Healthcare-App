@@ -143,7 +143,7 @@ export default function DocumentsListPage() {
                         onChange={(e) => {
                           if (e.target.checked) {
                             if (selectedIds.length >= 3) {
-                              toast.error('You can compare a maximum of 3 policies.');
+                              toast.error('Maximum 3 policy selections allowed for comparison.');
                               return;
                             }
                             setSelectedIds([...selectedIds, doc.id]);

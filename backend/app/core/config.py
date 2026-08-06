@@ -43,11 +43,20 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "./uploads"
     MAX_FILE_SIZE_MB: int = 50
 
+    # SMTP Email Configuration
+    SMTP_SERVER: str = "smtp.gmail.com"
+    SMTP_PORT: int = 587
+    SMTP_USER: str = "krushnakharat.official@gmail.com"
+    SMTP_PASSWORD: str = "pbcgjleqmvcjsoho"
+
     # CORS — allow frontend dev server
     ALLOWED_ORIGINS: List[str] = [
+        "*",
         "http://localhost:3000",
+        "http://localhost:3001",
         "http://localhost",
         "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
     ]
 
     @field_validator("ALLOWED_ORIGINS", mode="before")

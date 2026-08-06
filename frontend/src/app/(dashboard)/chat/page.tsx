@@ -525,11 +525,6 @@ export default function ChatPage() {
           </div>
         </div>
 
-        {/* Database Pulse Footer */}
-        <div className="pt-3 border-t border-slate-800/80 flex items-center gap-2 text-[10px] text-slate-500">
-          <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-          <span>Synced with SQLite Database</span>
-        </div>
       </div>
 
       {/* Right Area - Active Chat Interface */}

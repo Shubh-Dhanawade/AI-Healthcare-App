@@ -163,7 +163,7 @@ class QueryResponse(BaseModel):
 # ─────────────────────────────────────────
 
 class CompareRequest(BaseModel):
-    document_ids: List[str]
+    document_ids: List[str] = Field(..., min_length=2, max_length=3)
 
 
 class FeatureWinnerSchema(BaseModel):

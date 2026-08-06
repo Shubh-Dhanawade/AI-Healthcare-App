@@ -7,7 +7,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, func
 from sqlalchemy.orm import selectinload
 from loguru import logger
 
@@ -223,47 +223,29 @@ async def _auto_schedule_policy_alerts(db, doc, fields_data) -> None:
     target_prem_due = extracted_premium_due or extracted_renewal
 
     doc.renewal_date = extracted_renewal
-    
-    # Clear existing renewal alerts
+    doc.premium_due_date = target_prem_due
+
+    # Clear any existing alerts for this document so only ONE alert exists per policy
     await db.execute(delete(PolicyReminder).where(
-        PolicyReminder.document_id == doc.id,
-        PolicyReminder.reminder_type == "renewal"
+        PolicyReminder.document_id == doc.id
     ))
     
-    # Create renewal reminder (7 days prior)
-    trigger_date = extracted_renewal - timedelta(days=7)
+    # Create single unified policy reminder (trigger 7 days prior)
+    t1 = extracted_renewal - timedelta(days=7) if extracted_renewal else datetime.utcnow()
+    t2 = target_prem_due - timedelta(days=5) if target_prem_due else t1
+    trigger_date = min(t1, t2)
+    
     r1 = PolicyReminder(
         user_id=doc.user_id,
         document_id=doc.id,
-        title=f"Policy Renewal Approaching: {doc.original_filename}",
+        title=f"Policy Renewal & Payment Approaching: {doc.original_filename}",
         reminder_type="renewal",
         reminder_date=trigger_date,
+        premium_amount=str(extracted_premium_val) if extracted_premium_val and extracted_premium_val != "Not Mentioned in Policy" else None,
         is_dismissed=False
     )
     db.add(r1)
-    logger.info(f"[AUTO-ALERT] Scheduled renewal reminder for doc {doc.id} on {trigger_date}")
-
-    doc.premium_due_date = target_prem_due
-    
-    # Clear existing premium alerts
-    await db.execute(delete(PolicyReminder).where(
-        PolicyReminder.document_id == doc.id,
-        PolicyReminder.reminder_type == "premium"
-    ))
-    
-    # Create premium reminder (5 days prior)
-    trigger_date = target_prem_due - timedelta(days=5)
-    r2 = PolicyReminder(
-        user_id=doc.user_id,
-        document_id=doc.id,
-        title=f"Premium Payment Approaching: {doc.original_filename}",
-        reminder_type="premium",
-        reminder_date=trigger_date,
-        premium_amount=str(extracted_premium_val),
-        is_dismissed=False
-    )
-    db.add(r2)
-    logger.info(f"[AUTO-ALERT] Scheduled premium reminder for doc {doc.id} on {trigger_date}")
+    logger.info(f"[AUTO-ALERT] Scheduled single policy reminder for doc {doc.id} on {trigger_date}")
 
     # Trigger email notification to user
     try:
@@ -750,6 +732,21 @@ async def upload_document(
     import hashlib
     file_hash = hashlib.sha256(content).hexdigest()
     
+    # Check if a document with the same filename has already been uploaded by this user
+    filename_clean = file.filename.strip() if file.filename else ""
+    if filename_clean:
+        result_name = await db.execute(
+            select(Document).where(
+                Document.user_id == current_user.id,
+                func.lower(Document.original_filename) == func.lower(filename_clean)
+            )
+        )
+        if result_name.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"A document named '{filename_clean}' has already been uploaded. Duplicate file names are not allowed.",
+            )
+
     # Check if a document with this hash has already been uploaded by this user
     result = await db.execute(
         select(Document).where(
@@ -1014,6 +1011,21 @@ async def upload_multiple_images(
     # Combined hash = hash of all image bytes concatenated
     combined_hash = hashlib.sha256(combined_hash_input).hexdigest()
 
+    # Check if a document with the same primary filename has already been uploaded by this user
+    primary_clean = primary_filename.strip() if primary_filename else ""
+    if primary_clean:
+        name_check = await db.execute(
+            select(Document).where(
+                Document.user_id == current_user.id,
+                func.lower(Document.original_filename) == func.lower(primary_clean)
+            )
+        )
+        if name_check.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"A document named '{primary_clean}' has already been uploaded. Duplicate file names are not allowed.",
+            )
+
     # Check for duplicate bundle
     existing = await db.execute(
         select(Document).where(
@@ -1096,7 +1108,7 @@ async def get_reminders(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """List scheduled premium/renewal reminders for the user."""
+    """List scheduled premium/renewal reminders for the user (guaranteeing 1 notification per policy)."""
     result = await db.execute(
         select(PolicyReminder)
         .where(PolicyReminder.user_id == current_user.id, PolicyReminder.is_dismissed == False)
@@ -1104,7 +1116,21 @@ async def get_reminders(
     )
     reminders = result.scalars().all()
     
-    # Format responses dynamically
+    # Deduplicate by document_id so only ONE active notification per policy is returned
+    seen_docs = set()
+    unique_reminders = []
+    has_duplicates = False
+    for r in reminders:
+        if r.document_id not in seen_docs:
+            seen_docs.add(r.document_id)
+            unique_reminders.append(r)
+        else:
+            r.is_dismissed = True
+            has_duplicates = True
+
+    if has_duplicates:
+        await db.commit()
+
     return [
         {
             "id": r.id,
@@ -1115,15 +1141,18 @@ async def get_reminders(
             "premium_amount": r.premium_amount,
             "is_dismissed": r.is_dismissed
         }
-        for r in reminders
+        for r in unique_reminders
     ]
+
+
 @router.post("/reminders")
 async def schedule_reminder(
     request: ScheduleReminderRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Schedule policy premium and renewal notifications."""
+    """Schedule single policy premium/renewal notification per document."""
+    from sqlalchemy import delete
     result = await db.execute(
         select(Document).where(
             Document.id == request.document_id,
@@ -1140,30 +1169,27 @@ async def schedule_reminder(
 
     if renewal_naive:
         doc.renewal_date = renewal_naive
-        # Create reminder alert
-        # Trigger 7 days prior
-        trigger_date = renewal_naive - timedelta(days=7)
-        r1 = PolicyReminder(
-            user_id=current_user.id,
-            document_id=doc.id,
-            title=f"Policy Renewal Approaching: {doc.original_filename}",
-            reminder_type="renewal",
-            reminder_date=trigger_date
-        )
-        db.add(r1)
-        
     if premium_due_naive:
         doc.premium_due_date = premium_due_naive
-        trigger_date = premium_due_naive - timedelta(days=5)
-        r2 = PolicyReminder(
+
+    # Clear existing alerts for this document so only ONE alert exists per policy
+    await db.execute(delete(PolicyReminder).where(
+        PolicyReminder.document_id == doc.id
+    ))
+
+    target_date = renewal_naive or premium_due_naive
+    if target_date:
+        trigger_date = target_date - timedelta(days=7)
+        r = PolicyReminder(
             user_id=current_user.id,
             document_id=doc.id,
-            title=f"Premium Payment Approaching: {doc.original_filename}",
-            reminder_type="premium",
+            title=f"Policy Renewal & Payment Approaching: {doc.original_filename}",
+            reminder_type="renewal",
             reminder_date=trigger_date,
-            premium_amount=request.premium_amount
+            premium_amount=request.premium_amount,
+            is_dismissed=False
         )
-        db.add(r2)
+        db.add(r)
         
     await db.commit()
 
@@ -1395,10 +1421,15 @@ async def compare_documents(
     from sqlalchemy.orm import selectinload
     
     # Check length
-    if len(request.document_ids) < 2 or len(request.document_ids) > 3:
+    if len(request.document_ids) < 2:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="You must select between 2 and 3 documents to compare.",
+            detail="Minimum 2 policies should be selected for comparison.",
+        )
+    if len(request.document_ids) > 3:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Maximum 3 policy selections allowed for comparison.",
         )
     
     # Fetch documents with their summary, extracted fields, and risks
@@ -1804,9 +1835,16 @@ async def email_report(
     html_content = generate_html_report(doc)
     
     # 1. Setup email structure
+    smtp_server = os.getenv("SMTP_SERVER") or getattr(settings, "SMTP_SERVER", "smtp.gmail.com")
+    smtp_port = int(os.getenv("SMTP_PORT") or getattr(settings, "SMTP_PORT", 587))
+    smtp_user = os.getenv("SMTP_USER") or getattr(settings, "SMTP_USER", "")
+    smtp_password = os.getenv("SMTP_PASSWORD") or getattr(settings, "SMTP_PASSWORD", "")
+
+    sender_email = smtp_user if smtp_user else "noreply@healthpolicylens.local"
+
     msg = MIMEMultipart("alternative")
     msg["Subject"] = f"[HealthPolicyLens] Policy Analysis Audit Report: {doc.original_filename}"
-    msg["From"] = "noreply@healthpolicylens.local"
+    msg["From"] = f"HealthPolicyLens <{sender_email}>"
     msg["To"] = request.email
     
     # Plaintext fallback
@@ -1820,17 +1858,11 @@ async def email_report(
     sent_successfully = False
     error_msg = ""
     try:
-        # Check if email configs are set up in environment, otherwise log
-        smtp_server = os.getenv("SMTP_SERVER")
-        smtp_port = int(os.getenv("SMTP_PORT", "587"))
-        smtp_user = os.getenv("SMTP_USER")
-        smtp_password = os.getenv("SMTP_PASSWORD")
-        
         if smtp_server and smtp_user and smtp_password:
             with smtplib.SMTP(smtp_server, smtp_port) as server:
                 server.starttls()
                 server.login(smtp_user, smtp_password)
-                server.sendmail(msg["From"], msg["To"], msg.as_string())
+                server.sendmail(sender_email, [request.email], msg.as_string())
             sent_successfully = True
             logger.info(f"📧 Email report successfully sent via SMTP to {request.email}")
     except Exception as e:
@@ -1851,10 +1883,9 @@ async def email_report(
     if sent_successfully:
         return {"status": "sent", "message": f"Report successfully emailed to {request.email}."}
     else:
-        return {
-            "status": "logged",
-            "message": f"SMTP is not configured in local development environment. Outgoing report logged locally to: {debug_filepath}.",
-            "details": error_msg
-        }
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to send email to {request.email}. {error_msg if error_msg else 'SMTP configuration issue.'}"
+        )
 
 

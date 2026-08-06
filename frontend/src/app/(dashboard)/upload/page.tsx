@@ -2,7 +2,9 @@
 
 import { useState, useCallback, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
+import { useQuery } from '@tanstack/react-query';
 import { documentsApi } from '@/lib/apiHelpers';
+import { Document } from '@/types';
 import toast from 'react-hot-toast';
 import { useRouter } from 'next/navigation';
 import {
@@ -37,8 +39,20 @@ export default function UploadPage() {
   const dragOverId = useRef<string | null>(null);
   const router = useRouter();
 
+  const { data: existingDocs = [] } = useQuery<Document[]>({
+    queryKey: ['documents'],
+    queryFn: () => documentsApi.list(),
+  });
+
   // Derive mode from what's been dropped
   const mode: 'idle' | 'pdf' | 'images' = pdfFile ? 'pdf' : images.length > 0 ? 'images' : 'idle';
+
+  const checkDuplicateName = (fileName: string) => {
+    const cleanName = fileName.trim().toLowerCase();
+    return existingDocs.some(
+      (d) => d.original_filename && d.original_filename.trim().toLowerCase() === cleanName
+    );
+  };
 
   const onDrop = useCallback((accepted: File[], rejected: any[]) => {
     setError(''); setDone(false); setProgress(0);
@@ -52,11 +66,21 @@ export default function UploadPage() {
     const imgs = accepted.filter((f) => f.type !== 'application/pdf');
 
     if (pdfs.length > 0) {
-      // PDF takes priority; only one allowed
+      if (checkDuplicateName(pdfs[0].name)) {
+        const msg = `A document named "${pdfs[0].name}" has already been uploaded. Duplicate file names are not allowed.`;
+        setError(msg);
+        toast.error(msg);
+        return;
+      }
       setPdfFile(pdfs[0]);
       setImages([]);
     } else if (imgs.length > 0) {
-      // Image(s) dropped — add to existing image list
+      if (checkDuplicateName(imgs[0].name)) {
+        const msg = `A document named "${imgs[0].name}" has already been uploaded. Duplicate file names are not allowed.`;
+        setError(msg);
+        toast.error(msg);
+        return;
+      }
       setPdfFile(null);
       const newItems: ImageItem[] = imgs.map((f) => ({
         id: Math.random().toString(36).slice(2),
@@ -65,7 +89,7 @@ export default function UploadPage() {
       }));
       setImages((prev) => [...prev, ...newItems]);
     }
-  }, []);
+  }, [existingDocs]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -107,6 +131,15 @@ export default function UploadPage() {
 
   const handleUpload = async () => {
     if (mode === 'idle') return;
+
+    const targetName = mode === 'pdf' ? pdfFile?.name : images[0]?.file.name;
+    if (targetName && checkDuplicateName(targetName)) {
+      const msg = `A document named "${targetName}" has already been uploaded. Duplicate file names are not allowed.`;
+      setError(msg);
+      toast.error(msg);
+      return;
+    }
+
     setUploading(true); setError(''); setProgress(0);
     try {
       let doc: any;
