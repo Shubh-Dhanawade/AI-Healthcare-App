@@ -58,6 +58,17 @@ def get_easyocr_reader():
     return _easyocr_reader
 
 
+_paddleocr_instance = None
+
+def get_paddleocr_reader():
+    global _paddleocr_instance
+    if _paddleocr_instance is None:
+        from paddleocr import PaddleOCR
+        _paddleocr_instance = PaddleOCR(use_angle_cls=True, lang="en", show_log=False)
+    return _paddleocr_instance
+
+
+
 def extract_text_with_easyocr(file_path: str, page_count: int = 1) -> Tuple[str, str, int]:
     """Extract text using EasyOCR."""
     try:
@@ -146,11 +157,10 @@ def extract_text_with_ocr(file_path: str, page_count: int = 1) -> Tuple[str, str
 
     # 1. Try PaddleOCR
     try:
-        from paddleocr import PaddleOCR
         import fitz
 
         logger.info("Attempting OCR with PaddleOCR...")
-        ocr = PaddleOCR(use_angle_cls=True, lang="en", show_log=False)
+        ocr = get_paddleocr_reader()
         text_parts = []
 
         if file_path.lower().endswith(".pdf"):

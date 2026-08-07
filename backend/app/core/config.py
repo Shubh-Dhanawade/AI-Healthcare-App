@@ -5,7 +5,7 @@ Supports both local SQLite (dev) and PostgreSQL (production)
 
 from pydantic_settings import BaseSettings
 from pydantic import field_validator
-from typing import List, Union
+from typing import List, Union, Optional
 import os
 import json
 
@@ -34,9 +34,8 @@ class Settings(BaseSettings):
     # 4 CPU threads: reduces RAM pressure (currently at 95%) when some layers fall back to CPU.
     # With Q4_K_M all layers on GPU, this becomes irrelevant but safe to keep.
     OLLAMA_NUM_THREAD: int = 4
-    # 999 = force ALL layers to GPU. Ollama auto-clamps to max available VRAM.
-    # With Q4_K_M (~2.5GB), all 35 layers fit in the RTX 3050's ~2.8GB free VRAM.
-    OLLAMA_NUM_GPU: int = 999
+    # Omit to let Ollama auto-detect GPU layer offloading based on free VRAM.
+    OLLAMA_NUM_GPU: Optional[int] = None
     OLLAMA_KEEP_ALIVE: str = "-1"
 
     # File Uploads

@@ -24,9 +24,9 @@ from app.core.config import settings
 from app.models.document import Document, ExtractedField
 from app.models.risk_analysis import Summary, RiskAnalysis
 from app.services.ai_service import (
-    _build_fallback_summary,
-    _build_fallback_fields,
-    _build_fallback_risks,
+    generate_summary,
+    extract_policy_fields,
+    analyze_risks,
 )
 
 
@@ -41,7 +41,7 @@ async def re_extract_document(db: AsyncSession, doc: Document) -> None:
 
     # ── 1. Summary ────────────────────────────────────────────────────────────
     try:
-        summary_data = _build_fallback_summary(text)
+        summary_data = await generate_summary(text, force_regenerate=True)
 
         # Delete old summary row if exists
         existing = await db.execute(select(Summary).where(Summary.document_id == doc.id))
@@ -57,7 +57,7 @@ async def re_extract_document(db: AsyncSession, doc: Document) -> None:
             exclusions_summary=summary_data.get("exclusions_summary"),
             waiting_period_summary=summary_data.get("waiting_period_summary"),
             premium_summary=summary_data.get("premium_summary"),
-            model_used="fallback-regex-v2",
+            model_used="hybrid-ollama-v2",
         ))
         logger.info(f"     ✅ Summary regenerated")
     except Exception as e:
@@ -65,7 +65,7 @@ async def re_extract_document(db: AsyncSession, doc: Document) -> None:
 
     # ── 2. Extracted Fields ───────────────────────────────────────────────────
     try:
-        fields_data = _build_fallback_fields(text)
+        fields_data = await extract_policy_fields(text, force_regenerate=True)
 
         # Delete old fields
         old_fields = await db.execute(
@@ -88,7 +88,7 @@ async def re_extract_document(db: AsyncSession, doc: Document) -> None:
 
     # ── 3. Risk Analysis ──────────────────────────────────────────────────────
     try:
-        risk_data = _build_fallback_risks(text)
+        risk_data = await analyze_risks(text, force_regenerate=True)
         risks = risk_data.get("risks", [])
 
         # Delete old risks

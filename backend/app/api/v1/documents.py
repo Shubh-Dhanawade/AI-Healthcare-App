@@ -247,11 +247,13 @@ async def _auto_schedule_policy_alerts(db, doc, fields_data) -> None:
     db.add(r1)
     logger.info(f"[AUTO-ALERT] Scheduled single policy reminder for doc {doc.id} on {trigger_date}")
 
-    # Trigger email notification to user
+    # Trigger email notification to user (runs in background thread to avoid blocking event loop)
     try:
         user = doc.user
         if user:
-            send_alert_email_notification(
+            import asyncio
+            await asyncio.to_thread(
+                send_alert_email_notification,
                 user_name=user.full_name or user.email,
                 user_email=user.email,
                 policy_name=doc.original_filename,
@@ -665,23 +667,21 @@ async def process_document_background(doc_id: str, file_path: str, file_type: st
                 logger.error(f"[EMBEDDING] Failed for {doc_id}: {e}")
 
     try:
-        logger.info(f"⚡ Starting sequential LLM analysis for {doc_id}...")
-        # 1. Summary Generation
-        await _run_summary_task()
-        
-        # 2. Key Field Extraction
-        await _run_fields_background(doc_id)
-        
-        # 3. Risk Analysis
-        await _run_risks_background(doc_id)
+        logger.info(f"⚡ Starting concurrent LLM analysis for {doc_id}...")
+        # Run Summary, Key Field Extraction, and Risk Analysis concurrently to reduce latency
+        await asyncio.gather(
+            _run_summary_task(),
+            _run_fields_background(doc_id),
+            _run_risks_background(doc_id)
+        )
         
         # 4. Vector Chunking & Embedding (Switches to nomic-embed-text once at the end)
         await _run_embedding_task()
 
-        # 5. Warm up the primary LLM model back into VRAM so instant RAG/Chat works with 0 cold-start delay
+        # 5. Warm up the primary LLM model back into VRAM so instant RAG/Chat works with 0 cold-start delay (run in background)
         try:
             from app.services.ollama_client import warmup_model
-            await warmup_model()
+            asyncio.create_task(warmup_model())
         except Exception as warmup_err:
             logger.warning(f"Post-processing model warmup skipped: {warmup_err}")
 

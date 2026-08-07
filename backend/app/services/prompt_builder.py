@@ -21,6 +21,12 @@ def build_chat_prompt(
     # Raised to 2000 chars per chunk: insurance benefit schedules are dense tables
     # that can span 1500+ characters. Old 1200-char limit was cutting key rows.
     context_lines = []
+    
+    # Prepend structured data as virtual context chunk so the LLM reads it as verified ground-truth document facts
+    if structured_context:
+        first_policy_filename = policies[0].get("filename", "Policy Document")
+        context_lines.append(f"[{first_policy_filename} - Page 1 - Policy Schedule Summary Details]\n{structured_context}\n")
+
     if is_comparison:
         by_source: Dict[str, List[str]] = {}
         for c in retrieved_chunks:
@@ -100,12 +106,12 @@ def build_chat_prompt(
             f"You are HealthPolicyLens, a knowledgeable and friendly healthcare insurance assistant helping {user_name}.\n"
             "\n"
             "Instructions:\n"
-            "1. Answer the user's query using the POLICY CONTEXT blocks below. Each block is a direct excerpt from the policy document.\n"
-            "2. READ EVERY CONTEXT BLOCK carefully before answering. The answer may appear in any block, not just the first one.\n"
+            "1. Answer the user's query using the STRUCTURED DATABASE DETAILS, STORED POLICY SUMMARIES, and POLICY CONTEXT blocks below. Treat structured details as verified ground-truth facts.\n"
+            "2. READ EVERY CONTEXT BLOCK and structured detail carefully before answering.\n"
             "3. IMPORTANT: The policy may have a SCHEDULE OF BENEFITS table listing all covered items with section numbers (e.g. 1.1, 1.1.a, 1.1.1.i, 1.1.1.ii etc.). If the user asks about a treatment or benefit (e.g. 'dental', 'room rent', 'ambulance', 'AYUSH'), scan ALL context blocks for that exact section/row. Even a single matching row like '1.1.1.ii Dental Treatment - Covered upto sum insured' is sufficient to confirm coverage.\n"
             "4. If you find the term anywhere in the context — even in a table row — report the EXACT coverage value (e.g. 'Covered upto sum insured', 'At Actuals', 'Not Covered', specific Rupee limit).\n"
             "5. If the user's topic appears in an EXCLUSIONS section (e.g., listed under 'Excl18'), state clearly: 'This is listed under Exclusions — it is NOT covered under the policy.'\n"
-            "6. NEVER say the topic is 'not mentioned' unless you have carefully checked EVERY context block and the structured details AND summaries below.\n"
+            "6. NEVER say the topic is 'not mentioned' or 'absent' if it appears in the STRUCTURED DATABASE DETAILS, summaries, or any context block.\n"
             "7. If the information is genuinely absent from ALL sources, say: 'I could not find that specific detail in the provided document excerpts. You may refer to the full policy document for this information.'\n"
             "8. Do NOT include any inline references, page numbers, or source citations inside your response text.\n"
             "9. Do NOT output 'ASSISTANT:', 'USER:', or 'context:' labels in your response.\n"
