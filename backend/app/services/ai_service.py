@@ -22,8 +22,11 @@ _ai_cache: dict[str, dict] = {}
 _rag_cache: dict[str, str] = {}  # Cache for RAG query responses
 
 def _cache_key(task: str, text: str) -> str:
-    """Create a stable cache key from task name + full text."""
-    digest = hashlib.md5(text.encode()).hexdigest()
+    """Create a stable cache key from task name + normalized full text."""
+    import re
+    # Strip all non-alphanumeric characters to guarantee 100% match regardless of DB serialization or newlines
+    normalized = re.sub(r'[^a-zA-Z0-9]', '', text)
+    digest = hashlib.md5(normalized.encode()).hexdigest()
     return f"{task}:{digest}"
 
 def _rag_cache_key(query: str, policy_ids: list) -> str:
@@ -33,81 +36,150 @@ def _rag_cache_key(query: str, policy_ids: list) -> str:
     return f"rag:{digest}"
 
 
+def clear_document_cache(text: str) -> None:
+    """Remove all cached AI results for the given document text.
+    Call this at the start of every fresh document processing run to prevent
+    stale in-memory results from being served on delete+re-upload workflows.
+    """
+    import re as _re
+    normalized = _re.sub(r'[^a-zA-Z0-9]', '', text)
+    digest = hashlib.md5(normalized.encode()).hexdigest()
+    keys_to_delete = [k for k in list(_ai_cache.keys()) if digest in k]
+    for k in keys_to_delete:
+        del _ai_cache[k]
+    if keys_to_delete:
+        logger.info(f"[CACHE] Cleared {len(keys_to_delete)} stale AI cache entries for document (hash={digest[:8]}...)")
+
+
+def is_healthcare_related(text: str) -> bool:
+    """Detect if the document text contains standard healthcare or insurance terms.
+    Protects against processing completely unrelated files (resumes, recipes, bank statements).
+    """
+    if not text:
+        return False
+    # Use key medical/insurance terms
+    keywords = [
+        "policy", "insurance", "premium", "hospital", "claim", "medical", 
+        "health", "patient", "treatment", "coverage", "exclusion", "waiting period", 
+        "deductible", "co-payment", "ayush", "copay", "cashless", "tpa", "sum insured", 
+        "inpatient", "outpatient", "maternity", "room rent", "insurer", "doctor",
+        "disease", "illness", "clinical", "diagnos", "prescription", "benefits"
+    ]
+    text_lower = text.lower()
+    matches = sum(1 for kw in keywords if kw in text_lower)
+    return matches >= 3  # Must match at least 3 distinct keywords
+
+
+
 # ─────────────────────────────────────────
 # Prompt Templates
 # ─────────────────────────────────────────
 
 # ── Concise prompts — fewer input tokens = faster model processing ──
 
-SUMMARIZATION_PROMPT = """You are a senior healthcare insurance analyst with 20 years of experience reviewing Indian insurance policy documents. Your task is to read the following document carefully and write a structured, factual summary using ONLY information present in the document.
+# ── PROMPT 1: Generates the 4 structured bullet sections from the document ──
+BULLETS_EXTRACTION_PROMPT = """You are a senior health insurance analyst. Extract specific facts from the document below and return ONLY a valid JSON object.
 
 CRITICAL RULES:
-1. Return ONLY a valid JSON object. No text before or after it. No markdown code blocks.
-2. Do NOT invent any values. Every number, name, date, and term must be directly extracted from the document.
-3. Write summary_text as 5-6 flowing prose paragraphs (second person, no bullet points inside). Keep each paragraph extremely concise (1-2 sentences each), targeting 120-150 words total for the entire summary. This is a critical speed optimization constraint.
-4. For the four bullet-point fields: each bullet must start with '• ' and be ONE complete, specific, concise sentence with real data from the document.
-5. If a piece of information is truly not in the document, omit that bullet rather than guessing.
+- Extract ONLY information explicitly present in the document. Do NOT use generic phrases.
+- Every bullet MUST contain a specific value (amount, date, percentage, duration, clause name) directly from the document.
+- Start each bullet with the exact category label followed by specific data (e.g. "Sum Insured: ₹20 Lakh as per the Optima Secure plan").
+- Do NOT write generic sentences like "Coverage is available" or "Exclusions apply".
+- Return ONLY the JSON object below — no markdown, no preamble.
 
-JSON schema (return exactly this structure, no extra keys):
+JSON schema:
 {{
-  "summary_text": "Write 5-6 paragraphs here. Paragraph 1: Name the policy (e.g. my: Optima Secure), the insurer (e.g. HDFC ERGO General Insurance), the policyholder full name, the policy number, and the validity period (e.g. 05-05-2026 to 04-05-2029). Paragraph 2: State the exact Sum Insured (e.g. ₹20,00,000 on a Family Floater basis) and list all covered categories found in the document: inpatient hospitalisation, day care procedures, pre-hospitalisation (mention exact number of days), post-hospitalisation (exact days), ambulance, AYUSH, home healthcare, domiciliary hospitalisation. Paragraph 3: List every insured member by name, relationship, date of birth, and their individual premium amounts if mentioned. State the total premium paid (e.g. ₹74,653 towards premium paid on 05-05-2026). Paragraph 4: Describe key benefits actually mentioned in the document: automatic restore benefit, secure benefit, cumulative bonus, daily cash for shared room, emergency air ambulance limit, preventive health check-up limit. Paragraph 5: State all waiting periods with exact durations: initial waiting period for all illnesses, pre-existing disease waiting period, specific disease waiting period. Mention any co-payment or aggregate deductible. Paragraph 6: Explain the cashless and reimbursement claim procedures as described in the document. Include the customer helpline number and website if found. Close with an advisory note.",
-  "coverage_summary": "Write 4-6 bullet points each starting with '• '. Example format: '• Inpatient hospitalisation is covered up to the full Sum Insured with room rent at actuals and ICU at actuals.' Use exact figures and terms from the document.",
-  "exclusions_summary": "Write 4-6 bullet points each starting with '• '. List specific exclusions named in the document. Example: '• Cosmetic or plastic surgery is not covered unless required as reconstruction following an accident or burn.' Be specific — name the actual excluded conditions.",
-  "waiting_period_summary": "Write 3-5 bullet points each starting with '• '. State exact waiting periods. Example: '• Pre-existing diseases are subject to a 36-month waiting period from the first policy inception date.' Include all types found: initial, PED, specific disease.",
-  "premium_summary": "Write 3-5 bullet points each starting with '• '. Include: total premium amount with GST status, individual member premiums if available, any discounts applied (claims experience, loyalty, long-term, online), and payment date. Example: '• Total premium of ₹74,653 was received on 05-05-2026 covering the period 05-05-2026 to 04-05-2029.'"
+  "coverage_summary": [
+    "Specific coverage fact 1 with exact value from document",
+    "Specific coverage fact 2 with exact value from document",
+    "Specific coverage fact 3 with exact value from document",
+    "Specific coverage fact 4 with exact value from document"
+  ],
+  "exclusions_summary": [
+    "Specific named exclusion 1 with exact clause language from document",
+    "Specific named exclusion 2 with exact clause language from document",
+    "Specific named exclusion 3 with exact clause language from document",
+    "Specific named exclusion 4 with exact clause language from document"
+  ],
+  "waiting_period_summary": [
+    "Initial waiting period with exact duration from document",
+    "Pre-existing disease waiting period with exact duration from document",
+    "Specific disease waiting period with exact duration from document"
+  ],
+  "premium_summary": [
+    "Total premium with exact amount and GST from document",
+    "Specific charges, co-payment or deductible from document",
+    "Additional benefit or add-on charge from document"
+  ]
 }}
 
 DOCUMENT:
 {document_text}"""
 
 
-FIELD_EXTRACTION_PROMPT = """You are a healthcare insurance and medical document data extraction expert. Read the following document carefully and extract ONLY values that are explicitly stated in the document text. Do not guess or invent values.
+# ── PROMPT 2: Generates the prose summary paragraph ──
+PROSE_SUMMARY_PROMPT = """You are a senior healthcare insurance analyst. Write a factual 4-5 paragraph summary of the insurance document below for the policyholder.
 
+CRITICAL RULES:
+- Use second person ("Your policy...").
+- Every fact, name, number, date must come directly from the document.
+- Do NOT invent or assume any values.
+- Write 4-5 short paragraphs covering: (1) policy identity and insurer, (2) sum insured and coverage basis, (3) insured members and premium, (4) key benefits and exclusions, (5) claim process.
+- Return ONLY a plain text response — no JSON, no bullet points, no markdown.
+
+DOCUMENT:
+{document_text}"""
+
+
+# ── Legacy combined prompt (kept for comparison/reference, no longer used) ──
+SUMMARIZATION_PROMPT = PROSE_SUMMARY_PROMPT  # alias
+
+
+FIELD_EXTRACTION_PROMPT = """You are a healthcare data extraction expert. Extract values explicitly stated in the document.
 Rules:
-- If a field value is not present in the document, return null (not "Not specified", not empty string).
-- For dates: always use the format found in the document (e.g. "05-05-2026 to 04-05-2029").
-- For amounts: include the currency symbol as it appears (e.g. "₹74,653" or "20,00,000").
-- Do NOT output any markdown, code fences, explanation text, or extra keys.
-- Return ONLY a single valid JSON object.
+- If a field is not present, return null. Do not invent values or guess.
+- Use formats as they appear in the document.
+- Do NOT output markdown code blocks or preamble/postamble.
+- If the document is not related to healthcare/insurance, return all fields as null.
 
-JSON schema (extract exactly these keys):
+JSON schema:
 {
-  "policy_name": "exact product/plan name from the document e.g. my: Optima Secure",
-  "insurer_name": "exact insurance company or hospital/lab name",
+  "policy_name": "exact product or plan name",
+  "insurer_name": "exact insurance company or health provider/lab name",
   "policy_number": "exact policy number, certificate number, or report ID",
   "insured_person": "full name of policyholder or patient",
-  "sum_insured": "total coverage amount with currency symbol e.g. ₹20,00,000",
-  "premium_amount": "total premium paid or payable with currency symbol e.g. ₹74,653",
-  "policy_term": "exact validity period as shown e.g. 05-05-2026 to 04-05-2029",
-  "renewal_date": "policy end/expiry date e.g. 04-05-2029",
+  "sum_insured": "total coverage amount with currency symbol",
+  "premium_amount": "total premium amount with currency symbol",
+  "policy_term": "exact validity period",
+  "renewal_date": "policy end or expiry date",
   "coverage_type": "individual or Family Floater",
-  "room_rent_limit": "room rent category e.g. At Actuals or Single Private Room or 1% of SI per day",
-  "waiting_period": "waiting period duration e.g. 36 months for pre-existing diseases, 30 days initial",
-  "pre_existing_coverage": "pre-existing disease waiting period duration only e.g. 3 Years / 36 months",
-  "deductible": "aggregate deductible amount or Not Opted",
-  "co_payment": "co-payment percentage or Not Applicable",
-  "maternity_coverage": "maternity benefit details or exclusion clause text",
+  "room_rent_limit": "room rent category or limits",
+  "waiting_period": "waiting period durations",
+  "pre_existing_coverage": "pre-existing disease waiting period",
+  "deductible": "deductible amount",
+  "co_payment": "co-payment details",
+  "maternity_coverage": "maternity benefit or exclusion details",
   "network_hospitals": "hospital network count or network name",
-  "claim_process": "brief claim filing instructions from the document"
+  "claim_process": "claim filing instructions"
 }
 
 DOCUMENT:
 {document_text}"""
 
 
-RISK_ANALYSIS_PROMPT = """You are an insurance risk compliance auditor. Identify up to 3 risky clauses, exclusions, or limiting terms in the following health insurance policy document.
+RISK_ANALYSIS_PROMPT = """You are a health insurance risk compliance auditor. Identify up to 3 risky clauses, exclusions, or limiting terms in the health insurance policy document.
 For each risk, provide the exact clause text, risk type (waiting_period, exclusion, deductible, co_payment, coverage_limit), severity (low, medium, or high), a brief explanation, and a recommendation.
-Return ONLY a valid JSON object matching the schema below. Do not output any markdown code blocks, preamble, or trailing text.
+Return ONLY a valid JSON object matching the schema below. No markdown code blocks, no other text.
 
-Return format JSON:
+JSON schema:
 {{
   "risks": [
     {{
-      "clause_text": "the exact key phrase or short sentence of the clause from the document (maximum 20 words)",
+      "clause_text": "exact phrase of the clause from the document (max 20 words)",
       "risk_type": "waiting_period|exclusion|deductible|co_payment|coverage_limit",
       "severity": "low|medium|high",
-      "explanation": "why this clause presents a risk to the customer (maximum 35 words)",
-      "recommendation": "what action or alternative the customer should consider (maximum 35 words)"
+      "explanation": "risk explanation (max 35 words)",
+      "recommendation": "customer recommendation (max 35 words)"
     }}
   ],
   "overall_risk_level": "low|medium|high"
@@ -118,17 +190,17 @@ DOCUMENT:
 
 
 COMPARISON_PROMPT = """Compare the health insurance policies listed below.
-For the "synthesis", provide a structured, point-by-point medical and financial comparison. For each policy, start with a bullet point and list its name followed by specific terms (e.g. Sum Insured, Premium, Deductibles, Co-payments, Waiting Periods). Do not mix them into a single run-on paragraph.
-Return ONLY a valid JSON object matching the schema below. Do not output any markdown code blocks, preamble, or trailing text.
+For the "synthesis", provide a structured, point-by-point medical and financial comparison. For each policy, start with a bullet point and list its name followed by specific terms. Do not mix them into a single run-on paragraph.
+Return ONLY a valid JSON object matching the schema below. No markdown code blocks, no other text.
 
 POLICIES:
 {policies_data}
 
-Return format JSON:
+JSON schema:
 {{
-  "synthesis": "Point-by-point comparison of the policies, e.g.:\\n- **[Policy 1 Name]**: Sum Insured of [SI], Premium [Prem], with [Deductible] deductible, [Co-pay] co-payment. Covers [Maternity/Room Rent details].\\n- **[Policy 2 Name]**: Sum Insured of [SI], Premium [Prem], with [Deductible] deductible, [Co-pay] co-payment. Covers [Maternity/Room Rent details].\\n\\nMedical terms comparison: ...",
-  "best_for": "Point-by-point description of who each policy is best suited for (maximum 80 words)",
-  "verdict": "Clear advisor recommendation and final verdict on which plan to choose (maximum 60 words)",
+  "synthesis": "Point-by-point comparison of the policies, starting with a bullet point for each policy listing name, sum insured, premium, deductible, co-payments, waiting periods, etc.",
+  "best_for": "Who each policy is best suited for (max 80 words)",
+  "verdict": "Clear recommendation and final verdict on which plan to choose (max 60 words)",
   "feature_winners": [
     {{
       "feature": "Name of the feature (e.g. Premium, Coverage, Room Rent)",
@@ -148,37 +220,33 @@ TRANSLATE_PROMPT = """Translate to {target_language}:
 {text}"""
 
 
-CLAIMS_CHECKLIST_PROMPT = """You are a senior healthcare claims auditor. Read the following claim process section from the health insurance policy document and create a claims checklist for:
+CLAIMS_CHECKLIST_PROMPT = """You are a senior healthcare claims auditor. Read the following claim process section and details and generate a checklist.
 TREATMENT/ILNESS: {treatment_type}
 POLICY NAME: {policy_name}
-
-POLICY DETAILS:
-{fields_summary}
-
-CLAIM PROCESS SECTION FROM POLICY:
+POLICY DETAILS: {fields_summary}
+CLAIM PROCESS SECTION:
 \"\"\"
 {claim_section}
 \"\"\"
 
-CRITICAL RULES:
-1. Examine the CLAIM PROCESS SECTION above. If the document describes a specific claim process or required documents for this treatment/illness, extract and display them.
-2. If the document does NOT describe the claim process or documents, generate a set of standard, necessary steps and documents for a claim.
-3. Return ONLY valid JSON matching the schema below. No explanation, no code fences.
+Rules:
+1. Extract claim process details or generate standard steps/documents.
+2. Return ONLY a valid JSON object matching the schema below. No other text, no markdown.
 
 JSON format:
 {{
   "checklist": [
     {{
-      "document_name": "Name of required document (e.g. Original Discharge Summary)",
+      "document_name": "Name of required document",
       "importance": "mandatory|optional",
-      "description": "Brief description of why this is required (maximum 15 words)"
+      "description": "Brief description of why this is required (max 15 words)"
     }}
   ],
   "claim_steps": [
-    "Step 1: ...",
-    "Step 2: ..."
+    "Step 1 text",
+    "Step 2 text"
   ],
-  "estimated_approval_days": "e.g. 7-10 business days"
+  "estimated_approval_days": "estimated business days for approval"
 }}"""
 
 
@@ -191,7 +259,8 @@ def _extract_sentences_with_keywords(text: str, keywords: list[str], max_results
     """Find complete, meaningful sentences in document text that contain any of the given keywords.
     Applies strict quality filters to reject OCR noise, table headers, codes, and fragments.
     """
-    candidates = re.split(r'(?<=[.!?])\s+|\n{2,}', text)
+    # Use negative lookbehind to avoid splitting on list markers and abbreviations like a., 1., e.g., i.e.
+    candidates = re.split(r'(?<!\b[a-zA-Z0-9])(?<=[.!?])\s+|\n{2,}', text)
     hits = []
     seen = set()
 
@@ -204,6 +273,11 @@ def _extract_sentences_with_keywords(text: str, keywords: list[str], max_results
         r'^[A-Z0-9\-/]{4,20}$'           # standalone codes like HDFHLIA2405, UIN codes
         r'|^\d+\.?\d*$'                   # pure numbers or decimals like "1.2"
         r'|^[\W\d\s]{0,10}$',             # only punctuation/numbers/spaces
+        re.IGNORECASE
+    )
+    # Match sentences ending with conjunctions, prepositions, or list indexes/bullets
+    incomplete_ending_pattern = re.compile(
+        r'\b(?:and|or|of|to|for|with|by|in|at|on|the|a|an|i|e|x|v|co|no|e\)?\s*i)\b[^\w]*$',
         re.IGNORECASE
     )
 
@@ -281,6 +355,10 @@ def _extract_sentences_with_keywords(text: str, keywords: list[str], max_results
         if last_word in ['in', 'co', 'ltd', 'no', 'dr', 'mr', 'ms', 'mrs', 'rs', 'exclud', 'unlimi', 'schedu', 'hospitali']:
             continue
 
+        # ── Quality gate 12: reject list items, prepositions and single-letter endings ──
+        if incomplete_ending_pattern.search(s_clean):
+            continue
+
         key = s_clean[:80].lower()
         if key in seen:
             continue
@@ -290,13 +368,6 @@ def _extract_sentences_with_keywords(text: str, keywords: list[str], max_results
             # Clean up newlines/carriage returns and collapse spaces
             s_clean_final = re.sub(r'[\r\n]+', ' ', s_clean)
             s_clean_final = re.sub(r'\s+', ' ', s_clean_final).strip()
-            if len(s_clean_final) > 300:
-                truncated = s_clean_final[:300]
-                last_space = truncated.rfind(' ')
-                if last_space != -1:
-                    s_clean_final = truncated[:last_space] + "..."
-                else:
-                    s_clean_final = truncated + "..."
             hits.append(s_clean_final)
 
         if len(hits) >= max_results:
@@ -1197,7 +1268,7 @@ async def call_ollama(
     prompt: str,
     model: Optional[str] = None,
     num_predict: int = 512,
-    num_ctx: int = 1024,
+    num_ctx: int = 2048,  # Must match warmup num_ctx to avoid KV cache reload
 ) -> str:
     """Call Ollama API using shared connection pool with GPU-accelerated settings."""
     from app.services.ollama_client import call_ollama as _pooled_call
@@ -1258,45 +1329,87 @@ def clean_newlines_in_text(text: str) -> str:
 def clean_newlines_in_bullets(text: str) -> str:
     if not text:
         return ""
-    lines = text.split('\n')
-    cleaned_bullets = []
+    
+    # Split text into lines
+    raw_lines = text.split('\n')
+    bullets = []
     current_bullet = ""
-    for line in lines:
+    
+    # Regex to identify bullet/number list markers at the start of a line
+    # Matches: •, -, *, ●, ▪, ❖, 1., 2), (a), etc.
+    marker_pattern = re.compile(r'^([•\-\*\u2022\uf0b7●▪▫❖]|\d+\.?\)?|\([a-zA-Z0-9]+\))\s*')
+    
+    for line in raw_lines:
         line_str = line.strip()
         if not line_str:
             continue
-        if re.match(r'^[•\-\*\u2022\uf0b7●]', line_str):
+        
+        # Check if the line starts with a list marker/bullet/number
+        is_new_bullet = False
+        if marker_pattern.match(line_str):
+            is_new_bullet = True
+        elif line_str.startswith('•') or line_str.startswith('*') or line_str.startswith('-'):
+            is_new_bullet = True
+            
+        if is_new_bullet:
             if current_bullet:
-                cleaned_bullets.append(current_bullet)
-            bullet_content = re.sub(r'^[•\-\*\u2022\uf0b7●\s]+', '', line_str).strip()
-            current_bullet = f"• {bullet_content}"
+                bullets.append(current_bullet)
+            # Strip the leading marker
+            clean_line = marker_pattern.sub('', line_str).strip()
+            # If there's still a leading bullet character, strip it too
+            clean_line = re.sub(r'^[•\-\*\u2022\uf0b7●▪▫❖\s]+', '', clean_line).strip()
+            current_bullet = clean_line
         else:
             if current_bullet:
+                # Append line as continuation of the current bullet
                 line_clean = re.sub(r'\s+', ' ', line_str).strip()
                 current_bullet += f" {line_clean}"
             else:
-                current_bullet = f"• {line_str}"
+                current_bullet = line_str
+
     if current_bullet:
-        cleaned_bullets.append(current_bullet)
-    return "\n".join(cleaned_bullets)
+        bullets.append(current_bullet)
+        
+    # Format each bullet: ensure it starts with '• ', has a capitalized first letter, and ends with a single '.'
+    final_bullets = []
+    for b in bullets:
+        b_clean = b.strip()
+        if not b_clean:
+            continue
+        # Capitalize first letter
+        if len(b_clean) > 1:
+            b_clean = b_clean[0].upper() + b_clean[1:]
+        else:
+            b_clean = b_clean.upper()
+            
+        # Ensure it ends with exactly one period
+        b_clean = b_clean.rstrip('.')
+        b_clean = f"• {b_clean}."
+        final_bullets.append(b_clean)
+        
+    return "\n".join(final_bullets)
 
 
-def _extract_key_context_for_summary(text: str, max_chars: int = 4500) -> str:
+def _extract_key_context_for_summary(text: str, max_chars: int = 6000) -> str:
     """Extract optimal document text context for LLM summarization.
-    Combines initial policy schedule details with key clauses for coverage, exclusions, waiting periods, and claims.
+    Takes the first 3500 chars (policy schedule, insured names, premiums) plus
+    keyword-matched clauses from the rest, up to max_chars total.
     """
     if len(text) <= max_chars:
         return text
     
-    # 1. Take first 2500 chars (policy schedule, insured names, premiums, sum insured)
-    header_part = text[:2500]
+    # 1. Take first 3500 chars (policy schedule, insured names, premiums, sum insured)
+    header_chars = 3500
+    header_part = text[:header_chars]
     
     # 2. Extract key sentences for coverage, exclusions, waiting periods, and claims from remaining text
-    remainder = text[2500:]
+    remainder = text[header_chars:]
     keywords = [
         "inpatient", "day care", "daycare", "hospitalisation", "room rent",
         "pre-hospitalisation", "post-hospitalisation", "waiting period", "pre-existing",
-        "exclusion", "not covered", "co-payment", "deductible", "claim", "cashless", "helpline"
+        "exclusion", "not covered", "co-payment", "deductible", "claim", "cashless",
+        "helpline", "maternity", "restoration", "bonus", "renewal", "network hospital",
+        "sum insured", "ambulance", "AYUSH", "domiciliary", "discharge"
     ]
     
     matched_chunks = []
@@ -1307,7 +1420,7 @@ def _extract_key_context_for_summary(text: str, max_chars: int = 4500) -> str:
             cleaned = line.strip()
             if len(cleaned) > 20 and cleaned not in matched_chunks:
                 matched_chunks.append(cleaned)
-                if sum(len(c) for c in matched_chunks) >= (max_chars - 2500):
+                if sum(len(c) for c in matched_chunks) >= (max_chars - header_chars):
                     break
                     
     body_part = "\n".join(matched_chunks)
@@ -1316,70 +1429,124 @@ def _extract_key_context_for_summary(text: str, max_chars: int = 4500) -> str:
 
 
 async def generate_summary(document_text: str, force_regenerate: bool = False) -> dict:
-    """Generate AI summary with hybrid fact enrichment for maximum data quality and speed."""
-    ck = _cache_key("summary", document_text)
-    if not force_regenerate and ck in _ai_cache:
-        logger.info("Cache hit: summary")
-        return _ai_cache[ck]
+    """Generate AI summary using two dedicated Ollama calls:
+    - Call 1: Structured bullet sections (coverage, exclusions, waiting, premium) via BULLETS_EXTRACTION_PROMPT
+    - Call 2: Prose summary paragraph via PROSE_SUMMARY_PROMPT
+    Falls back to regex-based extraction ONLY if both Ollama calls fail.
+    """
+    # ── Healthcare relevance check ──
+    if not is_healthcare_related(document_text):
+        logger.warning("[SUMMARY] Document is not healthcare-related. Bypassing LLM and returning error response.")
+        return {
+            "summary_text": "Validation Error: The uploaded document does not appear to be a valid health insurance policy, medical report, or healthcare-related document. Analysis is only available for medical, health insurance, and healthcare-related documents.",
+            "coverage_summary": "• Invalid Document: The content does not contain health insurance or healthcare terminology.",
+            "exclusions_summary": "• Invalid Document: The content does not contain health insurance or healthcare terminology.",
+            "waiting_period_summary": "• Invalid Document: The content does not contain health insurance or healthcare terminology.",
+            "premium_summary": "• Invalid Document: The content does not contain health insurance or healthcare terminology.",
+        }
 
-    context = _extract_key_context_for_summary(document_text, max_chars=4500)
+    # Use compact context sized to fit within num_ctx=2048 budget
+    # (prompt template ~300 tokens + 900 tokens document = ~1200 tokens input, 800 tokens output)
+    context = _extract_key_context_for_summary(document_text, max_chars=1800)
+
+    # ── CALL 1: Generate structured bullet sections ───────────────────────────
+    bullets_result: dict = {}
+    try:
+        logger.info(f"[SUMMARY] 📋 Call 1 — Extracting bullet sections from {len(context)} chars via Ollama...")
+        bullets_response = await call_ollama(
+            BULLETS_EXTRACTION_PROMPT.format(document_text=context),
+            num_predict=700,   # Bullets only — enough for 4 sections × 4 bullets
+            num_ctx=2048,      # Matches warmup num_ctx — no model reload needed
+        )
+        bullets_parsed = extract_json_from_response(bullets_response)
+        if bullets_parsed:
+            logger.info("[SUMMARY] ✅ Call 1 succeeded — structured bullet sections extracted by LLM")
+            bullets_result = bullets_parsed
+        else:
+            logger.warning("[SUMMARY] ⚠️ Call 1 returned empty JSON — will use regex fallback for bullets")
+    except Exception as e:
+        logger.warning(f"[SUMMARY] ⚠️ Call 1 failed ({e}) — will use regex fallback for bullets")
+
+    # ── CALL 2: Generate prose summary paragraph ──────────────────────────────
+    prose_text: str = ""
+    try:
+        logger.info(f"[SUMMARY] 📝 Call 2 — Generating prose summary from {len(context)} chars via Ollama...")
+        prose_response = await call_ollama(
+            PROSE_SUMMARY_PROMPT.format(document_text=context),
+            num_predict=600,   # Prose only — 4-5 paragraphs, ~120-150 words
+            num_ctx=2048,      # Matches warmup num_ctx — no model reload needed
+        )
+        # Prose response is plain text, not JSON
+        prose_clean = prose_response.strip()
+        if prose_clean:
+            prose_text = clean_newlines_in_text(prose_clean)
+            logger.info("[SUMMARY] ✅ Call 2 succeeded — prose summary generated by LLM")
+        else:
+            logger.warning("[SUMMARY] ⚠️ Call 2 returned empty — will use regex fallback for prose")
+    except Exception as e:
+        logger.warning(f"[SUMMARY] ⚠️ Call 2 failed ({e}) — will use regex fallback for prose")
+
+    # ── Build fallback for any missing sections ───────────────────────────────
     fallback = _build_fallback_summary(document_text)
 
-    try:
-        response = await call_ollama(
-            SUMMARIZATION_PROMPT.format(document_text=context),
-            num_predict=650,   # Concise JSON summary + 4 bullet sections
-            num_ctx=1536,
-        )
-        result = extract_json_from_response(response)
-        if result.get("summary_text"):
-            logger.info("Ollama summarization successful")
-            
-            # Hybrid enrichment: supplement any empty/missing bullet section from fallback facts
-            cov = clean_newlines_in_bullets(_clean_field(result.get("coverage_summary")))
-            excl = clean_newlines_in_bullets(_clean_field(result.get("exclusions_summary")))
-            wait = clean_newlines_in_bullets(_clean_field(result.get("waiting_period_summary")))
-            prem = clean_newlines_in_bullets(_clean_field(result.get("premium_summary")))
+    # ── Assemble final output from LLM results (with fallback where LLM missed) ──
 
-            out = {
-                "summary_text": clean_newlines_in_text(_clean_field(result.get("summary_text", ""))),
-                "coverage_summary": cov or clean_newlines_in_bullets(fallback.get("coverage_summary", "")),
-                "exclusions_summary": excl or clean_newlines_in_bullets(fallback.get("exclusions_summary", "")),
-                "waiting_period_summary": wait or clean_newlines_in_bullets(fallback.get("waiting_period_summary", "")),
-                "premium_summary": prem or clean_newlines_in_bullets(fallback.get("premium_summary", "")),
-            }
-            _ai_cache[ck] = out
-            return out
-    except Exception as e:
-        logger.warning(f"Ollama unavailable ({e}), extracting summary from document text")
+    def _bullets_from_list(lst) -> str:
+        """Convert a list of bullet strings (from LLM JSON) into formatted bullet text."""
+        if not lst or not isinstance(lst, list):
+            return ""
+        items = [str(item).strip() for item in lst if str(item).strip()]
+        if not items:
+            return ""
+        # Run through clean_newlines_in_bullets to normalize formatting
+        raw = "\n".join(f"• {item}" for item in items)
+        return clean_newlines_in_bullets(raw)
 
-    # Ollama offline or partial: use fallback summary extracted from document text
-    cleaned_fallback = {
-        "summary_text": clean_newlines_in_text(fallback["summary_text"]),
-        "coverage_summary": clean_newlines_in_bullets(fallback["coverage_summary"]),
-        "exclusions_summary": clean_newlines_in_bullets(fallback["exclusions_summary"]),
-        "waiting_period_summary": clean_newlines_in_bullets(fallback["waiting_period_summary"]),
-        "premium_summary": clean_newlines_in_bullets(fallback["premium_summary"]),
+    cov_llm = _bullets_from_list(bullets_result.get("coverage_summary"))
+    excl_llm = _bullets_from_list(bullets_result.get("exclusions_summary"))
+    wait_llm = _bullets_from_list(bullets_result.get("waiting_period_summary"))
+    prem_llm = _bullets_from_list(bullets_result.get("premium_summary"))
+
+    # Use LLM bullets if available, fallback to regex only when LLM returned nothing
+    cov_final = cov_llm or clean_newlines_in_bullets(fallback.get("coverage_summary", ""))
+    excl_final = excl_llm or clean_newlines_in_bullets(fallback.get("exclusions_summary", ""))
+    wait_final = wait_llm or clean_newlines_in_bullets(fallback.get("waiting_period_summary", ""))
+    prem_final = prem_llm or clean_newlines_in_bullets(fallback.get("premium_summary", ""))
+
+    prose_final = prose_text or clean_newlines_in_text(fallback.get("summary_text", ""))
+
+    logger.info(
+        f"[SUMMARY] 🎯 Final assembly — prose={'LLM' if prose_text else 'FALLBACK'}, "
+        f"coverage={'LLM' if cov_llm else 'FALLBACK'}, "
+        f"exclusions={'LLM' if excl_llm else 'FALLBACK'}, "
+        f"waiting={'LLM' if wait_llm else 'FALLBACK'}, "
+        f"premium={'LLM' if prem_llm else 'FALLBACK'}"
+    )
+
+    return {
+        "summary_text": prose_final,
+        "coverage_summary": cov_final,
+        "exclusions_summary": excl_final,
+        "waiting_period_summary": wait_final,
+        "premium_summary": prem_final,
     }
-    _ai_cache[ck] = cleaned_fallback
-    return cleaned_fallback
+
+
 
 
 async def extract_policy_fields(document_text: str, force_regenerate: bool = False) -> list[dict]:
-    """Extract key fields. Cached per document hash, falls back to demo data."""
-    ck = _cache_key("fields", document_text)
-    if not force_regenerate and ck in _ai_cache:
-        logger.info("Cache hit: fields")
-        return _ai_cache[ck]
+    """Extract key fields. Falls back to demo data when Ollama is offline."""
+    # ── Healthcare relevance check ──
+    if not is_healthcare_related(document_text):
+        logger.warning("[FIELDS] Document is not healthcare-related. Bypassing LLM.")
+        return []
 
-    # Cap at 3000 chars to fit within num_ctx=1024 context window.
-    # Field extraction produces short JSON — smaller input = faster prompt processing.
-    truncated = document_text[:3000] if len(document_text) > 3000 else document_text
+    truncated = document_text[:2000] if len(document_text) > 2000 else document_text
     try:
         response = await call_ollama(
             FIELD_EXTRACTION_PROMPT.format(document_text=truncated),
-            num_predict=350,
-            num_ctx=1024,
+            num_predict=500,
+            num_ctx=2048,      # Consistent with warmup — no model reload
         )
         result = extract_json_from_response(response)
         if result:
@@ -1487,31 +1654,38 @@ async def extract_policy_fields(document_text: str, force_regenerate: bool = Fal
                     fields.append(fb)
                     existing_names.add(fb["field_name"].lower())
 
-            _ai_cache[ck] = fields
             return fields
     except Exception as e:
         logger.warning(f"Ollama unavailable ({e}), extracting fields from document text")
     # Ollama offline: extract real fields from the uploaded document
     fallback = _build_fallback_fields(document_text)
-    _ai_cache[ck] = fallback
     return fallback
 
 
 async def analyze_risks(document_text: str, force_regenerate: bool = False) -> dict:
-    """Detect risky clauses. Cached per document hash, falls back to demo data."""
-    ck = _cache_key("risks", document_text)
-    if not force_regenerate and ck in _ai_cache:
-        logger.info("Cache hit: risks")
-        return _ai_cache[ck]
+    """Detect risky clauses. Falls back to demo data when Ollama is offline."""
+    # ── Healthcare relevance check ──
+    if not is_healthcare_related(document_text):
+        logger.warning("[RISKS] Document is not healthcare-related. Bypassing LLM.")
+        return {
+            "risks": [
+                {
+                    "clause_text": "Non-healthcare document",
+                    "risk_type": "exclusion",
+                    "severity": "high",
+                    "explanation": "The uploaded document is not a healthcare or health insurance document.",
+                    "recommendation": "Please upload a valid healthcare or health insurance document."
+                }
+            ],
+            "overall_risk_level": "high"
+        }
 
-    # Cap at 3000 chars to fit within num_ctx=1024 context window.
-    # Risk analysis extracts up to 3 JSON risk items — short output, small input is fine.
-    truncated = document_text[:3000] if len(document_text) > 3000 else document_text
+    truncated = document_text[:2000] if len(document_text) > 2000 else document_text
     try:
         response = await call_ollama(
             RISK_ANALYSIS_PROMPT.format(document_text=truncated),
-            num_predict=300,
-            num_ctx=1024,
+            num_predict=700,
+            num_ctx=2048,      # Consistent with warmup — no model reload
         )
         result = extract_json_from_response(response)
         if result.get("risks"):
@@ -1529,13 +1703,11 @@ async def analyze_risks(document_text: str, force_regenerate: bool = False) -> d
                 ],
                 "overall_risk_level": result.get("overall_risk_level", "medium"),
             }
-            _ai_cache[ck] = out
             return out
     except Exception as e:
         logger.warning(f"Ollama unavailable ({e}), extracting risks from document text")
     # Ollama offline: detect risk clauses from the actual uploaded document
     fallback = _build_fallback_risks(document_text)
-    _ai_cache[ck] = fallback
     return fallback
 
 
@@ -1578,8 +1750,8 @@ async def generate_comparison_synthesis(policies_data: list[dict]) -> dict:
     try:
         response = await call_ollama(
             COMPARISON_PROMPT.format(policies_data=policies_text),
-            num_predict=300,  # REDUCED from 700
-            num_ctx=1024  # REDUCED from 2048
+            num_predict=300,
+            num_ctx=2048
         )
         result = extract_json_from_response(response)
         if result.get("synthesis"):
@@ -1847,7 +2019,7 @@ async def translate_text(text: str, target_language: str) -> str:
         response = await call_ollama(
             TRANSLATE_PROMPT.format(text=text[:1000], target_language=target_language),
             num_predict=300,
-            num_ctx=512
+            num_ctx=2048
         )
         if response:
             logger.info(f"Successfully translated via local Ollama fallback ({target_language})")
@@ -1974,7 +2146,7 @@ async def call_ollama_stream(prompt: str, model: Optional[str] = None, num_predi
         "options": {
             "temperature": 0,
             "num_predict": num_predict,
-            "num_ctx": 1024,
+            "num_ctx": 2048,
             "num_batch": 1024,
             "top_k": 1,
             "top_p": 1.0,
@@ -2146,7 +2318,7 @@ async def rewrite_query_with_history(query: str, history: list[dict]) -> str:
         "Standalone Query:"
     )
     try:
-        rewritten = await call_ollama(prompt, num_predict=60, num_ctx=512)
+        rewritten = await call_ollama(prompt, num_predict=60, num_ctx=2048)
         rewritten_clean = rewritten.strip().strip('"\'')
         if rewritten_clean:
             logger.info(f"Rewrote query: '{query}' -> '{rewritten_clean}'")

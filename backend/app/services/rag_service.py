@@ -80,15 +80,25 @@ async def generate_document_chunks(document_id: str, text_content: str, db: Asyn
 
 
 def cosine_similarity(v1: List[float], v2: List[float]) -> float:
-    """Calculate the cosine similarity between two float vectors."""
+    """Calculate cosine similarity using sklearn for speed.
+    Falls back to pure Python if numpy/sklearn are unavailable.
+    """
     if not v1 or not v2 or len(v1) != len(v2):
         return 0.0
-    dot_product = sum(a * b for a, b in zip(v1, v2))
-    norm_a = math.sqrt(sum(a * a for a in v1))
-    norm_b = math.sqrt(sum(b * b for b in v2))
-    if norm_a == 0.0 or norm_b == 0.0:
-        return 0.0
-    return dot_product / (norm_a * norm_b)
+    try:
+        import numpy as np
+        from sklearn.metrics.pairwise import cosine_similarity as sk_cos
+        a = np.array(v1, dtype=np.float32).reshape(1, -1)
+        b = np.array(v2, dtype=np.float32).reshape(1, -1)
+        return float(sk_cos(a, b)[0][0])
+    except ImportError:
+        # Pure Python fallback
+        dot_product = sum(a * b for a, b in zip(v1, v2))
+        norm_a = math.sqrt(sum(a * a for a in v1))
+        norm_b = math.sqrt(sum(b * b for b in v2))
+        if norm_a == 0.0 or norm_b == 0.0:
+            return 0.0
+        return dot_product / (norm_a * norm_b)
 
 
 # ─────────────────────────────────────────
@@ -144,91 +154,36 @@ Output ONLY valid JSON with this format:
 # Text Chunking
 # ─────────────────────────────────────────
 
-def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 250) -> List[str]:
+def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 150) -> List[str]:
     """
-    Split text into overlapping chunks of 800-1200 characters,
-    preserving section boundaries, headings, benefit schedule table rows, and clause text.
+    Split document text into semantically coherent chunks using LangChain's
+    RecursiveCharacterTextSplitter. chunk_size=1000 and overlap=150 gives better
+    semantic coverage for dense insurance language in large (100-page) PDFs.
     """
     if not text:
         return []
-        
-    # Split text into logical blocks (double newlines or single newlines with headings/table rows)
-    raw_blocks = re.split(r'\n{2,}', text)
-    blocks = []
-    for b in raw_blocks:
-        b_str = b.strip()
-        if not b_str:
-            continue
-        # If a block contains multiple single-newline table rows, preserve them
-        if len(b_str) > chunk_size and '\n' in b_str:
-            lines = b_str.split('\n')
-            current_line_block = []
-            curr_len = 0
-            for l in lines:
-                l_clean = l.strip()
-                if not l_clean:
-                    continue
-                if curr_len + len(l_clean) > chunk_size and current_line_block:
-                    blocks.append("\n".join(current_line_block))
-                    current_line_block = [l_clean]
-                    curr_len = len(l_clean)
-                else:
-                    current_line_block.append(l_clean)
-                    curr_len += len(l_clean) + 1
-            if current_line_block:
-                blocks.append("\n".join(current_line_block))
-        else:
-            blocks.append(b_str)
-            
-    chunks = []
-    current_chunk = []
-    current_length = 0
-    
-    for block in blocks:
-        block_len = len(block)
-        
-        if block_len > chunk_size:
-            if current_chunk:
-                chunks.append("\n\n".join(current_chunk))
-                current_chunk = []
-                current_length = 0
-                
-            words = block.split(" ")
-            sub_chunk_words = []
-            sub_len = 0
-            for w in words:
-                sub_chunk_words.append(w)
-                sub_len += len(w) + 1
-                if sub_len >= chunk_size:
-                    chunks.append(" ".join(sub_chunk_words))
-                    overlap_words = sub_chunk_words[-max(1, len(sub_chunk_words) // 4):]
-                    sub_chunk_words = list(overlap_words)
-                    sub_len = sum(len(x) + 1 for x in sub_chunk_words)
-            if sub_chunk_words:
-                chunks.append(" ".join(sub_chunk_words))
-        else:
-            if current_length + block_len + 2 > chunk_size:
-                chunks.append("\n\n".join(current_chunk))
-                
-                if current_chunk:
-                    overlap_para = current_chunk[-1]
-                    if len(overlap_para) <= overlap:
-                        current_chunk = [overlap_para, block]
-                        current_length = len(overlap_para) + block_len + 2
-                    else:
-                        current_chunk = [block]
-                        current_length = block_len
-                else:
-                    current_chunk = [block]
-                    current_length = block_len
-            else:
-                current_chunk.append(block)
-                current_length += block_len + (2 if current_length > 0 else 0)
-                
-    if current_chunk:
-        chunks.append("\n\n".join(current_chunk))
-        
-    return [c.strip() for c in chunks if c.strip()]
+
+    try:
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=overlap,
+            separators=["\n\n", "\n", ". ", ", ", " ", ""],
+            length_function=len,
+            is_separator_regex=False,
+        )
+        chunks = splitter.split_text(text)
+        # Filter out very short / empty chunks
+        chunks = [c.strip() for c in chunks if len(c.strip()) >= 30]
+        logger.info(f"LangChain splitter produced {len(chunks)} chunks (size={chunk_size}, overlap={overlap})")
+        return chunks
+
+    except ImportError:
+        logger.warning("langchain-text-splitters not available. Falling back to simple paragraph splitting.")
+        # Simple fallback: split on double newlines
+        raw = [b.strip() for b in re.split(r'\n{2,}', text) if b.strip()]
+        return raw
 
 
 
@@ -442,10 +397,10 @@ async def query_rag_pipeline(document_id: str, document_text: str, query: str, d
     
     if doc:
         try:
-            # Query Qdrant vector database
+            # Query Qdrant vector database with higher top_k for large docs
             from app.services.vector_store import search_vector_store
             policy_dummy = [{"id": document_id, "filename": doc.original_filename}]
-            hits = await search_vector_store(db, query, policy_dummy, top_k=3)
+            hits = await search_vector_store(db, query, policy_dummy, top_k=6)
             for hit in hits:
                 retrieved.append((hit["text"], hit["score"]))
             

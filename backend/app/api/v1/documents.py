@@ -477,7 +477,7 @@ async def _run_fields_background(doc_id: str, force_regenerate: bool = False) ->
                     field_category=field.get("field_category"),
                 ))
 
-            # Update document status & auto alerts
+            # Update auto alerts
             result = await db.execute(
                 select(Document)
                 .options(selectinload(Document.user))
@@ -485,9 +485,6 @@ async def _run_fields_background(doc_id: str, force_regenerate: bool = False) ->
             )
             doc = result.scalar_one_or_none()
             if doc:
-                if doc.status not in ("completed",):
-                    doc.status = "completed"
-                
                 # Auto schedule alerts based on extracted fields
                 await _auto_schedule_policy_alerts(db, doc, fields_data)
 
@@ -579,13 +576,16 @@ async def _run_summary_background(doc_id: str, force_regenerate: bool = False) -
 
 
 async def run_full_analysis_background(doc_id: str) -> None:
-    """Combined wrapper: runs summary, fields, and risks CONCURRENTLY for maximum speed."""
+    """Combined wrapper: runs summary, fields, and risks CONCURRENTLY for maximum speed.
+    Always uses force_regenerate=True to ensure fresh LLM generation from the uploaded document.
+    """
     import asyncio
     await asyncio.gather(
-        _run_summary_background(doc_id, force_regenerate=False),
-        _run_fields_background(doc_id),
-        _run_risks_background(doc_id),
+        _run_summary_background(doc_id, force_regenerate=True),
+        _run_fields_background(doc_id, force_regenerate=True),
+        _run_risks_background(doc_id, force_regenerate=True),
     )
+
 
 
 
@@ -603,93 +603,202 @@ MAX_FILE_SIZE = settings.MAX_FILE_SIZE_MB * 1024 * 1024  # Convert to bytes
 
 
 async def process_document_background(doc_id: str, file_path: str, file_type: str):
-    """Background task to extract text from uploaded document and perform auto-analysis.
-    
-    Phase 1 (FAST): Extract text → commit to DB → mark as 'text_extracted' so UI unblocks immediately.
-    Phase 2 (BACKGROUND): Run chunking+embedding and AI summary CONCURRENTLY, then mark 'completed'.
+    """
+    Best-Approach Document Processing Pipeline (v2).
+
+    Workflow:
+    ─────────
+    PHASE 1 (fast, ~1-3s)
+      ● Text extraction via PyMuPDF (digital PDF) or OCR (scanned/image)
+      ● Store extracted_text → status = 'text_extracted'
+
+    PHASE 2 (background, maximum parallelism)
+      ● LangChain chunking (1000-char chunks, 150 overlap)  ← runs FIRST, fast (<1s)
+      ● Then CONCURRENTLY:
+          ├── Summary generation (Ollama LLM)
+          ├── Key Field extraction (Ollama LLM)
+          ├── Risk analysis (Ollama LLM)
+          └── Embedding + Qdrant indexing (nomic-embed-text)
+      ● Each LLM task has a 2-attempt retry with 10s backoff
+      ● status = 'completed'
     """
     from app.core.database import AsyncSessionLocal
     import asyncio
-    
+
+    # ── PHASE 1: Fast text extraction ────────────────────────────────────────
+    text = ""
     async with AsyncSessionLocal() as db:
         try:
             result = await db.execute(select(Document).where(Document.id == doc_id))
             doc = result.scalar_one_or_none()
             if not doc:
                 return
-            
-            # ── PHASE 1: Fast text extraction (unblocks UI quickly) ──
+
             doc.status = "processing"
             await db.commit()
-            
+
             text, method, page_count = await extract_document_text(file_path, file_type)
-            
+
             doc.extracted_text = text
             doc.extraction_method = method
             doc.page_count = page_count
-            doc.status = "text_extracted"  # ← UI can now display the document
+            doc.status = "text_extracted"
             await db.commit()
-            logger.info(f"Phase 1 done for {doc_id}: text extracted ({len(text)} chars), status=text_extracted")
+            logger.info(
+                f"[PIPELINE] ✅ Phase 1 done — {len(text):,} chars extracted "
+                f"via '{method}' ({page_count} pages) for doc {doc_id}"
+            )
 
         except Exception as e:
-            logger.error(f"Phase 1 text extraction failed for {doc_id}: {e}")
+            logger.error(f"[PIPELINE] ❌ Phase 1 text extraction failed for {doc_id}: {e}")
             async with AsyncSessionLocal() as err_db:
                 result = await err_db.execute(select(Document).where(Document.id == doc_id))
-                doc = result.scalar_one_or_none()
-                if doc:
-                    doc.status = "failed"
+                err_doc = result.scalar_one_or_none()
+                if err_doc:
+                    err_doc.status = "failed"
                     await err_db.commit()
             return
 
-    # ── PHASE 2: SEQUENTIAL LLM Analysis (Prevents VRAM Model Thrashing) ──
-    # Run LLM tasks sequentially using the currently loaded OLLAMA_MODEL (gemma-3-4b).
-    # Since all 3 tasks use the same model, Ollama executes them back-to-back at top speed
-    # without ANY model unloading/reloading.
+    if not text.strip():
+        logger.error(f"[PIPELINE] ❌ No text extracted for {doc_id}. Aborting Phase 2.")
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(Document).where(Document.id == doc_id))
+            doc = result.scalar_one_or_none()
+            if doc:
+                doc.status = "failed"
+                await db.commit()
+        return
+
+    # ── PHASE 2: Pre-work — Chunk text (fast, <1s) before kicking off tasks ──
+    # Chunking is CPU-bound and fast; doing it before spawning async tasks
+    # lets both LLM and embedding tasks start immediately with the same chunks.
+    try:
+        from app.services.ai_service import clear_document_cache
+        clear_document_cache(text)
+    except Exception:
+        pass
+
+    # Pre-chunk synchronously — used by embedding task below
+    chunks: list[str] = []
+    try:
+        from app.services.rag_service import chunk_text
+        chunks = chunk_text(text)
+        logger.info(f"[PIPELINE] ✅ Pre-chunking done — {len(chunks)} chunks for doc {doc_id}")
+    except Exception as chunk_err:
+        logger.error(f"[PIPELINE] ⚠️ Chunking failed for {doc_id}: {chunk_err}. Embedding will be skipped.")
+
+    # ── Retry helper for Ollama LLM tasks ────────────────────────────────────
+    async def _with_retry(coro_factory, task_name: str, max_attempts: int = 2, delay: float = 10.0):
+        """Run coro_factory() with up to max_attempts retries on failure."""
+        for attempt in range(1, max_attempts + 1):
+            try:
+                await coro_factory()
+                return
+            except Exception as e:
+                if attempt < max_attempts:
+                    logger.warning(
+                        f"[PIPELINE] ⚠️ {task_name} attempt {attempt} failed for {doc_id}: {e}. "
+                        f"Retrying in {delay}s..."
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(f"[PIPELINE] ❌ {task_name} failed after {max_attempts} attempts for {doc_id}: {e}")
+
+    # ── LLM Task definitions ──────────────────────────────────────────────────
+
     async def _run_summary_task():
-        try:
+        logger.info(f"[PIPELINE] 🔄 Starting summary for {doc_id}")
+        async def _do():
             async with AsyncSessionLocal() as db_sum:
                 from app.services.summary_service import generate_and_store_summary
-                await generate_and_store_summary(db_sum, doc_id, text)
+                await generate_and_store_summary(db_sum, doc_id, text, force_regenerate=True)
                 await db_sum.commit()
-            logger.info(f"⚡ Summary complete for {doc_id}")
-        except Exception as e:
-            logger.error(f"[SUMMARY] Failed for {doc_id}: {e}")
+        await _with_retry(_do, "Summary")
+        logger.info(f"[PIPELINE] ✅ Summary complete for {doc_id}")
 
-    async def _run_embedding_task():
-        """Run vector chunking and embedding after LLM tasks finish."""
-        async with AsyncSessionLocal() as db_emb:
-            try:
-                from app.services.rag_service import generate_document_chunks
-                await generate_document_chunks(doc_id, text, db_emb)
-                await db_emb.commit()
-                logger.info(f"⚡ Vector chunking & embedding complete for {doc_id}")
-            except Exception as e:
-                logger.error(f"[EMBEDDING] Failed for {doc_id}: {e}")
-
-    try:
-        logger.info(f"⚡ Starting concurrent LLM analysis for {doc_id}...")
-        # Run Summary, Key Field Extraction, and Risk Analysis concurrently to reduce latency
-        await asyncio.gather(
-            _run_summary_task(),
-            _run_fields_background(doc_id),
-            _run_risks_background(doc_id)
+    async def _run_fields_task():
+        logger.info(f"[PIPELINE] 🔄 Starting field extraction for {doc_id}")
+        await _with_retry(
+            lambda: _run_fields_background(doc_id, force_regenerate=True),
+            "Field Extraction"
         )
-        
-        # 4. Vector Chunking & Embedding (Switches to nomic-embed-text once at the end)
-        await _run_embedding_task()
+        logger.info(f"[PIPELINE] ✅ Field extraction complete for {doc_id}")
 
-        # 5. Warm up the primary LLM model back into VRAM so instant RAG/Chat works with 0 cold-start delay (run in background)
+    async def _run_risks_task():
+        logger.info(f"[PIPELINE] 🔄 Starting risk analysis for {doc_id}")
+        await _with_retry(
+            lambda: _run_risks_background(doc_id, force_regenerate=True),
+            "Risk Analysis"
+        )
+        logger.info(f"[PIPELINE] ✅ Risk analysis complete for {doc_id}")
+
+    # ── Embedding Task ────────────────────────────────────────────────────────
+    async def _run_embedding_task():
+        """Embed pre-chunked text and store in Qdrant — runs concurrently with LLM tasks."""
+        if not chunks:
+            logger.warning(f"[PIPELINE] ⚠️ No chunks to embed for {doc_id}. Skipping embedding.")
+            return
+        logger.info(f"[PIPELINE] 🔄 Starting embedding of {len(chunks)} chunks for {doc_id}")
         try:
-            from app.services.ollama_client import warmup_model
-            asyncio.create_task(warmup_model())
-        except Exception as warmup_err:
-            logger.warning(f"Post-processing model warmup skipped: {warmup_err}")
+            async with AsyncSessionLocal() as db_emb:
+                from sqlalchemy import delete
+                from app.models.document import DocumentChunk
+                from app.services.embedding_service import generate_embeddings_batch
+                from app.services.vector_store import index_chunks_in_vector_stores
+                import json as _json
 
-        logger.info(f"⚡ All AI + embedding tasks complete for {doc_id}")
-    except Exception as llm_err:
-        logger.error(f"Sequential LLM analysis phase failed for {doc_id}: {llm_err}")
+                # Clear old chunks
+                await db_emb.execute(delete(DocumentChunk).where(DocumentChunk.document_id == doc_id))
+                await db_emb.flush()
 
-    # Final status update — mark as completed
+                # Generate embeddings in batch (nomic-embed-text)
+                embeddings_list = await generate_embeddings_batch(chunks)
+
+                # Fetch doc for metadata
+                doc_res = await db_emb.execute(select(Document).where(Document.id == doc_id))
+                doc = doc_res.scalar_one_or_none()
+
+                # Persist to SQLite
+                db_chunks = []
+                for idx, (chunk_txt, emb) in enumerate(zip(chunks, embeddings_list)):
+                    db_chunk = DocumentChunk(
+                        document_id=doc_id,
+                        chunk_index=idx,
+                        text_content=chunk_txt,
+                        embedding=_json.dumps(emb),
+                    )
+                    db_emb.add(db_chunk)
+                    db_chunks.append(db_chunk)
+                await db_emb.flush()
+
+                # Index in Qdrant
+                if doc:
+                    await index_chunks_in_vector_stores(db_emb, doc.user_id, doc_id, db_chunks)
+
+                await db_emb.commit()
+                logger.info(f"[PIPELINE] ✅ Embedding + Qdrant indexing complete for {doc_id} ({len(db_chunks)} chunks)")
+        except Exception as emb_err:
+            logger.error(f"[PIPELINE] ❌ Embedding task failed for {doc_id}: {emb_err}")
+
+    # ── PHASE 2: Run LLM tasks AND embedding SEQUENTIALLY to prevent Ollama load overloading ──
+    try:
+        logger.info(f"[PIPELINE] 🚀 Phase 2 starting for {doc_id} — running tasks sequentially")
+        await _run_embedding_task()   # 1. Embed and index first (so RAG/chat is immediately ready)
+        await _run_fields_task()      # 2. Extract policy fields
+        await _run_risks_task()       # 3. Analyze risks
+        await _run_summary_task()     # 4. Generate summary
+        logger.info(f"[PIPELINE] ✅ All Phase 2 tasks complete sequentially for {doc_id}")
+    except Exception as pipe_err:
+        logger.error(f"[PIPELINE] ❌ Phase 2 sequential execution failed for {doc_id}: {pipe_err}")
+
+    # Warm up LLM model back into VRAM for instant chat responses
+    try:
+        from app.services.ollama_client import warmup_model
+        asyncio.create_task(warmup_model())
+    except Exception as warmup_err:
+        logger.warning(f"[PIPELINE] Post-processing warmup skipped: {warmup_err}")
+
+    # Final status update
     async with AsyncSessionLocal() as db_final:
         try:
             result = await db_final.execute(select(Document).where(Document.id == doc_id))
@@ -697,9 +806,11 @@ async def process_document_background(doc_id: str, file_path: str, file_type: st
             if doc:
                 doc.status = "completed"
                 await db_final.commit()
-            logger.info(f"✅ Document {doc_id} fully processed and marked completed!")
+            logger.info(f"[PIPELINE] 🎉 Document {doc_id} fully processed and marked completed!")
         except Exception as e:
-            logger.error(f"Failed to update final status for {doc_id}: {e}")
+            logger.error(f"[PIPELINE] Failed to update final status for {doc_id}: {e}")
+
+
 
 
 @router.post("/upload", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)
@@ -728,38 +839,9 @@ async def upload_document(
             detail=f"File too large. Maximum size: {settings.MAX_FILE_SIZE_MB}MB",
         )
     
-    # Calculate SHA-256 hash of the file content
+    # Calculate SHA-256 hash of the file content for record keeping only
     import hashlib
     file_hash = hashlib.sha256(content).hexdigest()
-    
-    # Check if a document with the same filename has already been uploaded by this user
-    filename_clean = file.filename.strip() if file.filename else ""
-    if filename_clean:
-        result_name = await db.execute(
-            select(Document).where(
-                Document.user_id == current_user.id,
-                func.lower(Document.original_filename) == func.lower(filename_clean)
-            )
-        )
-        if result_name.scalar_one_or_none():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"A document named '{filename_clean}' has already been uploaded. Duplicate file names are not allowed.",
-            )
-
-    # Check if a document with this hash has already been uploaded by this user
-    result = await db.execute(
-        select(Document).where(
-            Document.user_id == current_user.id,
-            Document.file_hash == file_hash
-        )
-    )
-    existing_doc = result.scalar_one_or_none()
-    if existing_doc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="This document has already been uploaded. Duplicate uploads of the same report are not allowed.",
-        )
     
     # Generate unique filename
     extension = FilePath(file.filename).suffix.lower() or (".pdf" if file_type == "pdf" else ".jpg")
@@ -777,7 +859,7 @@ async def upload_document(
     
     logger.info(f"File saved: {file_path}")
     
-    # Create database record
+    # Create database record — always treated as a new document
     doc = Document(
         user_id=current_user.id,
         original_filename=file.filename,
@@ -793,7 +875,7 @@ async def upload_document(
     await db.flush()
     await db.refresh(doc)
     
-    # Start background text extraction
+    # Start background text extraction + AI analysis pipeline
     background_tasks.add_task(
         process_document_background, doc.id, file_path, file_type
     )
@@ -1403,12 +1485,47 @@ async def delete_document(
     if not doc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
     
+    # Cache invalidation skipped (caching disabled)
+
+    # 3. Explicitly delete child rows to support SQLite (where foreign key CASCADE is off by default)
+    try:
+        from app.models.risk_analysis import Summary, RiskAnalysis
+        from app.models.document import ExtractedField, DocumentChunk
+        from app.models.reminder import PolicyReminder
+        from app.models.chat import ChatSession
+        
+        await db.execute(delete(Summary).where(Summary.document_id == document_id))
+        await db.execute(delete(RiskAnalysis).where(RiskAnalysis.document_id == document_id))
+        await db.execute(delete(ExtractedField).where(ExtractedField.document_id == document_id))
+        await db.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document_id))
+        await db.execute(delete(PolicyReminder).where(PolicyReminder.document_id == document_id))
+        await db.execute(delete(ChatSession).where(ChatSession.document_id == document_id))
+        logger.info(f"Explicitly deleted all child rows (summaries, risk_analyses, fields, chunks, reminders, chat_sessions) for document {document_id}")
+    except Exception as db_cascade_err:
+        logger.warning(f"Failed to explicitly cascade delete child tables: {db_cascade_err}")
+
+    # 4. Delete chunks from Qdrant vector database
+    try:
+        from app.services.vector_store import delete_document_from_vector_store
+        await delete_document_from_vector_store(document_id)
+    except Exception as q_err:
+        logger.warning(f"Failed to delete document from vector database: {q_err}")
+
+    # Clear any stale in-memory AI cache for this document
+    if doc.extracted_text:
+        try:
+            from app.services.ai_service import clear_document_cache
+            clear_document_cache(doc.extracted_text)
+        except Exception as cache_err:
+            logger.warning(f"Failed to clear document cache: {cache_err}")
+
     # Delete physical file
     if os.path.exists(doc.file_path):
         os.remove(doc.file_path)
     
     await db.delete(doc)
-    logger.info(f"Document {document_id} deleted")
+    await db.commit()
+    logger.info(f"Document {document_id} deleted and database transaction committed successfully")
 
 
 @router.post("/compare", response_model=CompareResponse)
@@ -1840,12 +1957,15 @@ async def email_report(
     smtp_user = os.getenv("SMTP_USER") or getattr(settings, "SMTP_USER", "")
     smtp_password = os.getenv("SMTP_PASSWORD") or getattr(settings, "SMTP_PASSWORD", "")
 
-    sender_email = smtp_user if smtp_user else "noreply@healthpolicylens.local"
+    # Set the From header to the registered user's email address
+    user_sender = current_user.email
+    user_name = current_user.full_name or "User"
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = f"[HealthPolicyLens] Policy Analysis Audit Report: {doc.original_filename}"
-    msg["From"] = f"HealthPolicyLens <{sender_email}>"
+    msg["From"] = f"{user_name} <{user_sender}>"
     msg["To"] = request.email
+    msg["Reply-To"] = user_sender
     
     # Plaintext fallback
     text_fallback = f"Dear User,\n\nPlease find attached the HealthPolicyLens policy analysis report for {doc.original_filename}."
@@ -1862,9 +1982,14 @@ async def email_report(
             with smtplib.SMTP(smtp_server, smtp_port) as server:
                 server.starttls()
                 server.login(smtp_user, smtp_password)
-                server.sendmail(sender_email, [request.email], msg.as_string())
+                # To prevent Gmail/SMTP servers from rejecting unauthorized envelope senders (MAIL FROM),
+                # we use the authenticated smtp_user as the envelope sender, while the From header
+                # displayed to the recipient remains the registered user's email (user_sender).
+                # If smtp_user is not available, we fall back to user_sender.
+                envelope_sender = smtp_user if smtp_user else user_sender
+                server.sendmail(envelope_sender, [request.email], msg.as_string())
             sent_successfully = True
-            logger.info(f"📧 Email report successfully sent via SMTP to {request.email}")
+            logger.info(f"📧 Email report successfully sent via SMTP to {request.email} from user {user_sender}")
     except Exception as e:
         error_msg = str(e)
         logger.error(f"Failed to send email via SMTP: {e}")

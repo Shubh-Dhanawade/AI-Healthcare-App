@@ -62,6 +62,19 @@ def init_qdrant_collection() -> None:
                 )
             )
             logger.info(f"✅ Qdrant collection '{collection_name}' initialized.")
+        
+        # Ensure payload index on document_id exists for fast O(log N) filtered queries.
+        # Without this index, Qdrant does a full scan over all vectors on every query.
+        try:
+            client.create_payload_index(
+                collection_name=collection_name,
+                field_name="document_id",
+                field_schema=qmodels.PayloadSchemaType.KEYWORD
+            )
+            logger.debug("Qdrant payload index on 'document_id' is ready.")
+        except Exception:
+            # Index already exists — ignore the error
+            pass
     except Exception as e:
         logger.error(f"Failed to check/create Qdrant collection: {e}")
 
@@ -98,8 +111,16 @@ async def index_chunks_in_vector_stores(
         from qdrant_client.http import models as qmodels
         
         points = []
+        skipped_zero = 0
         for chunk in chunks:
             emb = json.loads(chunk.embedding)
+            
+            # Fix 5: Skip zero-vector chunks — they cannot be retrieved via cosine
+            # similarity and indicate a failed embedding generation.
+            if all(v == 0.0 for v in emb):
+                skipped_zero += 1
+                logger.warning(f"Skipping zero-vector chunk {chunk.id} (embedding failed) — will not be indexed in Qdrant.")
+                continue
             
             # Detect page number
             page_num = 1
@@ -125,13 +146,18 @@ async def index_chunks_in_vector_stores(
                 payload=payload
             ))
             
+        if skipped_zero:
+            logger.warning(f"⚠️ Skipped {skipped_zero} zero-vector chunks for document {doc_id}. Check nomic-embed-text availability.")
+        
         if points:
             logger.info(f"Uploading {len(points)} points into Qdrant collection '{collection_name}'...")
             client.upsert(
                 collection_name=collection_name,
                 points=points
             )
-            logger.info("✅ Qdrant indexing complete!")
+            logger.info(f"✅ Qdrant indexing complete! ({len(points)} valid vectors stored)")
+        else:
+            logger.error(f"❌ No valid vectors to upload for document {doc_id} — all chunks were zero-vectors!")
     except Exception as q_err:
         logger.error(f"Failed to upload embeddings to Qdrant: {q_err}")
 
@@ -221,12 +247,13 @@ async def search_vector_store(
     db: AsyncSession,
     query: str,
     policies: List[Dict[str, Any]],
-    top_k: int = 4
+    top_k: int = 6
 ) -> List[Dict[str, Any]]:
     """
     Enterprise hybrid retrieval gateway.
     Resolves vectors strictly using Qdrant (primary).
     Applies re-ranking keyword boosts to elevate exact contextual vocabulary.
+    Fetches top_k*2 candidates then re-ranks to return top_k best results.
     """
     if not policies:
         return []
@@ -251,3 +278,29 @@ async def search_vector_store(
     except Exception as search_err:
         logger.error(f"search_vector_store encountered error: {search_err}")
         return []
+
+
+async def delete_document_from_vector_store(document_id: str) -> None:
+    """Delete all chunks associated with a document ID from Qdrant vector database."""
+    client = get_qdrant_client()
+    if not client:
+        return
+        
+    collection_name = "healthcare_policy_chunks"
+    try:
+        from qdrant_client.http import models as qmodels
+        logger.info(f"Removing vectors for document {document_id} from Qdrant...")
+        client.delete(
+            collection_name=collection_name,
+            points_selector=qmodels.Filter(
+                must=[
+                    qmodels.FieldCondition(
+                        key="document_id",
+                        match=qmodels.MatchValue(value=str(document_id)),
+                    )
+                ]
+            )
+        )
+        logger.info(f"Vectors for document {document_id} removed successfully")
+    except Exception as q_err:
+        logger.error(f"Failed to delete document vectors from Qdrant: {q_err}")
