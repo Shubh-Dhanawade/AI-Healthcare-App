@@ -446,11 +446,13 @@ async def _run_fields_background(doc_id: str, force_regenerate: bool = False) ->
 
     # 1. Fetch extracted text in a quick read-only block to release locks immediately
     extracted_text = None
+    is_ocr = False
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(Document).where(Document.id == doc_id))
         doc = result.scalar_one_or_none()
         if doc and doc.extracted_text:
             extracted_text = doc.extracted_text
+            is_ocr = (doc.file_type == "image" or doc.extraction_method in ("easyocr", "paddleocr"))
 
     if not extracted_text:
         logger.warning(f"[BG-FIELDS] Document {doc_id} not found or has no text. Aborting.")
@@ -459,7 +461,7 @@ async def _run_fields_background(doc_id: str, force_regenerate: bool = False) ->
 
     try:
         # 2. Call Ollama FIRST (takes 10-30s, NO database session/lock is held!)
-        fields_data = await extract_policy_fields(extracted_text, force_regenerate=force_regenerate)
+        fields_data = await extract_policy_fields(extracted_text, force_regenerate=force_regenerate, is_ocr=is_ocr)
 
         # 3. Save to database in a new quick write transaction
         async with AsyncSessionLocal() as db:
@@ -914,26 +916,22 @@ async def process_multi_image_background(doc_id: str, image_paths: list[str]) ->
             doc.status = "processing"
             await db.commit()
 
-            # --- Phase 1: Concurrent OCR across all pages -----------------
-            async def _ocr_one(path: str, page_num: int):
-                loop = asyncio.get_event_loop()
-                from app.services.ocr_service import extract_text_from_image
-                raw, method, _ = await loop.run_in_executor(None, extract_text_from_image, path)
-                cleaned = clean_extracted_text(raw)
-                return page_num, cleaned, method
-
-            tasks = [_ocr_one(p, i + 1) for i, p in enumerate(image_paths)]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-
+            # --- Phase 1: Sequential OCR across all pages (avoids CPU choking) ---
             page_texts = []
             methods_used = []
-            for r in results:
-                if isinstance(r, Exception):
-                    logger.warning(f"[MULTI-IMG] OCR failed for one page: {r}")
-                    continue
-                page_num, text, method = r
-                page_texts.append((page_num, text))
-                methods_used.append(method)
+            
+            for idx, path in enumerate(image_paths):
+                page_num = idx + 1
+                logger.info(f"[MULTI-IMG] Running OCR for page {page_num}/{len(image_paths)}...")
+                try:
+                    loop = asyncio.get_event_loop()
+                    from app.services.ocr_service import extract_text_from_image
+                    raw, method, _ = await loop.run_in_executor(None, extract_text_from_image, path)
+                    cleaned = clean_extracted_text(raw)
+                    page_texts.append((page_num, cleaned))
+                    methods_used.append(method)
+                except Exception as page_err:
+                    logger.warning(f"[MULTI-IMG] OCR failed for page {page_num}: {page_err}")
 
             # Sort by original page order and concatenate
             page_texts.sort(key=lambda x: x[0])
@@ -992,14 +990,13 @@ async def process_multi_image_background(doc_id: str, image_paths: list[str]) ->
             logger.error(f"[MULTI-IMG] Embedding failed for {doc_id}: {e}")
 
     try:
-        await asyncio.gather(
-            _run_summary_task(),
-            _run_fields_background(doc_id),
-            _run_risks_background(doc_id),
-            _run_embedding_task(),
-            return_exceptions=True,
-        )
-        logger.info(f"[MULTI-IMG] ⚡ All parallel tasks complete for {doc_id}")
+        # Run sequentially to prevent VRAM paging/RAM thrashing under 8GB memory limits
+        logger.info(f"[MULTI-IMG] Starting sequential analysis tasks for {doc_id}...")
+        await _run_embedding_task()
+        await _run_summary_task()
+        await _run_fields_background(doc_id)
+        await _run_risks_background(doc_id)
+        logger.info(f"[MULTI-IMG] ⚡ All sequential analysis tasks complete for {doc_id}")
     except Exception as llm_err:
         logger.error(f"[MULTI-IMG] Analysis phase failed for {doc_id}: {llm_err}")
 
@@ -1071,6 +1068,13 @@ async def upload_multiple_images(
                 detail=f"Total upload size exceeds the allowed limit.",
             )
         file_contents.append((f.filename or "image.jpg", f.content_type or "image/jpeg", content))
+
+    # Sort file contents naturally by original filename to ensure correct page sequence
+    import re
+    def natural_sort_key(item):
+        filename = item[0]
+        return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', filename)]
+    file_contents.sort(key=natural_sort_key)
 
     # Create user upload directory
     user_upload_dir = FilePath(settings.UPLOAD_DIR) / str(current_user.id)

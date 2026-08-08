@@ -53,6 +53,12 @@ def get_easyocr_reader():
     global _easyocr_reader
     if _easyocr_reader is None:
         import easyocr
+        import torch
+        # Avoid CPU oversubscription thrashing by forcing PyTorch to use 1 thread on CPU
+        try:
+            torch.set_num_threads(1)
+        except Exception:
+            pass
         # Initialize reader (gpu=False for safe CPU fallback on Windows/Mac)
         _easyocr_reader = easyocr.Reader(['en'], gpu=False, verbose=False)
     return _easyocr_reader
@@ -85,13 +91,13 @@ def extract_text_with_easyocr(file_path: str, page_count: int = 1) -> Tuple[str,
                 pix = page.get_pixmap(matrix=mat)
                 img_bytes = pix.tobytes("png")
                 
-                result = reader.readtext(img_bytes, detail=0)
+                result = reader.readtext(img_bytes, detail=0, adjust_contrast=0)
                 if result:
                     page_text = "\n".join(result)
                     text_parts.append(f"[Page {page_num + 1}]\n{page_text}")
             doc.close()
         else:
-            result = reader.readtext(file_path, detail=0)
+            result = reader.readtext(file_path, detail=0, adjust_contrast=0)
             if result:
                 page_text = "\n".join(result)
                 text_parts.append(page_text)

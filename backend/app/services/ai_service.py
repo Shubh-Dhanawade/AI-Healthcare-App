@@ -409,6 +409,28 @@ def _clean_to_digits(s: str) -> str:
     return re.sub(r'\D', '', s)
 
 
+def _clean_currency_to_int(val: str) -> Optional[int]:
+    # Remove currency symbols and whitespace
+    clean = re.sub(r'[^\d.,/oO]', '', val).strip()
+    # Normalize OCR typos: o/O -> 0, / -> 7
+    clean = clean.replace('o', '0').replace('O', '0').replace('/', '7')
+    
+    # If there is a dot or comma near the end, treat it as decimal point
+    if len(clean) >= 3 and clean[-3] in ('.', ','):
+        integer_part = clean[:-3]
+    elif len(clean) >= 2 and clean[-2] in ('.', ','):
+        integer_part = clean[:-2]
+    else:
+        integer_part = clean
+        
+    # Remove all non-digits from integer part
+    digits = re.sub(r'\D', '', integer_part)
+    try:
+        return int(digits) if digits else None
+    except ValueError:
+        return None
+
+
 def _is_valid_premium(val: str, policy_num: str = "", sum_insured: str = "") -> bool:
     if not val:
         return False
@@ -416,51 +438,88 @@ def _is_valid_premium(val: str, policy_num: str = "", sum_insured: str = "") -> 
     if val_clean in ("0", "null", "", "none", "not specified", "not mentioned in policy"):
         return False
     
-    val_base = val.split('.')[0] if '.' in val else val
-    digits = _clean_to_digits(val_base)
-    if not digits:
+    val_int = _clean_currency_to_int(val)
+    if val_int is None:
         return False
         
-    # If digits match policy number digits, reject
-    if policy_num and digits == _clean_to_digits(policy_num):
+    # Reject premiums >= 5,00,000 (usually sum insured or other limit) or < 500 (usually date parts or noise)
+    if val_int >= 500000 or val_int < 500:
         return False
         
-    # If digits match sum insured digits, reject
-    if sum_insured and digits == _clean_to_digits(sum_insured):
-        return False
-        
-    # Health insurance premiums are virtually never 9+ digits (>= 10,000,000)
-    if len(digits) >= 9:
-        return False
-        
-    # Reject premiums >= 5,00,000 (usually sum insured or other limit)
-    try:
-        val_int = int(digits)
-        if val_int >= 500000:
+    digits = str(val_int)
+    
+    # If digits match or are part of policy number digits, reject
+    if policy_num:
+        policy_digits = _clean_to_digits(policy_num)
+        if digits and policy_digits and (digits in policy_digits or policy_digits in digits):
             return False
-    except ValueError:
-        pass
+        
+    # If digits match or are part of sum insured digits, reject
+    if sum_insured:
+        sum_digits = _clean_to_digits(sum_insured)
+        if digits and sum_digits and (digits in sum_digits or sum_digits in digits):
+            return False
         
     return True
 
 
 def _extract_premium_validated(text: str, policy_number: str = "", sum_insured: str = "") -> Optional[str]:
+    # Clean OCR errors in numbers
+    import re
+    text_clean = text
+    # Replace '/' with '7' when it is preceded by digits and followed by a dot/digits (e.g. 19.36/.0O -> 19.367.0O)
+    text_clean = re.sub(r'(\d+)/([.,]\d+)', r'\g<1>7\2', text_clean)
+    # Replace 'O' or 'o' with '0' inside decimal parts (e.g. .0O -> .00)
+    text_clean = re.sub(r'([.,]\d+)[oO]', r'\g<1>0', text_clean)
+    text_clean = re.sub(r'(\d)[oO](\d)', r'\g<1>0\g<2>', text_clean)
+
     # Corrected patterns where we use an alternation instead of a buggy character set
     patterns = [
-        r'(?:total\s+premium|gross\s+premium|net\s+premium|premium\s+paid|premium\s+amount|premium\s+received|premium\s+payable|premium\s+due)[:\s\u20b9\(\)a-zA-Z]*\s*(?:\u20b9|Rs\.?|INR)?\s*([\d,]{3,}(?:\.[\d]{1,2})?)',
-        r'(?:\u20b9|Rs\.?|INR)\s*([\d,]{4,}(?:\.\d{1,2})?)\s*(?:towards\s+premium|towards\s+the\s+premium|towards\s+insurance|premium)',
-        r'(?:received\s+an\s+amount\s+of)\s*(?:\u20b9|Rs\.?|INR)?\s*([\d,]{3,}(?:\.[\d]{1,2})?)',
-        r'(?:towards\s+premium)[^\n\r]*?(?:\u20b9|Rs\.?|INR)?\s*([\d,]{3,}(?:\.[\d]{1,2})?)',
-        r'(?:Premium)[:\s\u20b9\(\)a-zA-Z]*\s*(?:\u20b9|Rs\.?|INR)?\s*([\d,]{3,}(?:\.[\d]{1,2})?)',
-        r'Total\s+(?:Premium|Amount)[:\s\u20b9\(\)a-zA-Z]*\s*(?:\u20b9|Rs\.?|INR)?\s*([\d,]{3,}(?:\.[\d]{1,2})?)',
-        r'(?:\u20b9|Rs\.?|INR)\s*([\d,]{4,}(?:\.\d{1,2})?)',
-        r'([\d,]{4,}(?:\.\d{1,2})?)\s*(?:towards\s+premium)',
+        r'(?:total\s+premium|gross\s+premium|net\s+premium|premium\s+paid|premium\s+amount|premium\s+received|premium\s+payable|premium\s+due)[:\s\u20b9\(\)a-zA-Z]*\s*(?:\u20b9|Rs\.?|INR)?\s*([\d,./oO]+)',
+        r'(?:\u20b9|Rs\.?|INR)\s*([\d,./oO]+)\s*(?:towards\s+premium|towards\s+the\s+premium|towards\s+insurance|premium)',
+        r'(?:received\s+an\s+amount\s+of)\s*(?:\u20b9|Rs\.?|INR)?\s*([\d,./oO]+)',
+        r'(?:towards\s+premium)[^\n\r]*?(?:\u20b9|Rs\.?|INR)?\s*([\d,./oO]+)',
+        r'(?:Premium)[:\s\u20b9\(\)a-zA-Z]*\s*(?:\u20b9|Rs\.?|INR)?\s*([\d,./oO]+)',
+        r'Total\s+(?:Premium|Amount)[:\s\u20b9\(\)a-zA-Z]*\s*(?:\u20b9|Rs\.?|INR)?\s*([\d,./oO]+)',
+        r'(?:\u20b9|Rs\.?|INR)\s*([\d,./oO]+)',
+        r'([\d,./oO]+)\s*(?:towards\s+premium)',
     ]
     for pattern in patterns:
-        res = _regex_find(pattern, text, 1, "")
+        res = _regex_find(pattern, text_clean, 1, "")
         if res and res != "Not found in document" and re.search(r'[a-zA-Z0-9]', res):
             if _is_valid_premium(res, policy_number, sum_insured):
-                return res.strip()
+                # Clean up the output value for saving to database
+                normalized_val = re.sub(r'[^\d.,]', '', res)
+                # Normalize OCR characters
+                normalized_val = normalized_val.replace('o', '0').replace('O', '0').replace('/', '7')
+                return normalized_val.strip()
+
+    # Fallback to proximity-based scanner for table column OCRs
+    keywords = ["premium", "premimm", "payable", "tax", "duty", "gross", "net", "charge", "total", "toro"]
+    candidates = []
+    for match in re.finditer(r'\b\d[\d,./oO]{3,}\b', text_clean):
+        raw = match.group(0)
+        start_pos = match.start()
+        end_pos = match.end()
+        
+        # Check if any keyword is within 80 characters before or after the match
+        window_start = max(0, start_pos - 80)
+        window_end = min(len(text_clean), end_pos + 80)
+        surrounding_text = text_clean[window_start:window_end].lower()
+        
+        if any(kw in surrounding_text for kw in keywords):
+            normalized = re.sub(r'[^\d.,]', '', raw)
+            normalized = normalized.replace('o', '0').replace('O', '0').replace('/', '7')
+            val_int = _clean_currency_to_int(normalized)
+            if val_int is not None:
+                if _is_valid_premium(normalized, policy_number, sum_insured):
+                    candidates.append((val_int, normalized))
+                    
+    if candidates:
+        # Sort descending and return the maximum valid candidate
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        return candidates[0][1]
+        
     return None
 
 
@@ -1482,7 +1541,7 @@ def _extract_key_context_for_summary(text: str, max_chars: int = 15000, header_c
     return combined[:max_chars]
 
 
-async def generate_summary(document_text: str, force_regenerate: bool = False) -> dict:
+async def generate_summary(document_text: str, force_regenerate: bool = False, is_ocr: bool = False) -> dict:
     """Generate AI summary using two dedicated Ollama calls:
     - Call 1: Structured bullet sections (coverage, exclusions, waiting, premium) via BULLETS_EXTRACTION_PROMPT
     - Call 2: Prose summary paragraph via PROSE_SUMMARY_PROMPT
@@ -1506,8 +1565,12 @@ async def generate_summary(document_text: str, force_regenerate: bool = False) -
     bullets_result: dict = {}
     try:
         logger.info(f"[SUMMARY] 📋 Call 1 — Extracting bullet sections from {len(context)} chars via Ollama...")
+        prompt1 = BULLETS_EXTRACTION_PROMPT
+        if is_ocr:
+            prompt1 = prompt1 + "\n- OCR Error Correction: The document text was extracted via OCR and may contain character misreads (e.g. '/' instead of '7', 'O' instead of '0', '.' instead of ','). You must reconstruct the correct numbers (e.g. '19.36/.0O' is '19,367.00', '50,00.000' is '50,00,000'). Please correct these values in your output."
+            
         bullets_response = await call_ollama(
-            BULLETS_EXTRACTION_PROMPT.format(document_text=context),
+            prompt1.format(document_text=context),
             num_predict=700,   # Bullets only — enough for 4 sections × 4 bullets
             num_ctx=8192,      # Matches warmup num_ctx — no model reload needed
         )
@@ -1524,8 +1587,12 @@ async def generate_summary(document_text: str, force_regenerate: bool = False) -
     prose_text: str = ""
     try:
         logger.info(f"[SUMMARY] 📝 Call 2 — Generating prose summary from {len(context)} chars via Ollama...")
+        prompt2 = PROSE_SUMMARY_PROMPT
+        if is_ocr:
+            prompt2 = prompt2 + "\n- OCR Error Correction: The document text was extracted via OCR and may contain character misreads (e.g. '/' instead of '7', 'O' instead of '0', '.' instead of ','). You must reconstruct the correct numbers (e.g. '19.36/.0O' is '19,367.00', '50,00.000' is '50,00,000'). Please correct these values in your output."
+            
         prose_response = await call_ollama(
-            PROSE_SUMMARY_PROMPT.format(document_text=context),
+            prompt2.format(document_text=context),
             num_predict=600,   # Prose only — 4-5 paragraphs, ~120-150 words
             num_ctx=8192,      # Matches warmup num_ctx — no model reload needed
         )
@@ -1587,7 +1654,7 @@ async def generate_summary(document_text: str, force_regenerate: bool = False) -
 
 
 
-async def extract_policy_fields(document_text: str, force_regenerate: bool = False) -> list[dict]:
+async def extract_policy_fields(document_text: str, force_regenerate: bool = False, is_ocr: bool = False) -> list[dict]:
     """Extract key fields. Falls back to demo data when Ollama is offline."""
     # ── Healthcare relevance check ──
     if not is_healthcare_related(document_text):
@@ -1596,8 +1663,12 @@ async def extract_policy_fields(document_text: str, force_regenerate: bool = Fal
 
     context = _extract_key_context_for_summary(document_text, max_chars=15000, header_chars=8000)
     try:
+        prompt = FIELD_EXTRACTION_PROMPT
+        if is_ocr:
+            prompt = prompt + "\n- OCR Error Correction: The document text was extracted via OCR and may contain character misreads (e.g. '/' instead of '7', 'O' instead of '0', '.' instead of ','). You must reconstruct the correct numbers (e.g. '19.36/.0O' is '19,367.00', '50,00.000' is '50,00,000'). Please correct these values in your JSON output."
+            
         response = await call_ollama(
-            FIELD_EXTRACTION_PROMPT.format(document_text=context),
+            prompt.format(document_text=context),
             num_predict=500,
             num_ctx=8192,      # Consistent with warmup — no model reload
         )
