@@ -65,14 +65,14 @@ async def warmup_model(model: Optional[str] = None) -> None:
             "model": model_name,
             "prompt": "hi",
             "stream": False,
-            # keep_alive=-1: model stays loaded indefinitely, no idle eviction.
-            "keep_alive": -1,
+            # keep_alive read from settings (e.g. 5m to prevent locked RAM)
+            "keep_alive": parse_keep_alive(settings.OLLAMA_KEEP_ALIVE),
             "options": {
                 "num_predict": 1,
-                # IMPORTANT: Use num_ctx=1024 here — same as all inference calls.
-                # If warmup uses a different num_ctx, Ollama reloads the model on every
-                # actual inference call (15-20s cold-start per request).
-                "num_ctx": 1024,
+                # CRITICAL: num_ctx=8192 must match ALL inference calls.
+                # If warmup uses a different num_ctx (e.g. 1024), Ollama reloads the model KV cache
+                # on EVERY actual inference call, causing ~20s cold-start + potential OOM kill.
+                "num_ctx": 8192,
                 "temperature": 0,
                 "num_thread": settings.OLLAMA_NUM_THREAD,
                 # Pin model weights in RAM — prevents paging to disk under memory pressure
@@ -134,7 +134,7 @@ async def call_ollama(
     prompt: str,
     model: Optional[str] = None,
     num_predict: int = 512,
-    num_ctx: int = 1024,
+    num_ctx: int = 8192,   # Must match warmup num_ctx to avoid KV cache reload
 ) -> str:
     """Call Ollama /api/generate endpoint synchronously with dynamic CPU/GPU layer allocation.
     Uses /api/generate (completion) which works with all GGUF models including
@@ -176,7 +176,7 @@ async def call_ollama_stream(
     prompt: str,
     model: Optional[str] = None,
     num_predict: int = 450,
-    num_ctx: int = 1024,
+    num_ctx: int = 8192,   # Must match warmup num_ctx to avoid KV cache reload
 ) -> AsyncGenerator[str, None]:
     """Generate streaming tokens from Ollama /api/generate with GPU-accelerated speed optimizations.
     
@@ -198,9 +198,8 @@ async def call_ollama_stream(
         "model": model_name,
         "prompt": prompt,
         "stream": True,
-        # keep_alive=-1: model stays loaded in VRAM indefinitely after first use.
-        # This prevents the ~20s cold-load penalty on every chat request after idle.
-        "keep_alive": -1,
+        # keep_alive read from settings (e.g. 5m to prevent locked RAM)
+        "keep_alive": parse_keep_alive(settings.OLLAMA_KEEP_ALIVE),
         "options": {
             "temperature": 0,           # Greedy for maximum speed
             "num_predict": num_predict,

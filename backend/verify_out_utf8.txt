@@ -1,0 +1,808 @@
+﻿.\venv\Scripts\python.exe : 2026-08-07 22:09:33.949 | INFO     | __main__:main:21 - Starting integration validation...
+At line:1 char:1
++ .\venv\Scripts\python.exe C:\Users\krush\.gemini\antigravity-ide\brai ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (2026-08-07 22:0...n validation...:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+2026-08-07 22:09:33.949 | INFO     | __main__:main:30 - 1. Testing PDF text extraction...
+2026-08-07 22:09:33.949 | INFO     | app.services.ocr_service:extract_document_text:256 - Extracting text from: d:\Imp\
+VScode\Projects\HealthCare\AI-Healthcare-App\backend\uploads\4a38ff17-1986-4c14-941d-6d6f2f8974b5\ef112aed-2306-41c4-a4
+bc-1210a8f4f054.pdf (type: pdf)
+2026-08-07 22:09:34.018 | INFO     | app.services.pdf_processor:extract_text_from_pdf:67 - Opening PDF file (optimized 
+extraction): d:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\uploads\4a38ff17-1986-4c14-941d-6d6f2f8974b5\e
+f112aed-2306-41c4-a4bc-1210a8f4f054.pdf
+2026-08-07 22:09:34.057 | INFO     | app.services.pdf_processor:extract_text_from_pdf:107 - \u2705 FAST TEXT 
+EXTRACTION: 33187 chars from 10 pages
+2026-08-07 22:09:34.057 | INFO     | app.services.ocr_service:extract_document_text:272 - \u2705 Extraction complete: 
+33187 chars via pymupdf
+2026-08-07 22:09:34.057 | INFO     | __main__:main:32 - SUCCESS: Extracted 33187 characters using 'pymupdf' method 
+across 10 pages.
+2026-08-07 22:09:34.057 | INFO     | __main__:main:35 - 2. Testing AI Summary generation (num_predict=1024)...
+2026-08-07 22:09:34.135 | INFO     | app.services.ollama_client:get_httpx_client:36 - \U0001f50c Shared HTTPX Client 
+initialized for Ollama at http://localhost:11434
+2026-08-07 22:09:34.135 | DEBUG    | app.services.ollama_client:call_ollama:168 - Ollama Call: 
+hf.co/kkross/gemma-3-4b-cord19-finetuned-new:latest (predict=1024, ctx=1536)
+2026-08-07 22:09:34.157 | WARNING  | app.services.ai_service:generate_summary:1357 - Ollama unavailable (Client error 
+'404 Not Found' for url 'http://localhost:11434/api/generate'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404), extracting summary from 
+document text
+2026-08-07 22:09:34.157 | INFO     | __main__:main:38 - SUCCESS: Summary generated (2439 chars).
+2026-08-07 22:09:34.157 | INFO     | __main__:main:41 - Verifying summary formatting completeness...
+2026-08-07 22:09:34.157 | INFO     | __main__:main:42 - Summary ending: ...m payment will be done through NEFT only. 
+Keep a copy of all hospital bills and discharge summaries.
+2026-08-07 22:09:34.157 | INFO     | __main__:main:46 - Summary formatting check passed (sentence successfully 
+completed).
+2026-08-07 22:09:34.157 | INFO     | __main__:main:49 - 3. Testing Key Fields extraction...
+2026-08-07 22:09:34.159 | WARNING  | app.services.ai_service:extract_policy_fields:1496 - Ollama unavailable ('\n  
+"policy_name"'), extracting fields from document text
+2026-08-07 22:09:34.246 | INFO     | __main__:main:51 - SUCCESS: Extracted 7 fields.
+2026-08-07 22:09:34.246 | INFO     | __main__:main:53 -  - Policy Name: Health Shield 360
+2026-08-07 22:09:34.247 | INFO     | __main__:main:53 -  - Insurer Name: ICICI Lombard General Insurance Company 
+Limited
+2026-08-07 22:09:34.247 | INFO     | __main__:main:53 -  - Policy Number: 4177i/MSTR/383912525/00/00
+2026-08-07 22:09:34.247 | INFO     | __main__:main:56 - 4. Testing Risk Analysis...
+2026-08-07 22:09:34.248 | DEBUG    | app.services.ollama_client:call_ollama:168 - Ollama Call: 
+hf.co/kkross/gemma-3-4b-cord19-finetuned-new:latest (predict=300, ctx=1024)
+2026-08-07 22:09:34.308 | WARNING  | app.services.ai_service:analyze_risks:1538 - Ollama unavailable (Client error 
+'404 Not Found' for url 'http://localhost:11434/api/generate'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404), extracting risks from 
+document text
+2026-08-07 22:09:34.349 | INFO     | __main__:main:58 - SUCCESS: Found 3 risk clauses. Overall level: high
+2026-08-07 22:09:34.349 | INFO     | __main__:main:61 - 5. Testing Qdrant indexing...
+2026-08-07 22:09:34.350 | INFO     | app.services.rag_service:generate_document_chunks:23 - Chunking and embedding 
+document test-doc-integration-id...
+2026-08-07 22:09:34.350 | INFO     | app.services.rag_service:generate_document_chunks:33 - Generated 42 chunks in 
+0.0005s. Generating vector embeddings...
+2026-08-07 22:09:34,411 INFO sqlalchemy.engine.Engine select pg_catalog.version()
+2026-08-07 22:09:34,411 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-08-07 22:09:34,413 INFO sqlalchemy.engine.Engine select current_schema()
+2026-08-07 22:09:34,413 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-08-07 22:09:34,413 INFO sqlalchemy.engine.Engine show standard_conforming_strings
+2026-08-07 22:09:34,413 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-08-07 22:09:34,415 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-07 22:09:34,415 INFO sqlalchemy.engine.Engine DELETE FROM document_chunks WHERE document_chunks.document_id = $1::VARCHAR
+2026-08-07 22:09:34,417 INFO sqlalchemy.engine.Engine [generated in 0.00013s] ('test-doc-integration-id',)
+2026-08-07 22:09:34.418 | INFO     | app.services.embedding_service:generate_embeddings_batch:25 - Generating 
+embeddings for 42 chunks in batch size of 100...
+2026-08-07 22:09:34.426 | ERROR    | app.services.embedding_service:generate_embeddings_batch:50 - Batch embedding 
+failed for sub-batch 0: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Falling back to single-item 
+queries.
+2026-08-07 22:09:34.474 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:34.525 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:34.525 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:34.578 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:34.627 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:34.627 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:34.675 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:34.725 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:34.725 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:34.775 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:34.828 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:34.828 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:34.877 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:34.925 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:34.925 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:34.974 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:35.024 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:35.024 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:35.085 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:35.137 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:35.138 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:35.182 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:35.238 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:35.238 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:35.287 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:35.338 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:35.338 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:35.398 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:35.447 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:35.448 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:35.495 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:35.545 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:35.548 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:35.592 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:35.647 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:35.647 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:35.696 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:35.746 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:35.746 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:35.807 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:35.858 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:35.858 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:35.908 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:35.957 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:35.957 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:36.008 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:36.058 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:36.058 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:36.107 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:36.158 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:36.158 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:36.207 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:36.258 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:36.258 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:36.307 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:36.358 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:36.358 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:36.418 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:36.468 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:36.468 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:36.518 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:36.567 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:36.567 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:36.617 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:36.667 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:36.668 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:36.718 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:36.768 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:36.768 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:36.817 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:36.866 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:36.868 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:36.918 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:36.967 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:36.967 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:37.018 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:37.068 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:37.068 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:37.118 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:37.167 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:37.167 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:37.218 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:37.267 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:37.267 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:37.317 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:37.378 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:37.379 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:37.427 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:37.478 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:37.479 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:37.527 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:37.578 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:37.578 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:37.627 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:37.678 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:37.678 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:37.727 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:37.778 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:37.778 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:37.826 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:37.878 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:37.878 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:37.928 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:37.978 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:37.978 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:38.027 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:38.077 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:38.077 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:38.137 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:38.187 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:38.187 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:38.238 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:38.301 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:38.301 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:38.347 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:38.398 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:38.399 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:38.448 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:38.498 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:38.498 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:38.547 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:38.597 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:38.597 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:38.648 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:109 - Failed to generate 
+vector embedding via nomic-embed-text /api/embeddings: Client error '404 Not Found' for url 
+'http://localhost:11434/api/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404. Trying /api/embed fallback...
+2026-08-07 22:09:38.697 | ERROR    | app.services.ollama_client:generate_embeddings_nomic:127 - Fallback embeddings 
+call also failed: Client error '404 Not Found' for url 'http://localhost:11434/api/embed'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2026-08-07 22:09:38.698 | WARNING  | app.services.ollama_client:generate_embeddings_nomic:130 - Ollama embeddings 
+service offline. Returning zero vector fallback.
+2026-08-07 22:09:38.698 | INFO     | app.services.embedding_service:generate_embeddings_batch:60 - \u2705 Generated 42 
+embeddings successfully.
+2026-08-07 22:09:38,706 INFO sqlalchemy.engine.Engine INSERT INTO document_chunks (id, document_id, chunk_index, text_content, embedding, embedding_vector, created_at) VALUES ($1::VARCHAR, $2::VARCHAR, $3::INTEGER, $4::VARCHAR, $5::VARCHAR, $6, $7::TIMESTAMP WITHOUT TIME ZONE), ($8::VARCHAR, $9::VARCHAR ... 4617 characters truncated ... $289::VARCHAR, $290::INTEGER, $291::VARCHAR, $292::VARCHAR, $293, $294::TIMESTAMP WITHOUT TIME ZONE)
+2026-08-07 22:09:38,706 INFO sqlalchemy.engine.Engine [generated in 0.00052s (insertmanyvalues) 1/1 (unordered)] ('9d4ff303-17b1-436c-a4d8-c41d36035ce9', 'test-doc-integration-id', 0, '(a)  Policy Schedule (Policy Certificate)\nPOLICY\n5\n5\n4\n4\nICIHLGP25049V042425\nhttps://www.icicilombard.com/docs/default-source/de\nPREAMBLE\nye ... (715 characters truncated) ... proof\nto the satisfaction of the Company of the compensation having become payable as set out in Part I of Policy to the title of the said person or', '[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ... (3542 characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 16, 39, 38, 705490), '43b833bb-e537-4ad8-9a8a-3c0839046fdf', 'test-doc-integration-id', 1, 'persons claiming payment or upon the happening of an event upon which one or more benefits become payable under this Policy, the Sum\nInsured/appropr ... (383 characters truncated) ... ntained or otherwise expressed in the said policy, but not exceeding the sum insured as specified forming Part\nI of the schedule to the said policy.', '[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ... (3542 characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 16, 39, 38, 705490), 'df76e8d3-4e68-43da-92a1-07be21915337', 'test-doc-integration-id', 2, 'Proposer Name\nRAKESH SURESH JADHAV\nProduct name\nHealth Shield 360\nAddress\nE-408 4TH FLOOR CASAGREEN TALAWALI\nCHANDA NEAR LAURELS SCHOOL,\nINDOR ... (440 characters truncated) ... pointee Name\n\nPolicy Issued On\n14-Aug-2025\nNominee Age\n38 Years 8 Month\nPrevious Policy No.\n4177i/IBANK/354963416/00/000\nGSTIN No. (Customer)', '[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ... (3542 characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 16, 39, 38, 705490), '6a455d41-f0c5-49a5-b6ab-d8148bee5234', 'test-doc-integration-id', 3, "Policy Issued On\n14-Aug-2025\nNominee Age\n38 Years 8 Month\nPrevious Policy No.\n4177i/IBANK/354963416/00/000\nGSTIN No. (Customer)\n\nInvoice No.\ ... (933 characters truncated) ... .\nCSD112025527\ndated 30-Jan-2025\nPlan Name\nLoyalty bonus\n(`)\nSub-limit\nVoluntary\nDeductible (`)\nSI protector\nICICIBankLtd_10L\nacTo2CR_2A +", '[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ... (3542 characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 16, 39, 38, 705490), '0d173cae-4969-41d5-b5f6-59412f247576', 'test-doc-integration-id', 4, '2K\n500000\nNone\n0.00\n3,00,000.00\n23AAACI7904G\n1ZV\n997133\nGENERAL\nINSURANCE\nSERVICES\nWe hereby declare that though our aggregate turnover in ... (760 characters truncated) ... ink Road, Malad (West),\nMumbai - 400 064.\nICICI Lombard House, 414 Veer\nSavarkar Marg, Near Siddhi\nVinayak Temple, Prabhadevi,\nMumbai - 400 025.', '[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ... (3542 characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 16, 39, 38, 705490), '6dca0b8c-7124-4e5d-a7a8-2ec15b1ef438', 'test-doc-integration-id', 5, 'Alternate No.: +918655 222 666 (chargeable)\nEmail: customersupport@icicilombard.com\nWebsite: www.icicilombard.com\n1 / 10\nDigitally signed by DS ICICI\nLOMBARD GENERAL\nINSURANCE CO LTD 1\nDate: 2026.08.03 17:58:27\nIST\nSignature Not Verified', '[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ... (3542 characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 16, 39, 38, 705490), 'f14ede8e-9443-4a54-a976-1801def6e605', 'test-doc-integration-id', 6, "Alternate No.: +918655 222 666 (chargeable)\nEmail: customersupport@icicilombard.com\nWebsite: www.icicilombard.com\n1 / 10\nDigitally signed by DS I ... (970 characters truncated) ... by beneficiary or anyone acting on beneficiary's behalf to obtain insurance benefit. Please note that any claims arising out of pre-existing illness/", '[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ... (3542 characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 16, 39, 38, 705490), '8d2df21d-715f-403d-bc97-c524877fe42e' ... 194 parameters truncated ... datetime.datetime(2026, 8, 7, 16, 39, 38, 705490), '32663979-81bc-46c2-a4f3-4566faf4f400', 'test-doc-integration-id', 35, "Email: customersupport@icicilombard.com\nWebsite: www.icicilombard.com\n8 / 10\n\nò Notwithstanding anything contained herein or otherwise, no refund ... (268 characters truncated) ... by \nthe Insured Person, by giving 7 days' written notice. There would be no refund of \npremium on cancellation on the grounds of established fraud.", '[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ... (3542 characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 16, 39, 38, 705490), '84beacdb-6add-4f51-8a32-1de304938d94', 'test-doc-integration-id', 36, "The Company may cancel the Policy at any time on grounds of established fraud by \nthe Insured Person, by giving 7 days' written notice. There would  ... (945 characters truncated) ... tled to transfer the credits gained to the extent of the sum\ninsured and\nthe benefits available in the previous policy, subject to the underwriting", '[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ... (3542 characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 16, 39, 38, 705490), 'd7cd8ef1-da5c-4d9e-b2d1-f0a804d0153a', 'test-doc-integration-id', 37, 'policy of the Company\nc. The company shall decide and communicate on the proposal upon receipt of\ninformation from Existing insurer within prescrib ... (690 characters truncated) ... nhanced portion\nof the sum insured.\nf.ii.8 Specific terms and\nclauses\nMoratorium Period:  After completion of sixty continuous months of coverage', '[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ... (3542 characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 16, 39, 38, 705490), '72b6f35f-08db-44fd-90b5-9aa025fc095c', 'test-doc-integration-id', 38, '(including portability and migration) in health insurance policy, no policy and claim shall\nbe contestable by the insurer on grounds of non-disclosu ... (708 characters truncated) ... e Building No.: 16, 601 / 602,\n6th Floor, New Link Road, Malad (West),\nMumbai - 400 064.\nICICI Lombard House, 414 Veer\nSavarkar Marg, Near Siddhi', '[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ... (3542 characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 16, 39, 38, 705490), 'bc4861c9-a687-4370-afcb-92a63392b7ee', 'test-doc-integration-id', 39, 'Vinayak Temple, Prabhadevi,\nMumbai - 400 025.\nAlternate No.: +918655 222 666 (chargeable)\nEmail: customersupport@icicilombard.com\nWebsite: www.icicilombard.com\n9 / 10', '[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ... (3542 characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 16, 39, 38, 705490), 'bb970a3d-c81e-420c-871f-19d16ccc25fd', 'test-doc-integration-id', 40, 'Vinayak Temple, Prabhadevi,\nMumbai - 400 025.\nAlternate No.: +918655 222 666 (chargeable)\nEmail: customersupport@icicilombard.com\nWebsite: www.ic ... (832 characters truncated) ... te: __________________\nNOTE: In case of any conflict, the terms and conditions mentioned in the policy document shall prevail. Insurer shall provide', '[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ... (3542 characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 16, 39, 38, 705490), '3d0d7cfa-b16b-4e8a-b1bb-eb37fa360e9f', 'test-doc-integration-id', 41, 'web-link where the product related documents including the Customer Information sheet are available on the website of the\ninsurer.\n109/20150914/284 ... (441 characters truncated) ... evi,\nMumbai - 400 025.\nAlternate No.: +918655 222 666 (chargeable)\nEmail: customersupport@icicilombard.com\nWebsite: www.icicilombard.com\n10 / 10', '[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ... (3542 characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 16, 39, 38, 705490))
+2026-08-07 22:09:38,718 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-08-07 22:09:38.719 | ERROR    | __main__:main:77 - FAIL: (sqlalchemy.dialects.postgresql.asyncpg.IntegrityError) 
+<class 'asyncpg.exceptions.ForeignKeyViolationError'>: insert or update on table "document_chunks" violates foreign 
+key constraint "document_chunks_document_id_fkey"
+DETAIL:  Key (document_id)=(test-doc-integration-id) is not present in table "documents".
+[SQL: INSERT INTO document_chunks (id, document_id, chunk_index, text_content, embedding, embedding_vector, 
+created_at) VALUES ($1::VARCHAR, $2::VARCHAR, $3::INTEGER, $4::VARCHAR, $5::VARCHAR, $6, $7::TIMESTAMP WITHOUT TIME 
+ZONE), ($8::VARCHAR, $9::VARCHAR ... 4617 characters truncated ... $289::VARCHAR, $290::INTEGER, $291::VARCHAR, 
+$292::VARCHAR, $293, $294::TIMESTAMP WITHOUT TIME ZONE)]
+[parameters: ('9d4ff303-17b1-436c-a4d8-c41d36035ce9', 'test-doc-integration-id', 0, '(a)  Policy Schedule (Policy Certi
+ficate)\nPOLICY\n5\n5\n4\n4\nICIHLGP25049V042425\nhttps://www.icicilombard.com/docs/default-source/de\nPREAMBLE\nye 
+... (715 characters truncated) ... proof\nto the satisfaction of the Company of the compensation having become payable 
+as set out in Part I of Policy to the title of the said person or', '[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ... (3542 
+characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 16, 39, 38, 705490), 
+'43b833bb-e537-4ad8-9a8a-3c0839046fdf', 'test-doc-integration-id', 1, 'persons claiming payment or upon the happening 
+of an event upon which one or more benefits become payable under this Policy, the Sum\nInsured/appropr ... (383 
+characters truncated) ... ntained or otherwise expressed in the said policy, but not exceeding the sum insured as 
+specified forming Part\nI of the schedule to the said policy.', '[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ... (3542 
+characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 16, 39, 38, 705490), 
+'df76e8d3-4e68-43da-92a1-07be21915337', 'test-doc-integration-id', 2, 'Proposer Name\nRAKESH SURESH JADHAV\nProduct 
+name\nHealth Shield 360\nAddress\nE-408 4TH FLOOR CASAGREEN TALAWALI\nCHANDA NEAR LAURELS SCHOOL,\nINDOR ... (440 
+characters truncated) ... pointee Name\n\nPolicy Issued On\n14-Aug-2025\nNominee Age\n38 Years 8 Month\nPrevious 
+Policy No.\n4177i/IBANK/354963416/00/000\nGSTIN No. (Customer)', '[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ... (3542 
+characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 16, 39, 38, 705490), 
+'6a455d41-f0c5-49a5-b6ab-d8148bee5234', 'test-doc-integration-id', 3, "Policy Issued On\n14-Aug-2025\nNominee Age\n38 
+Years 8 Month\nPrevious Policy No.\n4177i/IBANK/354963416/00/000\nGSTIN No. (Customer)\n\nInvoice No.\ ... (933 
+characters truncated) ... .\nCSD112025527\ndated 30-Jan-2025\nPlan Name\nLoyalty 
+bonus\n(`)\nSub-limit\nVoluntary\nDeductible (`)\nSI protector\nICICIBankLtd_10L\nacTo2CR_2A +", '[0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0 ... (3542 characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 
+8, 7, 16, 39, 38, 705490), '0d173cae-4969-41d5-b5f6-59412f247576', 'test-doc-integration-id', 4, 
+'2K\n500000\nNone\n0.00\n3,00,000.00\n23AAACI7904G\n1ZV\n997133\nGENERAL\nINSURANCE\nSERVICES\nWe hereby declare that 
+though our aggregate turnover in ... (760 characters truncated) ... ink Road, Malad (West),\nMumbai - 400 064.\nICICI 
+Lombard House, 414 Veer\nSavarkar Marg, Near Siddhi\nVinayak Temple, Prabhadevi,\nMumbai - 400 025.', '[0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0 ... (3542 characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, 
+datetime.datetime(2026, 8, 7, 16, 39, 38, 705490), '6dca0b8c-7124-4e5d-a7a8-2ec15b1ef438', 'test-doc-integration-id', 
+5, 'Alternate No.: +918655 222 666 (chargeable)\nEmail: customersupport@icicilombard.com\nWebsite: 
+www.icicilombard.com\n1 / 10\nDigitally signed by DS ICICI\nLOMBARD GENERAL\nINSURANCE CO LTD 1\nDate: 2026.08.03 
+17:58:27\nIST\nSignature Not Verified', '[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ... (3542 characters truncated) ... 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 16, 39, 38, 705490), 
+'f14ede8e-9443-4a54-a976-1801def6e605', 'test-doc-integration-id', 6, "Alternate No.: +918655 222 666 
+(chargeable)\nEmail: customersupport@icicilombard.com\nWebsite: www.icicilombard.com\n1 / 10\nDigitally signed by DS I 
+... (970 characters truncated) ... by beneficiary or anyone acting on beneficiary's behalf to obtain insurance 
+benefit. Please note that any claims arising out of pre-existing illness/", '[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ... (3542 
+characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 16, 39, 38, 705490), 
+'8d2df21d-715f-403d-bc97-c524877fe42e' ... 194 parameters truncated ... datetime.datetime(2026, 8, 7, 16, 39, 38, 
+705490), '32663979-81bc-46c2-a4f3-4566faf4f400', 'test-doc-integration-id', 35, "Email: 
+customersupport@icicilombard.com\nWebsite: www.icicilombard.com\n8 / 10\n\nò Notwithstanding anything contained herein 
+or otherwise, no refund ... (268 characters truncated) ... by \nthe Insured Person, by giving 7 days' written notice. 
+There would be no refund of \npremium on cancellation on the grounds of established fraud.", '[0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0 ... (3542 characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 
+8, 7, 16, 39, 38, 705490), '84beacdb-6add-4f51-8a32-1de304938d94', 'test-doc-integration-id', 36, "The Company may 
+cancel the Policy at any time on grounds of established fraud by \nthe Insured Person, by giving 7 days' written 
+notice. There would  ... (945 characters truncated) ... tled to transfer the credits gained to the extent of the 
+sum\ninsured and\nthe benefits available in the previous policy, subject to the underwriting", '[0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0 ... (3542 characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 
+8, 7, 16, 39, 38, 705490), 'd7cd8ef1-da5c-4d9e-b2d1-f0a804d0153a', 'test-doc-integration-id', 37, 'policy of the 
+Company\nc. The company shall decide and communicate on the proposal upon receipt of\ninformation from Existing 
+insurer within prescrib ... (690 characters truncated) ... nhanced portion\nof the sum insured.\nf.ii.8 Specific terms 
+and\nclauses\nMoratorium Period:  After completion of sixty continuous months of coverage', '[0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0 ... (3542 characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 
+16, 39, 38, 705490), '72b6f35f-08db-44fd-90b5-9aa025fc095c', 'test-doc-integration-id', 38, '(including portability 
+and migration) in health insurance policy, no policy and claim shall\nbe contestable by the insurer on grounds of 
+non-disclosu ... (708 characters truncated) ... e Building No.: 16, 601 / 602,\n6th Floor, New Link Road, Malad 
+(West),\nMumbai - 400 064.\nICICI Lombard House, 414 Veer\nSavarkar Marg, Near Siddhi', '[0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0 ... (3542 characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 
+16, 39, 38, 705490), 'bc4861c9-a687-4370-afcb-92a63392b7ee', 'test-doc-integration-id', 39, 'Vinayak Temple, 
+Prabhadevi,\nMumbai - 400 025.\nAlternate No.: +918655 222 666 (chargeable)\nEmail: 
+customersupport@icicilombard.com\nWebsite: www.icicilombard.com\n9 / 10', '[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ... (3542 
+characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 16, 39, 38, 705490), 
+'bb970a3d-c81e-420c-871f-19d16ccc25fd', 'test-doc-integration-id', 40, 'Vinayak Temple, Prabhadevi,\nMumbai - 400 
+025.\nAlternate No.: +918655 222 666 (chargeable)\nEmail: customersupport@icicilombard.com\nWebsite: www.ic ... (832 
+characters truncated) ... te: __________________\nNOTE: In case of any conflict, the terms and conditions mentioned in 
+the policy document shall prevail. Insurer shall provide', '[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ... (3542 characters 
+truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 16, 39, 38, 705490), 
+'3d0d7cfa-b16b-4e8a-b1bb-eb37fa360e9f', 'test-doc-integration-id', 41, 'web-link where the product related documents 
+including the Customer Information sheet are available on the website of the\ninsurer.\n109/20150914/284 ... (441 
+characters truncated) ... evi,\nMumbai - 400 025.\nAlternate No.: +918655 222 666 (chargeable)\nEmail: 
+customersupport@icicilombard.com\nWebsite: www.icicilombard.com\n10 / 10', '[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ... (3542 
+characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 16, 39, 38, 705490))]
+(Background on this error at: https://sqlalche.me/e/20/gkpj)
+Traceback (most recent call last):
+  File "D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\dialects\postgres
+ql\asyncpg.py", line 538, in _prepare_and_execute
+    self._rows = await prepared_stmt.fetch(*parameters)
+  File "D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\asyncpg\prepared_stmt.py", 
+line 177, in fetch
+    data = await self.__bind_execute(args, 0, timeout)
+  File "D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\asyncpg\prepared_stmt.py", 
+line 268, in __bind_execute
+    data, status, _ = await self.__do_execute(
+  File "D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\asyncpg\prepared_stmt.py", 
+line 257, in __do_execute
+    return await executor(protocol)
+  File "asyncpg/protocol/protocol.pyx", line 205, in bind_execute
+asyncpg.exceptions.ForeignKeyViolationError: insert or update on table "document_chunks" violates foreign key 
+constraint "document_chunks_document_id_fkey"
+DETAIL:  Key (document_id)=(test-doc-integration-id) is not present in table "documents".
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", 
+line 2116, in _exec_insertmany_context
+    dialect.do_execute(
+  File 
+"D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\engine\default.py", 
+line 924, in do_execute
+    cursor.execute(statement, parameters)
+  File "D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\dialects\postgres
+ql\asyncpg.py", line 572, in execute
+    self._adapt_connection.await_(
+  File "D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\util\_concurrency
+_py3k.py", line 131, in await_only
+    return current.driver.switch(awaitable)  # type: ignore[no-any-return]
+  File "D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\util\_concurrency
+_py3k.py", line 196, in greenlet_spawn
+    value = await result
+  File "D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\dialects\postgres
+ql\asyncpg.py", line 550, in _prepare_and_execute
+    self._handle_exception(error)
+  File "D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\dialects\postgres
+ql\asyncpg.py", line 501, in _handle_exception
+    self._adapt_connection._handle_exception(error)
+  File "D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\dialects\postgres
+ql\asyncpg.py", line 789, in _handle_exception
+    raise translated_error from error
+sqlalchemy.dialects.postgresql.asyncpg.AsyncAdapt_asyncpg_dbapi.IntegrityError: <class 
+'asyncpg.exceptions.ForeignKeyViolationError'>: insert or update on table "document_chunks" violates foreign key 
+constraint "document_chunks_document_id_fkey"
+DETAIL:  Key (document_id)=(test-doc-integration-id) is not present in table "documents".
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File 
+"C:\Users\krush\.gemini\antigravity-ide\brain\a978a549-4f61-4195-93a9-0a44908b1b51\scratch\verify_integration.py", 
+line 64, in main
+    await generate_document_chunks(test_doc_id, text, db)
+  File "d:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\app\services\rag_service.py", line 60, in 
+generate_document_chunks
+    await db.flush()
+  File "D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\ext\asyncio\sessi
+on.py", line 800, in flush
+    await greenlet_spawn(self.sync_session.flush, objects=objects)
+  File "D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\util\_concurrency
+_py3k.py", line 203, in greenlet_spawn
+    result = context.switch(value)
+  File "D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\orm\session.py", 
+line 4341, in flush
+    self._flush(objects)
+  File "D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\orm\session.py", 
+line 4476, in _flush
+    with util.safe_reraise():
+  File 
+"D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\util\langhelpers.py", 
+line 146, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\orm\session.py", 
+line 4437, in _flush
+    flush_context.execute()
+  File 
+"D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\orm\unitofwork.py", 
+line 466, in execute
+    rec.execute(self)
+  File 
+"D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\orm\unitofwork.py", 
+line 642, in execute
+    util.preloaded.orm_persistence.save_obj(
+  File 
+"D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\orm\persistence.py", 
+line 93, in save_obj
+    _emit_insert_statements(
+  File 
+"D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\orm\persistence.py", 
+line 1143, in _emit_insert_statements
+    result = connection.execute(
+  File "D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", 
+line 1418, in execute
+    return meth(
+  File 
+"D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\sql\elements.py", line 
+515, in _execute_on_connection
+    return connection._execute_clauseelement(
+  File "D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", 
+line 1640, in _execute_clauseelement
+    ret = self._execute_context(
+  File "D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", 
+line 1844, in _execute_context
+    return self._exec_insertmany_context(dialect, context)
+  File "D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", 
+line 2124, in _exec_insertmany_context
+    self._handle_dbapi_exception(
+  File "D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", 
+line 2353, in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", 
+line 2116, in _exec_insertmany_context
+    dialect.do_execute(
+  File 
+"D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\engine\default.py", 
+line 924, in do_execute
+    cursor.execute(statement, parameters)
+  File "D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\dialects\postgres
+ql\asyncpg.py", line 572, in execute
+    self._adapt_connection.await_(
+  File "D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\util\_concurrency
+_py3k.py", line 131, in await_only
+    return current.driver.switch(awaitable)  # type: ignore[no-any-return]
+  File "D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\util\_concurrency
+_py3k.py", line 196, in greenlet_spawn
+    value = await result
+  File "D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\dialects\postgres
+ql\asyncpg.py", line 550, in _prepare_and_execute
+    self._handle_exception(error)
+  File "D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\dialects\postgres
+ql\asyncpg.py", line 501, in _handle_exception
+    self._adapt_connection._handle_exception(error)
+  File "D:\Imp\VScode\Projects\HealthCare\AI-Healthcare-App\backend\venv\lib\site-packages\sqlalchemy\dialects\postgres
+ql\asyncpg.py", line 789, in _handle_exception
+    raise translated_error from error
+sqlalchemy.exc.IntegrityError: (sqlalchemy.dialects.postgresql.asyncpg.IntegrityError) <class 
+'asyncpg.exceptions.ForeignKeyViolationError'>: insert or update on table "document_chunks" violates foreign key 
+constraint "document_chunks_document_id_fkey"
+DETAIL:  Key (document_id)=(test-doc-integration-id) is not present in table "documents".
+[SQL: INSERT INTO document_chunks (id, document_id, chunk_index, text_content, embedding, embedding_vector, 
+created_at) VALUES ($1::VARCHAR, $2::VARCHAR, $3::INTEGER, $4::VARCHAR, $5::VARCHAR, $6, $7::TIMESTAMP WITHOUT TIME 
+ZONE), ($8::VARCHAR, $9::VARCHAR ... 4617 characters truncated ... $289::VARCHAR, $290::INTEGER, $291::VARCHAR, 
+$292::VARCHAR, $293, $294::TIMESTAMP WITHOUT TIME ZONE)]
+[parameters: ('9d4ff303-17b1-436c-a4d8-c41d36035ce9', 'test-doc-integration-id', 0, '(a)  Policy Schedule (Policy Certi
+ficate)\nPOLICY\n5\n5\n4\n4\nICIHLGP25049V042425\nhttps://www.icicilombard.com/docs/default-source/de\nPREAMBLE\nye 
+... (715 characters truncated) ... proof\nto the satisfaction of the Company of the compensation having become payable 
+as set out in Part I of Policy to the title of the said person or', '[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ... (3542 
+characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 16, 39, 38, 705490), 
+'43b833bb-e537-4ad8-9a8a-3c0839046fdf', 'test-doc-integration-id', 1, 'persons claiming payment or upon the happening 
+of an event upon which one or more benefits become payable under this Policy, the Sum\nInsured/appropr ... (383 
+characters truncated) ... ntained or otherwise expressed in the said policy, but not exceeding the sum insured as 
+specified forming Part\nI of the schedule to the said policy.', '[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ... (3542 
+characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 16, 39, 38, 705490), 
+'df76e8d3-4e68-43da-92a1-07be21915337', 'test-doc-integration-id', 2, 'Proposer Name\nRAKESH SURESH JADHAV\nProduct 
+name\nHealth Shield 360\nAddress\nE-408 4TH FLOOR CASAGREEN TALAWALI\nCHANDA NEAR LAURELS SCHOOL,\nINDOR ... (440 
+characters truncated) ... pointee Name\n\nPolicy Issued On\n14-Aug-2025\nNominee Age\n38 Years 8 Month\nPrevious 
+Policy No.\n4177i/IBANK/354963416/00/000\nGSTIN No. (Customer)', '[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ... (3542 
+characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 16, 39, 38, 705490), 
+'6a455d41-f0c5-49a5-b6ab-d8148bee5234', 'test-doc-integration-id', 3, "Policy Issued On\n14-Aug-2025\nNominee Age\n38 
+Years 8 Month\nPrevious Policy No.\n4177i/IBANK/354963416/00/000\nGSTIN No. (Customer)\n\nInvoice No.\ ... (933 
+characters truncated) ... .\nCSD112025527\ndated 30-Jan-2025\nPlan Name\nLoyalty 
+bonus\n(`)\nSub-limit\nVoluntary\nDeductible (`)\nSI protector\nICICIBankLtd_10L\nacTo2CR_2A +", '[0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0 ... (3542 characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 
+8, 7, 16, 39, 38, 705490), '0d173cae-4969-41d5-b5f6-59412f247576', 'test-doc-integration-id', 4, 
+'2K\n500000\nNone\n0.00\n3,00,000.00\n23AAACI7904G\n1ZV\n997133\nGENERAL\nINSURANCE\nSERVICES\nWe hereby declare that 
+though our aggregate turnover in ... (760 characters truncated) ... ink Road, Malad (West),\nMumbai - 400 064.\nICICI 
+Lombard House, 414 Veer\nSavarkar Marg, Near Siddhi\nVinayak Temple, Prabhadevi,\nMumbai - 400 025.', '[0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0 ... (3542 characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, 
+datetime.datetime(2026, 8, 7, 16, 39, 38, 705490), '6dca0b8c-7124-4e5d-a7a8-2ec15b1ef438', 'test-doc-integration-id', 
+5, 'Alternate No.: +918655 222 666 (chargeable)\nEmail: customersupport@icicilombard.com\nWebsite: 
+www.icicilombard.com\n1 / 10\nDigitally signed by DS ICICI\nLOMBARD GENERAL\nINSURANCE CO LTD 1\nDate: 2026.08.03 
+17:58:27\nIST\nSignature Not Verified', '[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ... (3542 characters truncated) ... 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 16, 39, 38, 705490), 
+'f14ede8e-9443-4a54-a976-1801def6e605', 'test-doc-integration-id', 6, "Alternate No.: +918655 222 666 
+(chargeable)\nEmail: customersupport@icicilombard.com\nWebsite: www.icicilombard.com\n1 / 10\nDigitally signed by DS I 
+... (970 characters truncated) ... by beneficiary or anyone acting on beneficiary's behalf to obtain insurance 
+benefit. Please note that any claims arising out of pre-existing illness/", '[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ... (3542 
+characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 16, 39, 38, 705490), 
+'8d2df21d-715f-403d-bc97-c524877fe42e' ... 194 parameters truncated ... datetime.datetime(2026, 8, 7, 16, 39, 38, 
+705490), '32663979-81bc-46c2-a4f3-4566faf4f400', 'test-doc-integration-id', 35, "Email: 
+customersupport@icicilombard.com\nWebsite: www.icicilombard.com\n8 / 10\n\nò Notwithstanding anything contained herein 
+or otherwise, no refund ... (268 characters truncated) ... by \nthe Insured Person, by giving 7 days' written notice. 
+There would be no refund of \npremium on cancellation on the grounds of established fraud.", '[0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0 ... (3542 characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 
+8, 7, 16, 39, 38, 705490), '84beacdb-6add-4f51-8a32-1de304938d94', 'test-doc-integration-id', 36, "The Company may 
+cancel the Policy at any time on grounds of established fraud by \nthe Insured Person, by giving 7 days' written 
+notice. There would  ... (945 characters truncated) ... tled to transfer the credits gained to the extent of the 
+sum\ninsured and\nthe benefits available in the previous policy, subject to the underwriting", '[0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0 ... (3542 characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 
+8, 7, 16, 39, 38, 705490), 'd7cd8ef1-da5c-4d9e-b2d1-f0a804d0153a', 'test-doc-integration-id', 37, 'policy of the 
+Company\nc. The company shall decide and communicate on the proposal upon receipt of\ninformation from Existing 
+insurer within prescrib ... (690 characters truncated) ... nhanced portion\nof the sum insured.\nf.ii.8 Specific terms 
+and\nclauses\nMoratorium Period:  After completion of sixty continuous months of coverage', '[0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0 ... (3542 characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 
+16, 39, 38, 705490), '72b6f35f-08db-44fd-90b5-9aa025fc095c', 'test-doc-integration-id', 38, '(including portability 
+and migration) in health insurance policy, no policy and claim shall\nbe contestable by the insurer on grounds of 
+non-disclosu ... (708 characters truncated) ... e Building No.: 16, 601 / 602,\n6th Floor, New Link Road, Malad 
+(West),\nMumbai - 400 064.\nICICI Lombard House, 414 Veer\nSavarkar Marg, Near Siddhi', '[0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0 ... (3542 characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 
+16, 39, 38, 705490), 'bc4861c9-a687-4370-afcb-92a63392b7ee', 'test-doc-integration-id', 39, 'Vinayak Temple, 
+Prabhadevi,\nMumbai - 400 025.\nAlternate No.: +918655 222 666 (chargeable)\nEmail: 
+customersupport@icicilombard.com\nWebsite: www.icicilombard.com\n9 / 10', '[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ... (3542 
+characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 16, 39, 38, 705490), 
+'bb970a3d-c81e-420c-871f-19d16ccc25fd', 'test-doc-integration-id', 40, 'Vinayak Temple, Prabhadevi,\nMumbai - 400 
+025.\nAlternate No.: +918655 222 666 (chargeable)\nEmail: customersupport@icicilombard.com\nWebsite: www.ic ... (832 
+characters truncated) ... te: __________________\nNOTE: In case of any conflict, the terms and conditions mentioned in 
+the policy document shall prevail. Insurer shall provide', '[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ... (3542 characters 
+truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 16, 39, 38, 705490), 
+'3d0d7cfa-b16b-4e8a-b1bb-eb37fa360e9f', 'test-doc-integration-id', 41, 'web-link where the product related documents 
+including the Customer Information sheet are available on the website of the\ninsurer.\n109/20150914/284 ... (441 
+characters truncated) ... evi,\nMumbai - 400 025.\nAlternate No.: +918655 222 666 (chargeable)\nEmail: 
+customersupport@icicilombard.com\nWebsite: www.icicilombard.com\n10 / 10', '[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ... (3542 
+characters truncated) ... 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]', None, datetime.datetime(2026, 8, 7, 16, 39, 38, 705490))]
+(Background on this error at: https://sqlalche.me/e/20/gkpj)

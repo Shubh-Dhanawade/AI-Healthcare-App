@@ -1436,14 +1436,13 @@ export default function DocumentDetailPage() {
   // Trigger stream when doc text is ready but no summary yet (placed after query declaration)
   useEffect(() => {
     if (!doc || !docId) return;
-    const readyStatuses = ['text_extracted', 'completed', 'summarized'];
-    if (readyStatuses.includes(doc.status) && !doc.summary && !hasStreamedRef.current) {
-      startSummaryStream(docId);
-    } else if (doc.summary && isStreaming) {
+    // We disable auto-streaming on load to let the fast background summarizer finish
+    // without Ollama concurrency conflicts. Manual streaming remains available via the Re-summarize button.
+    if (doc.summary && isStreaming) {
       setIsStreaming(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc?.status, doc?.summary, docId, startSummaryStream, isStreaming]);
+  }, [doc?.summary, isStreaming]);
 
   // Automatically translate page on initial load if non-English language is set in localStorage
   useEffect(() => {

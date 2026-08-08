@@ -14,7 +14,7 @@ services:
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-healthcare_user} -d $${POSTGRES_DB:-healthcare_ai}"]
+      test: [ "CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-healthcare_user} -d $${POSTGRES_DB:-healthcare_ai}" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -33,24 +33,15 @@ services:
       SECRET_KEY: ${SECRET_KEY:-your-super-secret-key-change-in-production}
       ALGORITHM: HS256
       ACCESS_TOKEN_EXPIRE_MINUTES: 60
-      OLLAMA_BASE_URL: http://ollama:11434
-      # Q4_K_M quantization: ~2.5GB VRAM vs Q8_0's ~4GB
-      # This allows ALL 35 transformer layers to fit on RTX 3050 (3.2GB free VRAM)
-      # resulting in 40-50 tok/s GPU speed vs 8 tok/s CPU-spill speed.
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
       OLLAMA_MODEL: gemma3:4b-it-q4_K_M
-      # 999 = force ALL layers to GPU. Ollama auto-clamps to available VRAM.
-      OLLAMA_NUM_GPU: 999
+      # -1 = Ollama auto-fit: loads as many layers as possible into VRAM without GPU OOM
+      OLLAMA_NUM_GPU: -1
       OLLAMA_KEEP_ALIVE: -1
-      # Use only 4 CPU threads (reduces RAM pressure at 95% usage)
-      OLLAMA_NUM_THREAD: 4
       QDRANT_HOST: qdrant
       UPLOAD_DIR: /app/uploads
       MAX_FILE_SIZE_MB: 50
-      SMTP_SERVER: '${SMTP_SERVER:-smtp.gmail.com}'
-      SMTP_PORT: '${SMTP_PORT:-587}'
-      SMTP_USER: '${SMTP_USER:-krushnakharat.official@gmail.com}'
-      SMTP_PASSWORD: '${SMTP_PASSWORD:-pbcgjleqmvcjsoho}'
-      ALLOWED_ORIGINS: '${ALLOWED_ORIGINS:-["http://localhost:3000","http://localhost:3001","http://localhost","http://127.0.0.1:3000","http://127.0.0.1:3001"]}'
+      ALLOWED_ORIGINS: '${ALLOWED_ORIGINS:-["http://localhost:3000","http://localhost","http://127.0.0.1:3000"]}'
     volumes:
       - upload_data:/app/uploads
       - ./data_science_analysis:/app/data_science_analysis
@@ -61,51 +52,31 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
-      ollama:
-        condition: service_started
     networks:
       - healthcare_network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
-  # Ollama AI Runtime
-  ollama:
-    image: ollama/ollama:latest
-    container_name: healthcare_ollama
-    restart: unless-stopped
-    environment:
-      # Force Ollama to use ONLY the NVIDIA RTX 3050 (device 0), not AMD iGPU
-      NVIDIA_VISIBLE_DEVICES: "0"
-      CUDA_VISIBLE_DEVICES: "0"
-      # Flash Attention: reduces VRAM used by attention mechanism by ~30%
-      # This frees up space to fit more model layers on GPU
-      OLLAMA_FLASH_ATTENTION: "1"
-      # Store KV cache in q8_0 format instead of f16 — halves KV cache VRAM usage
-      # f16 KV cache at num_ctx=1024: ~82 MiB → q8_0: ~41 MiB, freeing ~41 MiB extra
-      OLLAMA_KV_CACHE_TYPE: "q8_0"
-      # Keep the model loaded indefinitely (no idle eviction)
-      OLLAMA_KEEP_ALIVE: "-1"
-      # Allow only 1 request at a time to avoid context-switching VRAM overhead
-      OLLAMA_NUM_PARALLEL: "1"
-      # Max queue depth — prevents pile-up during long inferences
-      OLLAMA_MAX_QUEUE: "2"
-    volumes:
-      - ollama_data:/root/.ollama
-    ports:
-      - "11434:11434"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:11434/api/tags || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    networks:
-      - healthcare_network
+  # Ollama AI Runtime (Disabled inside Docker to use Host's GPU-accelerated Ollama)
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   container_name: healthcare_ollama
+  #   restart: unless-stopped
+  #   volumes:
+  #     - ollama_data:/root/.ollama
+  #   ports:
+  #     - "11434:11434"
+  #   # deploy:
+  #   #   resources:
+  #   #     reservations:
+  #   #       devices:
+  #   #         - driver: nvidia
+  #   #           count: all
+  #   #           capabilities: [gpu]
+  #   # Increase shared memory to prevent OOM kills during concurrent LLM inference
+  #   shm_size: '2gb'
+  #   networks:
+  #     - healthcare_network
 
   # Qdrant Vector Database
   qdrant:

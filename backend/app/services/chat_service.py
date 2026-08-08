@@ -51,6 +51,11 @@ def _text_search_fallback(query: str, policies: List[Dict[str, Any]], top_k: int
         "ayush": ["ayurveda", "homeopathy", "unani", "siddha"],
         "ambulance": ["air ambulance", "transport", "emergency travel"],
         "cataract": ["eye", "lens", "vision"],
+        "member": ["insured person", "covered person", "family member", "beneficiary",
+                    "dependent", "self", "spouse", "son", "daughter", "insured persons",
+                    "members covered", "persons covered", "member details", "insured members"],
+        "who is covered": ["insured person", "covered person", "insured members", "member list",
+                            "family members", "policy members", "persons insured"],
     }
     expanded_words = set(re.findall(r'\w+', query_lower))
     for base_term, syns in SYNONYMS.items():
@@ -127,9 +132,12 @@ def classify_question(query: str) -> str:
     """
     query_lower = query.lower()
     factual_keywords = [
-        "policy number", "premium", "due date", "expiry", "renewal date", 
-        "deductible", "co-pay", "copay", "co-payment", "holder", 
-        "network", "company", "issuer", "what is my number", "policy end date"
+        "policy number", "premium", "due date", "expiry", "renewal date",
+        "deductible", "co-pay", "copay", "co-payment", "holder",
+        "network", "company", "issuer", "what is my number", "policy end date",
+        "member", "members", "who is covered", "family member", "insured person",
+        "covered person", "who are covered", "list of members", "policy members",
+        "spouse", "son", "daughter", "dependent", "beneficiary",
     ]
     complex_keywords = [
         "summarize", "summary", "explain my policy", "will diabetes", "covered", 
@@ -173,6 +181,9 @@ async def fetch_structured_policy_data(db: AsyncSession, policy_ids: List[str]) 
 
         sum_obj = doc.summary
         if sum_obj:
+            # Always inject full summary_text first — it contains member names, policy details, exclusions
+            if sum_obj.summary_text:
+                block.append(f"\n--- Full Policy Summary ---\n{sum_obj.summary_text}\n---")
             if sum_obj.coverage_summary:
                 block.append(f"Coverage Summary: {sum_obj.coverage_summary}")
             if sum_obj.exclusions_summary:
@@ -260,9 +271,9 @@ async def run_chat_query(
         structured_context=structured_context
     )
     
-    # 6. Call LLM — using num_ctx=4096 (to prevent context truncation for complex health policies)
+    # 6. Call LLM — using num_ctx=8192 (to prevent context truncation for complex health policies)
     llm_start = time.time()
-    response = await call_ollama(prompt, num_predict=600 if is_comparison else 450, num_ctx=4096)
+    response = await call_ollama(prompt, num_predict=600 if is_comparison else 450, num_ctx=8192)
     llm_time = time.time() - llm_start
     
     total_time = time.time() - start_time
@@ -391,7 +402,7 @@ async def run_chat_query_stream_with_prompt(
 
     try:
         max_tokens = 700 if is_comparison else 500
-        async for token in call_ollama_stream(prompt, num_predict=max_tokens, num_ctx=4096):
+        async for token in call_ollama_stream(prompt, num_predict=max_tokens, num_ctx=8192):
             if first_token_time is None:
                 first_token_time = time.time() - start_time
                 logger.info(f"⚡ Time to first token: {first_token_time:.4f}s")
