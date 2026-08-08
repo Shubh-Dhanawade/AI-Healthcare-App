@@ -75,12 +75,13 @@ async def warmup_model(model: Optional[str] = None) -> None:
                 "num_ctx": 1024,
                 "temperature": 0,
                 "num_thread": settings.OLLAMA_NUM_THREAD,
-                "num_gpu": settings.OLLAMA_NUM_GPU,
                 # Pin model weights in RAM — prevents paging to disk under memory pressure
                 "use_mmap": True,
-                "use_mlock": True,
+                "use_mlock": False,
             },
         }
+        if settings.OLLAMA_NUM_GPU is not None:
+            payload["options"]["num_gpu"] = settings.OLLAMA_NUM_GPU
         await client.post("/api/generate", json=payload)
         logger.info("✅ Ollama model is now loaded and permanently resident in VRAM.")
     except Exception as e:
@@ -93,12 +94,12 @@ async def generate_embeddings_nomic(text: str) -> List[float]:
         "model": "nomic-embed-text",
         "prompt": text,
         "keep_alive": "1m",
-        "options": {
-            "num_gpu": settings.OLLAMA_NUM_GPU,
-        }
+        "options": {}
     }
     
     try:
+        if settings.OLLAMA_NUM_GPU is not None:
+            payload["options"]["num_gpu"] = settings.OLLAMA_NUM_GPU
         response = await client.post("/api/embeddings", json=payload)
         response.raise_for_status()
         embedding = response.json().get("embedding")
@@ -112,11 +113,11 @@ async def generate_embeddings_nomic(text: str) -> List[float]:
         "model": "nomic-embed-text",
         "input": text,
         "keep_alive": "1m",
-        "options": {
-            "num_gpu": settings.OLLAMA_NUM_GPU,
-        }
+        "options": {}
     }
     try:
+        if settings.OLLAMA_NUM_GPU is not None:
+            payload_embed["options"]["num_gpu"] = settings.OLLAMA_NUM_GPU
         response = await client.post("/api/embed", json=payload_embed)
         response.raise_for_status()
         embeddings = response.json().get("embeddings")
@@ -158,14 +159,15 @@ async def call_ollama(
             "top_k": 1,
             "top_p": 1.0,
             "num_thread": settings.OLLAMA_NUM_THREAD,
-            "num_gpu": settings.OLLAMA_NUM_GPU,
             # Pin weights in RAM — prevents paging to disk under 95% RAM pressure
             "use_mmap": True,
-            "use_mlock": True,
+            "use_mlock": False,
         },
     }
     
     logger.debug(f"Ollama Call: {model_name} (predict={num_predict}, ctx={num_ctx})")
+    if settings.OLLAMA_NUM_GPU is not None:
+        payload["options"]["num_gpu"] = settings.OLLAMA_NUM_GPU
     response = await client.post("/api/generate", json=payload)
     response.raise_for_status()
     return response.json().get("response", "").strip()
@@ -206,15 +208,16 @@ async def call_ollama_stream(
             "top_k": 1,
             "top_p": 1.0,
             "num_thread": settings.OLLAMA_NUM_THREAD,
-            "num_gpu": settings.OLLAMA_NUM_GPU,
             # Pin weights in RAM — prevents paging to disk under 95% RAM pressure
             "use_mmap": True,
-            "use_mlock": True,
+            "use_mlock": False,
         },
     }
     
     logger.debug(f"Ollama Stream Call: {model_name} (predict={num_predict}, ctx={num_ctx})")
     
+    if settings.OLLAMA_NUM_GPU is not None:
+        payload["options"]["num_gpu"] = settings.OLLAMA_NUM_GPU
     # Use build_request + send with stream=True for async token-by-token streaming
     req = client.build_request("POST", "/api/generate", json=payload)
     response = await client.send(req, stream=True)

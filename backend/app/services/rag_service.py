@@ -14,49 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.document import DocumentChunk
 
-async def generate_embeddings(text: str) -> List[float]:
-    """Generate 768-dimensional semantic vector embedding using nomic-embed-text from Ollama."""
-    url = f"{settings.OLLAMA_BASE_URL}/api/embeddings"
-    payload = {
-        "model": "nomic-embed-text",
-        "prompt": text
-    }
-    
-    # Stable connection on Windows (localhost -> 127.0.0.1)
-    if "localhost" in url:
-        url = url.replace("localhost", "127.0.0.1")
-        
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(url, json=payload)
-            response.raise_for_status()
-            embedding = response.json().get("embedding")
-            if embedding:
-                return embedding
-    except Exception as e:
-        logger.warning(f"Failed to generate vector embedding via Ollama nomic-embed-text /api/embeddings: {e}. Trying /api/embed fallback...")
-        
-    # Fallback to /api/embed
-    url_embed = f"{settings.OLLAMA_BASE_URL}/api/embed"
-    if "localhost" in url_embed:
-        url_embed = url_embed.replace("localhost", "127.0.0.1")
-    payload_embed = {
-        "model": "nomic-embed-text",
-        "input": text
-    }
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(url_embed, json=payload_embed)
-            response.raise_for_status()
-            embeddings = response.json().get("embeddings")
-            if embeddings and len(embeddings) > 0:
-                return embeddings[0]
-    except Exception as fallback_e:
-        logger.error(f"Fallback embeddings call also failed: {fallback_e}")
-        
-    # Return zero vector fallback
-    logger.warning("Ollama embeddings service offline. Returning zero vector fallback.")
-    return [0.0] * 768
+# generate_embeddings helper removed.
 
 
 async def generate_document_chunks(document_id: str, text_content: str, db: AsyncSession):
@@ -102,22 +60,22 @@ async def generate_document_chunks(document_id: str, text_content: str, db: Asyn
     await db.flush()
     db_time = time.time() - db_start
     
-    # 5. Build and save hybrid vector store indexes (FAISS, pgvector, and Qdrant)
-    faiss_start = time.time()
+    # 5. Index chunks in Qdrant vector store
+    qdrant_start = time.time()
     from app.models.document import Document
     doc_res = await db.execute(select(Document).where(Document.id == document_id))
     doc = doc_res.scalar_one_or_none()
     if doc:
         from app.services.vector_store import index_chunks_in_vector_stores
         await index_chunks_in_vector_stores(db, doc.user_id, document_id, db_chunks)
-    faiss_time = time.time() - faiss_start
+    qdrant_time = time.time() - qdrant_start
     
     total_time = time.time() - start_time
     logger.info(f"🏥 [PROFILER] Document Indexing Complete for {document_id}:")
     logger.info(f"  - Chunking Time:    {chunk_time:.4f}s ({len(chunks)} chunks)")
     logger.info(f"  - Embedding Time:   {embedding_time:.4f}s")
     logger.info(f"  - SQLite Save Time: {db_time:.4f}s")
-    logger.info(f"  - FAISS Build Time: {faiss_time:.4f}s")
+    logger.info(f"  - Qdrant Index Time: {qdrant_time:.4f}s")
     logger.info(f"  - Total Indexing:   {total_time:.4f}s")
 
 
@@ -484,7 +442,7 @@ async def query_rag_pipeline(document_id: str, document_text: str, query: str, d
     
     if doc:
         try:
-            # Try to load and search using FAISS
+            # Query Qdrant vector database
             from app.services.vector_store import search_vector_store
             policy_dummy = [{"id": document_id, "filename": doc.original_filename}]
             hits = await search_vector_store(db, query, policy_dummy, top_k=3)
@@ -494,25 +452,7 @@ async def query_rag_pipeline(document_id: str, document_text: str, query: str, d
             if retrieved:
                 context_relevance = sum(item[1] for item in retrieved) / len(retrieved)
         except Exception as e:
-            logger.warning(f"FAISS search failed in query_rag_pipeline: {e}. Falling back to SQLite/Cosine search.")
-            
-    # Cosine search fallback if FAISS didn't return hits
-    if not retrieved:
-        res = await db.execute(select(DocumentChunk).where(DocumentChunk.document_id == document_id))
-        db_chunks = res.scalars().all()
-        if db_chunks:
-            query_emb = await generate_embeddings(query)
-            chunks_with_scores = []
-            for chunk in db_chunks:
-                try:
-                    chunk_emb = json.loads(chunk.embedding)
-                    sim = cosine_similarity(query_emb, chunk_emb)
-                    chunks_with_scores.append((chunk.text_content, sim))
-                except Exception as parse_e:
-                    logger.error(f"Failed to parse embedding: {parse_e}")
-            chunks_with_scores.sort(key=lambda x: x[1], reverse=True)
-            retrieved = chunks_with_scores[:3]
-            context_relevance = sum(item[1] for item in retrieved) / len(retrieved) if retrieved else 0.0
+            logger.error(f"Qdrant search failed in query_rag_pipeline: {e}")
             
     retrieval_latency = time.time() - retrieval_start
     logger.info(f"⏱️ Retrieval complete in {retrieval_latency:.4f}s")

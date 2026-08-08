@@ -220,11 +220,9 @@ async def run_chat_query(
     top_k = 10 if is_comparison else 8
     
     retrieval_start = time.time()
-    vector_task = search_vector_store(db, search_query, policies, top_k=top_k)
-    structured_task = fetch_structured_policy_data(db, policy_ids)
     keyword_chunks = _text_search_fallback(search_query, policies, top_k=top_k)
-    
-    vector_chunks, structured_context = await asyncio.gather(vector_task, structured_task)
+    vector_chunks = await search_vector_store(db, search_query, policies, top_k=top_k)
+    structured_context = await fetch_structured_policy_data(db, policy_ids)
     
     # Merge & Deduplicate vector + keyword results
     seen_texts: set = set()
@@ -262,9 +260,9 @@ async def run_chat_query(
         structured_context=structured_context
     )
     
-    # 6. Call LLM — using num_ctx=2048 (safe for 4GB VRAM: model ~3443 MiB + KV ~272 MiB = ~3758 MiB total)
+    # 6. Call LLM — using num_ctx=4096 (to prevent context truncation for complex health policies)
     llm_start = time.time()
-    response = await call_ollama(prompt, num_predict=600 if is_comparison else 450, num_ctx=2048)
+    response = await call_ollama(prompt, num_predict=600 if is_comparison else 450, num_ctx=4096)
     llm_time = time.time() - llm_start
     
     total_time = time.time() - start_time
@@ -322,13 +320,17 @@ async def prepare_chat_rag_prompt(
         is_comparison = _is_comparison_query(search_query) and len(policies) > 1
         top_k = 10 if is_comparison else 8
 
-        vector_task = search_vector_store(db, search_query, policies, top_k=top_k)
-        structured_task = fetch_structured_policy_data(db, policy_ids)
         keyword_chunks = _text_search_fallback(search_query, policies, top_k=top_k)
-
-        results = await asyncio.gather(vector_task, structured_task, return_exceptions=True)
-        vector_chunks = results[0] if not isinstance(results[0], Exception) and results[0] else []
-        structured_context = results[1] if not isinstance(results[1], Exception) and results[1] else ""
+        try:
+            vector_chunks = await search_vector_store(db, search_query, policies, top_k=top_k)
+        except Exception as ve:
+            logger.error(f"Vector search failed: {ve}")
+            vector_chunks = []
+        try:
+            structured_context = await fetch_structured_policy_data(db, policy_ids)
+        except Exception as se:
+            logger.error(f"Structured context fetch failed: {se}")
+            structured_context = ""
 
         seen_texts: set = set()
         combined_chunks: List[Dict[str, Any]] = []
@@ -389,7 +391,7 @@ async def run_chat_query_stream_with_prompt(
 
     try:
         max_tokens = 700 if is_comparison else 500
-        async for token in call_ollama_stream(prompt, num_predict=max_tokens, num_ctx=2048):
+        async for token in call_ollama_stream(prompt, num_predict=max_tokens, num_ctx=4096):
             if first_token_time is None:
                 first_token_time = time.time() - start_time
                 logger.info(f"⚡ Time to first token: {first_token_time:.4f}s")

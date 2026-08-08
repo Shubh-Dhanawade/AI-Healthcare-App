@@ -1439,9 +1439,11 @@ export default function DocumentDetailPage() {
     const readyStatuses = ['text_extracted', 'completed', 'summarized'];
     if (readyStatuses.includes(doc.status) && !doc.summary && !hasStreamedRef.current) {
       startSummaryStream(docId);
+    } else if (doc.summary && isStreaming) {
+      setIsStreaming(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc?.status, doc?.summary, docId, startSummaryStream]);
+  }, [doc?.status, doc?.summary, docId, startSummaryStream, isStreaming]);
 
   // Automatically translate page on initial load if non-English language is set in localStorage
   useEffect(() => {
@@ -1835,24 +1837,6 @@ export default function DocumentDetailPage() {
       </div>
 
       {/* Processing Banner */}
-      {isProcessing && (
-        <div className="flex items-center gap-3 p-4 rounded-xl"
-          style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)' }}>
-          <div className="w-4 h-4 border-2 border-amber-400/30 border-t-amber-400 rounded-full animate-spin" />
-          <div>
-            <p className="text-amber-300 text-sm font-medium">
-              {doc?.status === 'text_extracted'
-                ? 'Building AI index... Generating embeddings and summary in background.'
-                : 'Document is being processed. Text extraction in progress...'}
-            </p>
-            <p className="text-amber-400/60 text-xs mt-0.5">
-              {doc?.status === 'text_extracted'
-                ? 'You can use the document now — AI features will be ready shortly.'
-                : 'This may take a few seconds...'}
-            </p>
-          </div>
-        </div>
-      )}
 
       {/* AI Actions — Auto-triggered, manual buttons hidden during auto-processing */}
       {canRunAI && (
@@ -2395,7 +2379,6 @@ export default function DocumentDetailPage() {
 
 
                 </div>
-                <p className="text-xs text-slate-500 text-right">Generated on {doc.summary?.created_at ? new Date(doc.summary.created_at).toLocaleString() : ''}</p>
               </div>
             );
           })()}
