@@ -65,8 +65,8 @@ async def warmup_model(model: Optional[str] = None) -> None:
             "model": model_name,
             "prompt": "hi",
             "stream": False,
-            # keep_alive=-1: model stays loaded indefinitely, no idle eviction.
-            "keep_alive": -1,
+            # keep_alive read from settings (e.g. 5m to prevent locked RAM)
+            "keep_alive": parse_keep_alive(settings.OLLAMA_KEEP_ALIVE),
             "options": {
                 "num_predict": 1,
                 # CRITICAL: num_ctx=8192 must match ALL inference calls.
@@ -198,9 +198,8 @@ async def call_ollama_stream(
         "model": model_name,
         "prompt": prompt,
         "stream": True,
-        # keep_alive=-1: model stays loaded in VRAM indefinitely after first use.
-        # This prevents the ~20s cold-load penalty on every chat request after idle.
-        "keep_alive": -1,
+        # keep_alive read from settings (e.g. 5m to prevent locked RAM)
+        "keep_alive": parse_keep_alive(settings.OLLAMA_KEEP_ALIVE),
         "options": {
             "temperature": 0,           # Greedy for maximum speed
             "num_predict": num_predict,

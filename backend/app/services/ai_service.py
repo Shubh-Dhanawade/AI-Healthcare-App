@@ -84,6 +84,8 @@ CRITICAL RULES:
 - Write each bullet point as a **complete, grammatically correct full sentence**.
 - Extract ONLY information explicitly present in the document. Do NOT use generic phrases.
 - Every fact must be extremely accurate. Do NOT confuse Indian numbering formats (e.g. 10,00,000 is 10 Lakhs) with US formatting (e.g. 10,00,000 is 1 Crore / 10 Million). Verify the commas and digit count before writing.
+- Do NOT confuse coverages/benefits (like a Sum Insured Protector limit of ₹3,00,000, or a Loyalty Bonus of ₹5,00,000) with co-payments or premium charges. A co-payment is the share of the claim paid by the policyholder. A premium charge is the cost paid to purchase the cover.
+- For 'premium_summary': ONLY extract the actual total premium amount and taxes (GST) from the document. Do NOT hallucinate or manufacture co-payments, deductibles, or separate add-on charges if they are not explicitly specified as active. For example, if a table has column headers for co-pay or deductible but shows zero or is empty for this policy, do NOT invent a charge (like ₹3,00,000 co-pay or ₹5,000 add-on charge). If no co-payment is active, state that no co-payment is active under the policy.
 - Do NOT hallucinate or guess separate Sum Insured amounts for optional add-ons or riders (such as 'Unlimited Restore' or 'ABCD Chronic Care') if they are not explicitly specified in the text. Specifically, do NOT construct values (like ₹28,00,000) using digits from the policy number. If an add-on is active but has no separate sum insured listed, state in a full sentence that it is active under the policy schedule, without claiming a specific sum insured amount.
 - Distinguish between options specifically selected/active for this policyholder (listed under Details of Policyholder / Insured Person's Details) and generic tables or brochures (e.g. Notes or General Exclusions lists). If the schedule says "Aggregate Deductible: No" or "0", then no deductible is active. Do NOT report generic deductible levels (like 5L or 10L) as active.
 - Every bullet MUST contain a specific value (amount, date, percentage, duration, clause name) directly from the document.
@@ -94,26 +96,16 @@ CRITICAL RULES:
 JSON schema:
 {{
   "coverage_summary": [
-    "Complete sentence detailing specific coverage 1 with exact value from document",
-    "Complete sentence detailing specific coverage 2 with exact value from document",
-    "Complete sentence detailing specific coverage 3 with exact value from document",
-    "Complete sentence detailing specific coverage 4 with exact value from document"
+    "One or more complete sentences detailing a specific coverage/benefit active under this policy (e.g. Sum Insured, base cover, specific sub-limit limits). Only include facts directly present in the document."
   ],
   "exclusions_summary": [
-    "Complete sentence detailing specific named exclusion 1 with exact clause language from document",
-    "Complete sentence detailing specific named exclusion 2 with exact clause language from document",
-    "Complete sentence detailing specific named exclusion 3 with exact clause language from document",
-    "Complete sentence detailing specific named exclusion 4 with exact clause language from document"
+    "One or more complete sentences detailing a specific exclusion, limit, or cap active under this policy."
   ],
   "waiting_period_summary": [
-    "Complete sentence detailing initial waiting period with exact duration from document",
-    "Complete sentence detailing pre-existing disease waiting period with exact duration from document",
-    "Complete sentence detailing specific disease waiting period with exact duration from document"
+    "One or more complete sentences detailing a specific waiting period (initial, specific disease, or pre-existing disease waiting period) active under this policy."
   ],
   "premium_summary": [
-    "Complete sentence detailing total premium with exact amount and GST from document",
-    "Complete sentence detailing specific charges, co-payment or deductible from document",
-    "Complete sentence detailing additional benefit or add-on charge from document"
+    "One or more complete sentences detailing the premium amount, taxes (GST), and any active co-pays, deductibles, or additional charges. ONLY report values that are explicitly specified. If no co-payment is active, state that no co-payment is active under the policy."
   ]
 }}
 
@@ -125,7 +117,7 @@ DOCUMENT:
 PROSE_SUMMARY_PROMPT = """You are a senior healthcare insurance analyst. Write a clean, professional, factual summary of **around 300 to 350 words** of the insurance document below for the policyholder.
 
 CRITICAL RULES:
-- Start IMMEDIATELY with the first sentence of the summary (e.g. "Your HDFC ERGO Optima Secure health insurance policy..."). Do NOT output any intro or preamble (e.g., do NOT write "Here is the summary:", "Factual summary:", "Based on the document:").
+- Start IMMEDIATELY with the first sentence of the summary using the actual insurer and actual plan name from the document (e.g. "Your [Insurer Name] [Plan Name] health insurance policy..."). Do NOT output any intro or preamble (e.g., do NOT write "Here is the summary:", "Factual summary:", "Based on the document:").
 - Write in a natural, professional, and well-synthesized flow based on the report data (do NOT make it read like a dry copy-paste of direct sentences from the document).
 - Do NOT use any markdown formatting, bold tags (**), lists, bullet points, or headers. Write only simple, plain text paragraphs separated by a blank line.
 - Use second person ("Your policy...").
@@ -148,13 +140,15 @@ Rules:
 - Use formats as they appear in the document.
 - Do NOT output markdown code blocks or preamble/postamble.
 - If the document is not related to healthcare/insurance, return all fields as null.
+- For 'covered_members': extract ALL insured/covered persons listed in the Policy Schedule or Member Details table (name + relationship, e.g. 'Rakesh Jadhav (Self), Smita Jadhav (Spouse), Atharv Jadhav (Son), Samayara Jadhav (Daughter)'). If only one person is covered, list that person. Never return null if any person is mentioned.
 
 JSON schema:
-{
+{{
   "policy_name": "exact product or plan name",
   "insurer_name": "exact insurance company or health provider/lab name",
-  "policy_number": "exact policy number, certificate number, or report ID",
-  "insured_person": "full name of policyholder or patient",
+  "policy_number": "exact policy number, certificate number, or report ID as it appears in the Policy Schedule (NOT a Master Policy Number or MSTR number)",
+  "insured_person": "full name of the primary policyholder only",
+  "covered_members": "comma-separated list of ALL insured persons with their relationship (e.g. Name1 (Self), Name2 (Spouse), Name3 (Son))",
   "sum_insured": "total coverage amount with currency symbol",
   "premium_amount": "total premium amount with currency symbol",
   "policy_term": "exact validity period",
@@ -168,7 +162,7 @@ JSON schema:
   "maternity_coverage": "maternity benefit or exclusion details",
   "network_hospitals": "hospital network count or network name",
   "claim_process": "claim filing instructions"
-}
+}}
 
 DOCUMENT:
 {document_text}"""
@@ -422,7 +416,8 @@ def _is_valid_premium(val: str, policy_num: str = "", sum_insured: str = "") -> 
     if val_clean in ("0", "null", "", "none", "not specified", "not mentioned in policy"):
         return False
     
-    digits = _clean_to_digits(val)
+    val_base = val.split('.')[0] if '.' in val else val
+    digits = _clean_to_digits(val_base)
     if not digits:
         return False
         
@@ -437,6 +432,14 @@ def _is_valid_premium(val: str, policy_num: str = "", sum_insured: str = "") -> 
     # Health insurance premiums are virtually never 9+ digits (>= 10,000,000)
     if len(digits) >= 9:
         return False
+        
+    # Reject premiums >= 5,00,000 (usually sum insured or other limit)
+    try:
+        val_int = int(digits)
+        if val_int >= 500000:
+            return False
+    except ValueError:
+        pass
         
     return True
 
@@ -936,12 +939,21 @@ def _build_fallback_fields(document_text: str) -> list[dict]:
     ], text), "policy_info")
 
     # ── Policy Number ───────────────────────────────────────────────────────
+    # Use case-insensitive search on the raw text for maximum pattern coverage.
+    # Patterns are ordered from most specific (labeled + alphanumeric) to weakest fallback.
+    _text_ci = text  # raw text (regex uses re.IGNORECASE already via _regex_find_any)
     policy_no = _regex_find_any([
-        r'(?:policy\s+no|policy\s+number)[.:\s]+([A-Z0-9][A-Z0-9\-/]{5,25})',
-        r'(?:certificate\s+no|certificate\s+number)[.:\s]+([A-Z0-9][A-Z0-9\-/]{5,25})',
-        r'(?:policy\s+schedule\s+no)[.:\s]+([A-Z0-9][A-Z0-9\-/]{5,25})',
-        r'(?:policy\s+id)[.:\s]+([A-Z0-9][A-Z0-9\-/]{5,25})',
-        r'(\d{10,20})',  # Long numeric strings often are policy numbers
+        # Prefer direct ICICI/IBANK alphanumeric patterns
+        r'(\d{3,6}[A-Za-z]{1,5}/(?:ICICI|IBANK)/\d{6,15}/\d{2}/\d{3})',
+        # General policy number ignoring MSTR (group master policy)
+        r'(?:policy\s+(?:no|number|certificate|id|doc(?:ument)?\s+no))[.:\s#]+((?!.*MSTR)[A-Za-z0-9][A-Za-z0-9\-/]{6,40})',
+        r'(?:certificate\s+(?:no|number))[.:\s#]+((?!.*MSTR)[A-Za-z0-9][A-Za-z0-9\-/]{6,40})',
+        r'(?:policy\s+schedule\s+(?:no|number))[.:\s#]+((?!.*MSTR)[A-Za-z0-9][A-Za-z0-9\-/]{6,40})',
+        r'(?:endorsement\s+no)[.:\s#]+((?!.*MSTR)[A-Za-z0-9][A-Za-z0-9\-/]{6,40})',
+        # HDFC-style long numeric: 2800000008488100000
+        r'(\d{16,20})',
+        # Generic long numeric fallback (avoid short numbers that could be dates)
+        r'(\d{10,15})',
     ], text)
     add("Policy Number", policy_no, "policy_info")
 
@@ -951,6 +963,7 @@ def _build_fallback_fields(document_text: str) -> list[dict]:
 
     # ── Sum Insured ─────────────────────────────────────────────────────────
     sum_ins = _regex_find_any([
+        r'sum\s+insured\s*(?:\(₹\))?\s*([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
         r'(?:base\s+)?sum\s+insured\s*(?:opted)?\s*[:\s₹Rs.]+([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
         r'(?:sum\s+insured|sum\s+assured|si)[:\s₹Rs.]+([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
         r'(?:total\s+sum\s+insured)[:\s₹Rs.]+([1-9]\d{4,})',
@@ -1087,6 +1100,41 @@ def _build_fallback_fields(document_text: str) -> list[dict]:
         r'(\+91[\s\-]?[6-9][0-9]{9})',
         r'(?:call\s+us\s+at|customer\s+care)[^0-9]{0,20}([0-9]{3,5}[\s\-][0-9]{4,8})',
     ], text), "policy_info")
+
+    # ── Covered Members (Family Floater Member List) ───────────────────────
+    # Try to extract a member table or list of insured persons with their relationships.
+    # Patterns target structured rows in Policy Schedule tables.
+    _members_found = []
+    # Pattern 1: rows like "Name: Rakesh Jadhav   Relationship: Self"
+    _member_row_pairs = re.findall(
+        r'(?:Name|Member\s+Name)[:\s]+([A-Z][A-Za-z .]{2,40})\s+(?:Relationship|Relation)[:\s]+([A-Za-z/ ]{3,20})',
+        text, re.IGNORECASE
+    )
+    for name, rel in _member_row_pairs:
+        _members_found.append(f"{name.strip()} ({rel.strip()})")
+
+    # Pattern 2: table rows like "1. Rakesh Suresh Jadhav   Self   ..." or "Sr No | Name | Relationship"
+    if not _members_found:
+        _member_lines = re.findall(
+            r'\b([A-Z][A-Za-z .]{4,40})\s{2,}(Self|Spouse|Son|Daughter|Father|Mother|Parent|Sibling|Brother|Sister|Child|Dependent)\b',
+            text, re.IGNORECASE
+        )
+        for name, rel in _member_lines:
+            entry = f"{name.strip()} ({rel.strip().title()})"
+            if entry not in _members_found:
+                _members_found.append(entry)
+
+    # Pattern 3: inline list like "Rakesh (Self), Smita (Spouse)"
+    if not _members_found:
+        _inline = re.findall(
+            r'([A-Z][A-Za-z .]{4,40})\s*\(\s*(Self|Spouse|Son|Daughter|Father|Mother|Child|Dependent)\s*\)',
+            text, re.IGNORECASE
+        )
+        for name, rel in _inline:
+            _members_found.append(f"{name.strip()} ({rel.strip().title()})")
+
+    if _members_found:
+        add("Covered Members", ", ".join(_members_found[:8]), "policy_info")
 
     # ── Health / Medical Diagnostic Report Fallbacks ────────────────────────
     is_health_report = any(kw in text.lower() for kw in [
@@ -1259,7 +1307,7 @@ async def warmup_model() -> None:
             "model": model,
             "prompt": "hi",
             "stream": False,
-            "keep_alive": -1,
+            "keep_alive": parse_keep_alive(settings.OLLAMA_KEEP_ALIVE),
             # Use num_ctx=8192: same as all inference calls to avoid costly reload on first request
             "options": {"num_predict": 1, "num_ctx": 8192, "temperature": 0},
         }
@@ -1607,6 +1655,7 @@ async def extract_policy_fields(document_text: str, force_regenerate: bool = Fal
                 "insurer_name": "policy_info",
                 "policy_number": "policy_info",
                 "insured_person": "policy_info",
+                "covered_members": "policy_info",
                 "sum_insured": "coverage",
                 "premium_amount": "premium",
                 "policy_term": "policy_info",
@@ -1627,6 +1676,7 @@ async def extract_policy_fields(document_text: str, force_regenerate: bool = Fal
                 "insurer_name": "Insurer Name",
                 "policy_number": "Policy Number",
                 "insured_person": "Insured Person",
+                "covered_members": "Covered Members",
                 "sum_insured": "Sum Insured",
                 "premium_amount": "Premium Amount",
                 "policy_term": "Policy Term",
@@ -1651,11 +1701,12 @@ async def extract_policy_fields(document_text: str, force_regenerate: bool = Fal
                 if value and str(value).lower() not in ("null", "none", "not specified")
             ]
             
-            # Ensure date fields (Renewal Date, Expiry Date) are included from document text if LLM omitted them
+            # Ensure date fields and member fields are included from document text if LLM omitted them
             fallback_fields = _build_fallback_fields(document_text)
             existing_names = {f["field_name"].lower() for f in fields}
             for fb in fallback_fields:
-                if fb["field_name"].lower() in ("renewal date", "expiry date", "premium due date", "insured person") and fb["field_name"].lower() not in existing_names:
+                merge_candidates = ("renewal date", "expiry date", "premium due date", "insured person", "covered members")
+                if fb["field_name"].lower() in merge_candidates and fb["field_name"].lower() not in existing_names:
                     fields.append(fb)
                     existing_names.add(fb["field_name"].lower())
 
