@@ -81,35 +81,39 @@ def is_healthcare_related(text: str) -> bool:
 BULLETS_EXTRACTION_PROMPT = """You are a senior health insurance analyst. Extract specific facts from the document below and return ONLY a valid JSON object.
 
 CRITICAL RULES:
+- Write each bullet point as a **complete, grammatically correct full sentence**.
 - Extract ONLY information explicitly present in the document. Do NOT use generic phrases.
+- Every fact must be extremely accurate. Do NOT confuse Indian numbering formats (e.g. 10,00,000 is 10 Lakhs) with US formatting (e.g. 10,00,000 is 1 Crore / 10 Million). Verify the commas and digit count before writing.
+- Do NOT hallucinate or guess separate Sum Insured amounts for optional add-ons or riders (such as 'Unlimited Restore' or 'ABCD Chronic Care') if they are not explicitly specified in the text. Specifically, do NOT construct values (like ₹28,00,000) using digits from the policy number. If an add-on is active but has no separate sum insured listed, state in a full sentence that it is active under the policy schedule, without claiming a specific sum insured amount.
+- Distinguish between options specifically selected/active for this policyholder (listed under Details of Policyholder / Insured Person's Details) and generic tables or brochures (e.g. Notes or General Exclusions lists). If the schedule says "Aggregate Deductible: No" or "0", then no deductible is active. Do NOT report generic deductible levels (like 5L or 10L) as active.
 - Every bullet MUST contain a specific value (amount, date, percentage, duration, clause name) directly from the document.
-- Start each bullet with the exact category label followed by specific data (e.g. "Sum Insured: ₹20 Lakh as per the Optima Secure plan").
+- Start each bullet with the exact category label followed by specific data (e.g. "Sum Insured: ₹10 Lakh as per the Optima Secure plan").
 - Do NOT write generic sentences like "Coverage is available" or "Exclusions apply".
 - Return ONLY the JSON object below — no markdown, no preamble.
 
 JSON schema:
 {{
   "coverage_summary": [
-    "Specific coverage fact 1 with exact value from document",
-    "Specific coverage fact 2 with exact value from document",
-    "Specific coverage fact 3 with exact value from document",
-    "Specific coverage fact 4 with exact value from document"
+    "Complete sentence detailing specific coverage 1 with exact value from document",
+    "Complete sentence detailing specific coverage 2 with exact value from document",
+    "Complete sentence detailing specific coverage 3 with exact value from document",
+    "Complete sentence detailing specific coverage 4 with exact value from document"
   ],
   "exclusions_summary": [
-    "Specific named exclusion 1 with exact clause language from document",
-    "Specific named exclusion 2 with exact clause language from document",
-    "Specific named exclusion 3 with exact clause language from document",
-    "Specific named exclusion 4 with exact clause language from document"
+    "Complete sentence detailing specific named exclusion 1 with exact clause language from document",
+    "Complete sentence detailing specific named exclusion 2 with exact clause language from document",
+    "Complete sentence detailing specific named exclusion 3 with exact clause language from document",
+    "Complete sentence detailing specific named exclusion 4 with exact clause language from document"
   ],
   "waiting_period_summary": [
-    "Initial waiting period with exact duration from document",
-    "Pre-existing disease waiting period with exact duration from document",
-    "Specific disease waiting period with exact duration from document"
+    "Complete sentence detailing initial waiting period with exact duration from document",
+    "Complete sentence detailing pre-existing disease waiting period with exact duration from document",
+    "Complete sentence detailing specific disease waiting period with exact duration from document"
   ],
   "premium_summary": [
-    "Total premium with exact amount and GST from document",
-    "Specific charges, co-payment or deductible from document",
-    "Additional benefit or add-on charge from document"
+    "Complete sentence detailing total premium with exact amount and GST from document",
+    "Complete sentence detailing specific charges, co-payment or deductible from document",
+    "Complete sentence detailing additional benefit or add-on charge from document"
   ]
 }}
 
@@ -118,14 +122,17 @@ DOCUMENT:
 
 
 # ── PROMPT 2: Generates the prose summary paragraph ──
-PROSE_SUMMARY_PROMPT = """You are a senior healthcare insurance analyst. Write a factual 4-5 paragraph summary of the insurance document below for the policyholder.
+PROSE_SUMMARY_PROMPT = """You are a senior healthcare insurance analyst. Write a clean, professional, factual summary of **around 300 to 350 words** of the insurance document below for the policyholder.
 
 CRITICAL RULES:
+- Start IMMEDIATELY with the first sentence of the summary (e.g. "Your HDFC ERGO Optima Secure health insurance policy..."). Do NOT output any intro or preamble (e.g., do NOT write "Here is the summary:", "Factual summary:", "Based on the document:").
+- Write in a natural, professional, and well-synthesized flow based on the report data (do NOT make it read like a dry copy-paste of direct sentences from the document).
+- Do NOT use any markdown formatting, bold tags (**), lists, bullet points, or headers. Write only simple, plain text paragraphs separated by a blank line.
 - Use second person ("Your policy...").
-- Every fact, name, number, date must come directly from the document.
-- Do NOT invent or assume any values.
-- Write 4-5 short paragraphs covering: (1) policy identity and insurer, (2) sum insured and coverage basis, (3) insured members and premium, (4) key benefits and exclusions, (5) claim process.
-- Return ONLY a plain text response — no JSON, no bullet points, no markdown.
+- Keep it around 300 to 350 words total, making sure to mention all key details (Insurer, Policy Number, Insured Person, Sum Insured, Premium, Deductibles, Exclusions, and Claims TAT).
+- Every fact, name, number, date must come directly from the document. Do NOT assume or invent any values.
+- Do NOT confuse Indian numbering formats (e.g. 10,00,000 is 10 Lakhs) with US formatting (e.g. 10,00,000 is 1 Crore / 10 Million). Represent the correct sum insured (e.g. 10 Lakhs, NOT 1 Crore).
+- Clearly distinguish between specific selections chosen by the policyholder in their Policy Schedule (e.g. "Aggregate Deductible: No" means no deductible is in force) and generic plan descriptions or brochure notes (e.g. notes explaining what happens if a 5L or 10L deductible is in force). Only report values that are active/selected for the policyholder.
 
 DOCUMENT:
 {document_text}"""
@@ -1253,8 +1260,8 @@ async def warmup_model() -> None:
             "prompt": "hi",
             "stream": False,
             "keep_alive": -1,
-            # Use num_ctx=2048: same as all inference calls to avoid costly reload on first request
-            "options": {"num_predict": 1, "num_ctx": 2048, "temperature": 0},
+            # Use num_ctx=8192: same as all inference calls to avoid costly reload on first request
+            "options": {"num_predict": 1, "num_ctx": 8192, "temperature": 0},
         }
         async with httpx.AsyncClient(timeout=30.0) as client:
             await client.post(url, json=payload)
@@ -1268,7 +1275,7 @@ async def call_ollama(
     prompt: str,
     model: Optional[str] = None,
     num_predict: int = 512,
-    num_ctx: int = 2048,  # Must match warmup num_ctx to avoid KV cache reload
+    num_ctx: int = 8192,  # Must match warmup num_ctx to avoid KV cache reload
 ) -> str:
     """Call Ollama API using shared connection pool with GPU-accelerated settings."""
     from app.services.ollama_client import call_ollama as _pooled_call
@@ -1390,16 +1397,15 @@ def clean_newlines_in_bullets(text: str) -> str:
     return "\n".join(final_bullets)
 
 
-def _extract_key_context_for_summary(text: str, max_chars: int = 6000) -> str:
+def _extract_key_context_for_summary(text: str, max_chars: int = 15000, header_chars: int = 8000) -> str:
     """Extract optimal document text context for LLM summarization.
-    Takes the first 3500 chars (policy schedule, insured names, premiums) plus
+    Takes the first header_chars (policy schedule, insured names, premiums) plus
     keyword-matched clauses from the rest, up to max_chars total.
     """
     if len(text) <= max_chars:
         return text
     
-    # 1. Take first 3500 chars (policy schedule, insured names, premiums, sum insured)
-    header_chars = 3500
+    # 1. Take first header_chars (policy schedule, insured names, premiums, sum insured)
     header_part = text[:header_chars]
     
     # 2. Extract key sentences for coverage, exclusions, waiting periods, and claims from remaining text
@@ -1445,9 +1451,8 @@ async def generate_summary(document_text: str, force_regenerate: bool = False) -
             "premium_summary": "• Invalid Document: The content does not contain health insurance or healthcare terminology.",
         }
 
-    # Use compact context sized to fit within num_ctx=2048 budget
-    # (prompt template ~300 tokens + 900 tokens document = ~1200 tokens input, 800 tokens output)
-    context = _extract_key_context_for_summary(document_text, max_chars=1800)
+    # Use larger context to extract coverages, exclusions, and premiums accurately from multi-page documents
+    context = _extract_key_context_for_summary(document_text, max_chars=15000, header_chars=8000)
 
     # ── CALL 1: Generate structured bullet sections ───────────────────────────
     bullets_result: dict = {}
@@ -1456,7 +1461,7 @@ async def generate_summary(document_text: str, force_regenerate: bool = False) -
         bullets_response = await call_ollama(
             BULLETS_EXTRACTION_PROMPT.format(document_text=context),
             num_predict=700,   # Bullets only — enough for 4 sections × 4 bullets
-            num_ctx=2048,      # Matches warmup num_ctx — no model reload needed
+            num_ctx=8192,      # Matches warmup num_ctx — no model reload needed
         )
         bullets_parsed = extract_json_from_response(bullets_response)
         if bullets_parsed:
@@ -1474,7 +1479,7 @@ async def generate_summary(document_text: str, force_regenerate: bool = False) -
         prose_response = await call_ollama(
             PROSE_SUMMARY_PROMPT.format(document_text=context),
             num_predict=600,   # Prose only — 4-5 paragraphs, ~120-150 words
-            num_ctx=2048,      # Matches warmup num_ctx — no model reload needed
+            num_ctx=8192,      # Matches warmup num_ctx — no model reload needed
         )
         # Prose response is plain text, not JSON
         prose_clean = prose_response.strip()
@@ -1541,12 +1546,12 @@ async def extract_policy_fields(document_text: str, force_regenerate: bool = Fal
         logger.warning("[FIELDS] Document is not healthcare-related. Bypassing LLM.")
         return []
 
-    truncated = document_text[:2000] if len(document_text) > 2000 else document_text
+    context = _extract_key_context_for_summary(document_text, max_chars=15000, header_chars=8000)
     try:
         response = await call_ollama(
-            FIELD_EXTRACTION_PROMPT.format(document_text=truncated),
+            FIELD_EXTRACTION_PROMPT.format(document_text=context),
             num_predict=500,
-            num_ctx=2048,      # Consistent with warmup — no model reload
+            num_ctx=8192,      # Consistent with warmup — no model reload
         )
         result = extract_json_from_response(response)
         if result:
@@ -1680,12 +1685,12 @@ async def analyze_risks(document_text: str, force_regenerate: bool = False) -> d
             "overall_risk_level": "high"
         }
 
-    truncated = document_text[:2000] if len(document_text) > 2000 else document_text
+    context = _extract_key_context_for_summary(document_text, max_chars=15000, header_chars=8000)
     try:
         response = await call_ollama(
-            RISK_ANALYSIS_PROMPT.format(document_text=truncated),
+            RISK_ANALYSIS_PROMPT.format(document_text=context),
             num_predict=700,
-            num_ctx=2048,      # Consistent with warmup — no model reload
+            num_ctx=8192,      # Consistent with warmup — no model reload
         )
         result = extract_json_from_response(response)
         if result.get("risks"):
