@@ -158,14 +158,19 @@ async def stream_summary_sse(
     doc = await _get_document(document_id, current_user, db)
 
     # Plain-text streaming prompt — generates readable prose immediately (no JSON wrapper)
-    STREAM_SUMMARY_PROMPT = """You are a senior healthcare insurance analyst. Write a clear, factual 5-6 paragraph summary of the following insurance policy document using ONLY information present in the document. Write in second person ("Your policy..."). Do NOT use bullet points or headers. Write flowing prose paragraphs separated by blank lines.
+    STREAM_SUMMARY_PROMPT = """You are a senior healthcare insurance analyst. Write a structured, professional, factual executive summary of the insurance policy document below for the policyholder.
 
-Paragraph 1: Name the policy, insurer, policyholder full name, policy number, and validity period.
-Paragraph 2: State the exact Sum Insured and all covered categories (inpatient, daycare, ambulance, AYUSH, etc.).
-Paragraph 3: List every insured member and the total premium paid with date.
-Paragraph 4: Describe key benefits: restore benefit, secure benefit, cumulative bonus, cash for shared room, air ambulance, preventive health check-up.
-Paragraph 5: State all waiting periods with exact durations and any co-payment or deductible.
-Paragraph 6: Explain cashless and reimbursement claim procedures, customer helpline, and advisory.
+CRITICAL RULES:
+- Use markdown formatting with clear headings (###) and bullet points to structure the summary into sections:
+  ### Policy Details & Validity
+  ### Covered Persons & Premium
+  ### Key Coverage & Benefits
+  ### Waiting Periods & Exclusions
+  ### Cashless & Claims Process
+- Start IMMEDIATELY with the policy details. Do NOT output any conversational preamble or introduction (e.g., do NOT write "Here is the summary:", "Factual summary:", "Okay, here's a breakdown...", "Based on the document:"). Start directly with the first section heading.
+- Under each heading, use bullet points (e.g., "* **Sum Insured:** ₹20,00,000") to list the facts. Make sure all facts are highly accurate and come directly from the document.
+- Distinguish clearly between options specifically selected/active for this policyholder and generic tables or brochures. Only report values that are active/selected for the policyholder.
+- Keep the summary clean, concise, and professional.
 
 DOCUMENT:
 {document_text}"""

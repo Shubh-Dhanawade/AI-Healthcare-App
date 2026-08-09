@@ -271,13 +271,18 @@ async def run_chat_query(
         structured_context=structured_context
     )
     
-    # 6. Call LLM — using num_ctx=8192 (to prevent context truncation for complex health policies)
+    # 6. Call LLM — using num_ctx from settings (to prevent context truncation for complex health policies)
     llm_start = time.time()
-    response = await call_ollama(prompt, num_predict=600 if is_comparison else 450, num_ctx=8192)
+    response = await call_ollama(prompt, num_predict=600 if is_comparison else 450)
     llm_time = time.time() - llm_start
+    
+    # Post-process response to strip any lingering IRDAI exclusion codes (e.g., Code - Excl08)
+    from app.services.prompt_builder import clean_exclusion_codes
+    response = clean_exclusion_codes(response)
     
     total_time = time.time() - start_time
     logger.info(f"⏱️ Non-streaming response generated in {total_time:.4f}s [Retrieval: {retrieval_time:.4f}s, LLM: {llm_time:.4f}s]")
+
     # Append structured sources footer so the backend can parse and save it
     if filtered_chunks:
         source_pages = {}
@@ -402,7 +407,7 @@ async def run_chat_query_stream_with_prompt(
 
     try:
         max_tokens = 700 if is_comparison else 500
-        async for token in call_ollama_stream(prompt, num_predict=max_tokens, num_ctx=8192):
+        async for token in call_ollama_stream(prompt, num_predict=max_tokens):
             if first_token_time is None:
                 first_token_time = time.time() - start_time
                 logger.info(f"⚡ Time to first token: {first_token_time:.4f}s")

@@ -30,13 +30,15 @@ class Settings(BaseSettings):
 
     # Ollama AI
     OLLAMA_BASE_URL: str = "http://localhost:11434"
-    OLLAMA_MODEL: str = "gemma3:4b"
+    OLLAMA_MODEL: str = "gemma3:4b-it-q4_K_M"
     # 4 CPU threads: reduces RAM pressure (currently at 95%) when some layers fall back to CPU.
     # With Q4_K_M all layers on GPU, this becomes irrelevant but safe to keep.
     OLLAMA_NUM_THREAD: int = 4
     # Omit to let Ollama auto-detect GPU layer offloading based on free VRAM.
     OLLAMA_NUM_GPU: Optional[int] = None
     OLLAMA_KEEP_ALIVE: str = "-1"
+    # Context window size: 4096 is the sweet spot for 4GB VRAM GPUs (fits model + KV cache fully in VRAM)
+    OLLAMA_NUM_CTX: int = 4096
 
     # File Uploads
     UPLOAD_DIR: str = "./uploads"

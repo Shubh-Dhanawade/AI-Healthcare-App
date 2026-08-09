@@ -145,21 +145,149 @@ def extract_text_with_pytesseract(file_path: str, page_count: int = 1) -> Tuple[
         raise
 
 
+def _upscale_image_bytes(img_bytes: bytes, min_width: int = 2000) -> bytes:
+    """Upscale image bytes if the width is below min_width to improve OCR accuracy."""
+    try:
+        from PIL import Image
+        import io
+        pil_img = Image.open(io.BytesIO(img_bytes))
+        w, h = pil_img.size
+        if w < min_width:
+            scale = min_width / w
+            new_size = (int(w * scale), int(h * scale))
+            try:
+                resampling = Image.Resampling.LANCZOS
+            except AttributeError:
+                resampling = Image.ANTIALIAS
+            resized_img = pil_img.resize(new_size, resampling)
+            buf = io.BytesIO()
+            resized_img.save(buf, format="PNG")
+            return buf.getvalue()
+    except Exception as e:
+        logger.warning(f"Image upscaling failed, using original bytes: {e}")
+    return img_bytes
+
+
+def extract_text_with_windows_ocr(file_path: str, page_count: int = 1) -> Tuple[str, str, int]:
+    """
+    Extract text using Windows Native OCR engine (via winsdk).
+    Extremely fast (~0.1s per page) and highly accurate on Windows 10/11.
+    """
+    import asyncio
+
+    async def _async_ocr():
+        import winsdk.windows.media.ocr as ocr
+        import winsdk.windows.graphics.imaging as imaging
+        import winsdk.windows.storage.streams as streams
+        import fitz
+
+        text_parts = []
+
+        if file_path.lower().endswith(".pdf"):
+            doc = fitz.open(file_path)
+            actual_page_count = len(doc)
+            for page_num in range(actual_page_count):
+                page = doc[page_num]
+                # Render page to high-quality image (2.0 scale)
+                mat = fitz.Matrix(2.0, 2.0)
+                pix = page.get_pixmap(matrix=mat)
+                img_bytes = pix.tobytes("png")
+
+                # Upscale image if low-res to maximize OCR precision
+                img_bytes = _upscale_image_bytes(img_bytes, min_width=2000)
+
+                # Load bytes into WinRT random access stream
+                stream = streams.InMemoryRandomAccessStream()
+                writer = streams.DataWriter(stream)
+                writer.write_bytes(img_bytes)
+                await writer.store_async()
+                await writer.flush_async()
+                writer.detach_stream()
+                stream.seek(0)
+
+                # Run OCR
+                decoder = await imaging.BitmapDecoder.create_async(stream)
+                bitmap = await decoder.get_software_bitmap_async()
+                
+                engine = ocr.OcrEngine.try_create_from_user_profile_languages()
+                if not engine:
+                    # Fallback to English specifically if user language profile is empty
+                    engine = ocr.OcrEngine.try_create_from_language(ocr.OcrLanguage("en-US"))
+                
+                if engine:
+                    ocr_result = await engine.recognize_async(bitmap)
+                    if ocr_result.text.strip():
+                        text_parts.append(f"[Page {page_num + 1}]\n{ocr_result.text}")
+                else:
+                    raise RuntimeError("Could not initialize Windows OCR engine")
+            doc.close()
+        else:
+            # Single image file
+            with open(file_path, "rb") as f:
+                img_bytes = f.read()
+
+            # Upscale image if low-res to maximize OCR precision
+            img_bytes = _upscale_image_bytes(img_bytes, min_width=2000)
+
+            stream = streams.InMemoryRandomAccessStream()
+            writer = streams.DataWriter(stream)
+            writer.write_bytes(img_bytes)
+            await writer.store_async()
+            await writer.flush_async()
+            writer.detach_stream()
+            stream.seek(0)
+
+            decoder = await imaging.BitmapDecoder.create_async(stream)
+            bitmap = await decoder.get_software_bitmap_async()
+            
+            engine = ocr.OcrEngine.try_create_from_user_profile_languages()
+            if not engine:
+                engine = ocr.OcrEngine.try_create_from_language(ocr.OcrLanguage("en-US"))
+                
+            if engine:
+                ocr_result = await engine.recognize_async(bitmap)
+                if ocr_result.text.strip():
+                    text_parts.append(ocr_result.text)
+            else:
+                raise RuntimeError("Could not initialize Windows OCR engine")
+
+        return "\n\n".join(text_parts), len(text_parts) or page_count
+
+    # Run inside new event loop on the executor thread
+    loop = asyncio.new_event_loop()
+    try:
+        full_text, pages = loop.run_until_complete(_async_ocr())
+        logger.info(f"✅ Windows Native OCR extracted {len(full_text)} chars from {pages} pages")
+        return full_text, "windows_ocr", pages
+    finally:
+        loop.close()
+
+
+
 def extract_text_with_ocr(file_path: str, page_count: int = 1) -> Tuple[str, str, int]:
     """
     Unified entry point for OCR extraction.
     Tries multiple OCR engines sequentially:
-    1. PaddleOCR (Optional)
-    2. EasyOCR (Optional)
-    3. PyTesseract (Optional, requires Tesseract binary)
+    1. Windows Native OCR (winsdk - fastest and highest quality on Windows)
+    2. PaddleOCR (Optional)
+    3. EasyOCR (Optional)
+    4. PyTesseract (Optional, requires Tesseract binary)
     """
     errors = []
 
-    # 1. Try PaddleOCR
+    # 1. Try Windows Native OCR (winsdk)
+    try:
+        logger.info("Attempting OCR with Windows Native OCR (winsdk)...")
+        return extract_text_with_windows_ocr(file_path, page_count)
+    except (ImportError, Exception) as e:
+        errors.append(f"Windows Native OCR failed: {e}")
+        logger.debug(f"Windows Native OCR is not available or failed: {e}")
+
+    # 2. Try PaddleOCR
     try:
         import fitz
-
         logger.info("Attempting OCR with PaddleOCR...")
+
         ocr = get_paddleocr_reader()
         text_parts = []
 

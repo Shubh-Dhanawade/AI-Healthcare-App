@@ -69,10 +69,8 @@ async def warmup_model(model: Optional[str] = None) -> None:
             "keep_alive": parse_keep_alive(settings.OLLAMA_KEEP_ALIVE),
             "options": {
                 "num_predict": 1,
-                # CRITICAL: num_ctx=8192 must match ALL inference calls.
-                # If warmup uses a different num_ctx (e.g. 1024), Ollama reloads the model KV cache
-                # on EVERY actual inference call, causing ~20s cold-start + potential OOM kill.
-                "num_ctx": 8192,
+                # CRITICAL: num_ctx must match ALL inference calls to avoid KV cache reload
+                "num_ctx": settings.OLLAMA_NUM_CTX,
                 "temperature": 0,
                 "num_thread": settings.OLLAMA_NUM_THREAD,
                 # Pin model weights in RAM — prevents paging to disk under memory pressure
@@ -93,7 +91,7 @@ async def generate_embeddings_nomic(text: str) -> List[float]:
     payload = {
         "model": "nomic-embed-text",
         "prompt": text,
-        "keep_alive": "1m",
+        "keep_alive": "0s",
         "options": {}
     }
     
@@ -112,7 +110,7 @@ async def generate_embeddings_nomic(text: str) -> List[float]:
     payload_embed = {
         "model": "nomic-embed-text",
         "input": text,
-        "keep_alive": "1m",
+        "keep_alive": "0s",
         "options": {}
     }
     try:
@@ -134,18 +132,12 @@ async def call_ollama(
     prompt: str,
     model: Optional[str] = None,
     num_predict: int = 512,
-    num_ctx: int = 8192,   # Must match warmup num_ctx to avoid KV cache reload
+    num_ctx: Optional[int] = None,
 ) -> str:
-    """Call Ollama /api/generate endpoint synchronously with dynamic CPU/GPU layer allocation.
-    Uses /api/generate (completion) which works with all GGUF models including
-    fine-tuned models that only support 'completion' capability, not 'chat'.
-    
-    num_ctx=1024: halves KV cache VRAM vs 2048 (41 MiB vs 82 MiB at q8_0).
-    With Q4_K_M quantization (~2.5GB weights) + 41 MiB KV cache, ALL 35 layers
-    fit on the RTX 3050's 3.2GB free VRAM with room to spare.
-    """
+    """Call Ollama /api/generate endpoint synchronously with dynamic CPU/GPU layer allocation."""
     client = get_httpx_client()
     model_name = model or settings.OLLAMA_MODEL
+    resolved_ctx = num_ctx if num_ctx is not None else settings.OLLAMA_NUM_CTX
     
     payload = {
         "model": model_name,
@@ -155,7 +147,7 @@ async def call_ollama(
         "options": {
             "temperature": 0,
             "num_predict": num_predict,
-            "num_ctx": num_ctx,
+            "num_ctx": resolved_ctx,
             "top_k": 1,
             "top_p": 1.0,
             "num_thread": settings.OLLAMA_NUM_THREAD,
@@ -165,7 +157,7 @@ async def call_ollama(
         },
     }
     
-    logger.debug(f"Ollama Call: {model_name} (predict={num_predict}, ctx={num_ctx})")
+    logger.debug(f"Ollama Call: {model_name} (predict={num_predict}, ctx={resolved_ctx})")
     if settings.OLLAMA_NUM_GPU is not None:
         payload["options"]["num_gpu"] = settings.OLLAMA_NUM_GPU
     response = await client.post("/api/generate", json=payload)
@@ -176,23 +168,12 @@ async def call_ollama_stream(
     prompt: str,
     model: Optional[str] = None,
     num_predict: int = 450,
-    num_ctx: int = 8192,   # Must match warmup num_ctx to avoid KV cache reload
+    num_ctx: Optional[int] = None,
 ) -> AsyncGenerator[str, None]:
-    """Generate streaming tokens from Ollama /api/generate with GPU-accelerated speed optimizations.
-    
-    Uses /api/generate instead of /api/chat because the fine-tuned model
-    hf.co/kkross/gemma-3-4b-cord19-finetuned-new:latest only supports 'completion'
-    capability. /api/generate returns streaming JSON with a 'response' field.
-    
-    Key settings:
-    - num_ctx=1024: halves KV cache VRAM vs 2048, allowing all 35 layers on RTX 3050
-    - num_predict=450: concise, complete policy responses
-    - num_gpu=999: forces all layers to GPU (auto-clamped by Ollama to available VRAM)
-    - keep_alive=-1: keeps model permanently in VRAM after first load, avoids cold-start
-    - use_mmap/use_mlock: pins weights in RAM, prevents paging under 95% memory pressure
-    """
+    """Generate streaming tokens from Ollama /api/generate with GPU-accelerated speed optimizations."""
     client = get_httpx_client()
     model_name = model or settings.OLLAMA_MODEL
+    resolved_ctx = num_ctx if num_ctx is not None else settings.OLLAMA_NUM_CTX
     
     payload = {
         "model": model_name,
@@ -203,7 +184,7 @@ async def call_ollama_stream(
         "options": {
             "temperature": 0,           # Greedy for maximum speed
             "num_predict": num_predict,
-            "num_ctx": num_ctx,
+            "num_ctx": resolved_ctx,
             "top_k": 1,
             "top_p": 1.0,
             "num_thread": settings.OLLAMA_NUM_THREAD,
@@ -213,7 +194,7 @@ async def call_ollama_stream(
         },
     }
     
-    logger.debug(f"Ollama Stream Call: {model_name} (predict={num_predict}, ctx={num_ctx})")
+    logger.debug(f"Ollama Stream Call: {model_name} (predict={num_predict}, ctx={resolved_ctx})")
     
     if settings.OLLAMA_NUM_GPU is not None:
         payload["options"]["num_gpu"] = settings.OLLAMA_NUM_GPU

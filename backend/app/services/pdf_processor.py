@@ -88,13 +88,20 @@ def extract_text_from_pdf(file_path: str) -> Tuple[str, str, int]:
     doc.close()
     
     if not text_parts:
-        logger.warning("No text extracted from PDF. Returning empty string.")
-        return "", "pymupdf", page_count
+        # Pure image PDF — PyMuPDF found no selectable text at all.
+        # MUST attempt OCR instead of returning empty.
+        logger.info(f"PDF has no selectable text ({page_count} pages). Attempting OCR extraction...")
+        try:
+            from app.services.ocr_service import extract_text_with_ocr
+            return extract_text_with_ocr(file_path, page_count)
+        except Exception as ocr_err:
+            logger.warning(f"OCR fallback failed for image-only PDF: {ocr_err}")
+            return "", "pymupdf", page_count
     
     full_text = "\n\n".join(text_parts)
     cleaned_full_text = clean_duplicate_whitespace(full_text)
     
-    # OCR fallback: only if we got almost nothing and have significant image content
+    # OCR fallback: also trigger if we got very little text (scanned with sparse overlays)
     MIN_CHAR_THRESHOLD = 50 * page_count  # Only fallback if < 50 chars per page on average
     if len(cleaned_full_text.strip()) < MIN_CHAR_THRESHOLD and page_count > 0:
         logger.info("PDF appears to be scanned or image-heavy. Attempting OCR...")
@@ -106,3 +113,4 @@ def extract_text_from_pdf(file_path: str) -> Tuple[str, str, int]:
             
     logger.info(f"✅ FAST TEXT EXTRACTION: {len(cleaned_full_text)} chars from {page_count} pages")
     return cleaned_full_text, "pymupdf", page_count
+

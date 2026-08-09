@@ -45,7 +45,7 @@ async def generate_embeddings_batch(texts: List[str]) -> List[List[float]]:
                     json={
                         "model": "nomic-embed-text",
                         "input": prefixed,
-                        "keep_alive": "5m",
+                        "keep_alive": "0s",
                     },
                 )
                 response.raise_for_status()

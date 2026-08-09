@@ -428,16 +428,179 @@ interface PolicySummary {
   premium_summary?: string;
 }
 
+const cleanSummaryText = (raw: string): string => {
+  if (!raw) return '';
+  return raw
+    .replace(/^(?:okay,\s+)?(?:here\s+(?:is|are)|based\s+on|following\s+is|this\s+is)\s+a?\s*(?:breakdown|summary|factual|factual\s+summary|key\s+information|details)[^:]*:\s*\n*/i, '')
+    .trim();
+};
+
+const stripMarkdownForSpeech = (text: string): string => {
+  if (!text) return '';
+  return text
+    .replace(/#{1,6}\s+/g, '') // strip headers
+    .replace(/\*{1,2}/g, '')    // strip bold/italic asterisks
+    .replace(/_/g, '')          // strip underscores
+    .replace(/^[•\-*\s\d+.\)]+\s+/gm, '') // strip leading bullet/list symbols per line
+    .trim();
+};
+
+function FormattedSummary({ content, isStreaming }: { content: string; isStreaming?: boolean }) {
+  const cleaned = cleanSummaryText(content);
+  if (!cleaned) return null;
+
+  const lines = cleaned.split('\n');
+
+  const renderInline = (text: string) => {
+    const parts = text.split(/(\*\*[^*]+\*\*)/g);
+    return parts.map((part, i) => {
+      if (part.startsWith('**') && part.endsWith('**')) {
+        return <strong key={i} className="font-semibold text-white">{part.slice(2, -2)}</strong>;
+      }
+      const italicParts = part.split(/(\*[^*]+\*|_[^_]+_)/g);
+      return italicParts.map((p, j) => {
+        if ((p.startsWith('*') && p.endsWith('*')) || (p.startsWith('_') && p.endsWith('_'))) {
+          return <em key={`${i}-${j}`} className="italic text-slate-300">{p.slice(1, -1)}</em>;
+        }
+        return <span key={`${i}-${j}`}>{p}</span>;
+      });
+    });
+  };
+
+  const elements: React.ReactNode[] = [];
+  let i = 0;
+  let bulletBuffer: string[] = [];
+  let orderedBuffer: { num: string; text: string }[] = [];
+
+  const flushBullets = () => {
+    if (bulletBuffer.length > 0) {
+      elements.push(
+        <ul key={`ul-${i}`} className="list-none space-y-1.5 my-2 pl-1">
+          {bulletBuffer.map((item, idx) => {
+            const isLastOfStream = isStreaming && idx === bulletBuffer.length - 1 && i === lines.length;
+            return (
+              <li key={idx} className="flex items-start gap-2 text-slate-200">
+                <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-blue-400 flex-shrink-0" />
+                <span>
+                  {renderInline(item)}
+                  {isLastOfStream && (
+                    <span className="inline-block w-1.5 h-3.5 bg-blue-400 ml-1 align-middle animate-pulse" />
+                  )}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      );
+      bulletBuffer = [];
+    }
+  };
+
+  const flushOrdered = () => {
+    if (orderedBuffer.length > 0) {
+      elements.push(
+        <ol key={`ol-${i}`} className="space-y-1.5 my-2 pl-1">
+          {orderedBuffer.map((item, idx) => {
+            const isLastOfStream = isStreaming && idx === orderedBuffer.length - 1 && i === lines.length;
+            return (
+              <li key={idx} className="flex items-start gap-2 text-slate-200">
+                <span className="font-semibold text-blue-400 flex-shrink-0 text-xs mt-0.5">{item.num}.</span>
+                <span>
+                  {renderInline(item.text)}
+                  {isLastOfStream && (
+                    <span className="inline-block w-1.5 h-3.5 bg-blue-400 ml-1 align-middle animate-pulse" />
+                  )}
+                </span>
+              </li>
+            );
+          })}
+        </ol>
+      );
+      orderedBuffer = [];
+    }
+  };
+
+  for (; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    const bulletMatch = trimmed.match(/^([•\-\*])\s+(.+)/);
+    if (bulletMatch) {
+      flushOrdered();
+      bulletBuffer.push(bulletMatch[2]);
+      continue;
+    }
+
+    const orderedMatch = trimmed.match(/^(Step\s*)?(\d+)[.:\)]\s+(.+)/i);
+    if (orderedMatch) {
+      flushBullets();
+      orderedBuffer.push({ num: orderedMatch[2], text: orderedMatch[3] });
+      continue;
+    }
+
+    const h3Match = trimmed.match(/^###\s+(.+)/);
+    if (h3Match) {
+      flushBullets();
+      flushOrdered();
+      const isLastOfStream = isStreaming && i === lines.length - 1;
+      elements.push(
+        <p key={i} className="font-semibold text-blue-300 mt-4 mb-1 text-sm">
+          {h3Match[1]}
+          {isLastOfStream && (
+            <span className="inline-block w-1.5 h-3.5 bg-blue-400 ml-1 align-middle animate-pulse" />
+          )}
+        </p>
+      );
+      continue;
+    }
+    const h2Match = trimmed.match(/^##\s+(.+)/);
+    if (h2Match) {
+      flushBullets();
+      flushOrdered();
+      const isLastOfStream = isStreaming && i === lines.length - 1;
+      elements.push(
+        <p key={i} className="font-bold text-white mt-4 mb-1">
+          {h2Match[1]}
+          {isLastOfStream && (
+            <span className="inline-block w-1.5 h-3.5 bg-blue-400 ml-1 align-middle animate-pulse" />
+          )}
+        </p>
+      );
+      continue;
+    }
+
+    if (trimmed === '') {
+      flushBullets();
+      flushOrdered();
+      if (elements.length > 0) elements.push(<div key={`gap-${i}`} className="h-2" />);
+      continue;
+    }
+
+    flushBullets();
+    flushOrdered();
+    const isLastOfStream = isStreaming && i === lines.length - 1;
+    elements.push(
+      <p key={i} className="text-slate-200 leading-relaxed">
+        {renderInline(trimmed)}
+        {isLastOfStream && (
+          <span className="inline-block w-1.5 h-3.5 bg-blue-400 ml-1 align-middle animate-pulse" />
+        )}
+      </p>
+    );
+  }
+
+  flushBullets();
+  flushOrdered();
+
+  return <div className="space-y-2 border-l-2 border-blue-500/20 pl-3">{elements}</div>;
+}
+
 const cleanSummaryFields = (summary: PolicySummary | null | undefined): PolicySummary | null => {
   if (!summary) return null;
 
   const cleanText = (text: string | undefined): string => {
     if (!text) return '';
-    return text
-      .split(/\n{2,}/)
-      .filter(Boolean)
-      .map(p => p.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim())
-      .join('\n\n');
+    return text.trim();
   };
 
   const cleanBullets = (bulletsText: string | undefined): string => {
@@ -1020,11 +1183,14 @@ export default function DocumentDetailPage() {
     }
     if (!text || !text.trim()) return;
 
-    setLastSpokenText(text);
+    const cleanText = stripMarkdownForSpeech(text);
+    if (!cleanText) return;
+
+    setLastSpokenText(cleanText);
     setLastSpokenLang(lang);
     setLastSpokenOnStop(() => onStop);
 
-    const textToSpeak = startOffset > 0 ? text.substring(startOffset) : text;
+    const textToSpeak = startOffset > 0 ? cleanText.substring(startOffset) : cleanText;
 
     const stopHandler = () => {
       if (audioRef.current) {
@@ -2308,30 +2474,12 @@ export default function DocumentDetailPage() {
                     )}
 
                     {((isStreaming && streamingText) || (streamingText && !displayedSummary?.summary_text)) ? (
-                      <div className="space-y-4">
-                        {streamingText.split(/\n{2,}/).filter(Boolean).map((para: string, i: number) => (
-                          <p key={i} className="leading-7 text-slate-200 border-l-2 border-blue-500/20 pl-3">
-                            {para.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim()}
-                          </p>
-                        ))}
-                        {isStreaming && (
-                          <span
-                            className="inline-block w-0.5 h-4 bg-blue-400 ml-0.5 align-middle"
-                            style={{ animation: 'blink 1s step-end infinite' }}
-                          />
-                        )}
-                      </div>
+                      <FormattedSummary content={streamingText} isStreaming={isStreaming} />
                     ) : null}
 
                     {/* Final persisted summary — shown after stream completes and DB is updated */}
                     {!isStreaming && displayedSummary?.summary_text && (
-                      <div className="space-y-4">
-                        {displayedSummary.summary_text.split('\n\n').filter(Boolean).map((para: string, i: number) => (
-                          <p key={i} className="leading-7 text-slate-200 border-l-2 border-blue-500/20 pl-3">
-                            {para.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim()}
-                          </p>
-                        ))}
-                      </div>
+                      <FormattedSummary content={displayedSummary.summary_text} />
                     )}
 
                     {/* Error state */}

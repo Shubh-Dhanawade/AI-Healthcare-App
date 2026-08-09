@@ -114,17 +114,19 @@ DOCUMENT:
 
 
 # ── PROMPT 2: Generates the prose summary paragraph ──
-PROSE_SUMMARY_PROMPT = """You are a senior healthcare insurance analyst. Write a clean, professional, factual summary of **around 300 to 350 words** of the insurance document below for the policyholder.
+PROSE_SUMMARY_PROMPT = """You are a senior healthcare insurance analyst. Write a structured, professional, factual executive summary of the insurance policy document below for the policyholder.
 
 CRITICAL RULES:
-- Start IMMEDIATELY with the first sentence of the summary using the actual insurer and actual plan name from the document (e.g. "Your [Insurer Name] [Plan Name] health insurance policy..."). Do NOT output any intro or preamble (e.g., do NOT write "Here is the summary:", "Factual summary:", "Based on the document:").
-- Write in a natural, professional, and well-synthesized flow based on the report data (do NOT make it read like a dry copy-paste of direct sentences from the document).
-- Do NOT use any markdown formatting, bold tags (**), lists, bullet points, or headers. Write only simple, plain text paragraphs separated by a blank line.
-- Use second person ("Your policy...").
-- Keep it around 300 to 350 words total, making sure to mention all key details (Insurer, Policy Number, Insured Person, Sum Insured, Premium, Deductibles, Exclusions, and Claims TAT).
-- Every fact, name, number, date must come directly from the document. Do NOT assume or invent any values.
-- Do NOT confuse Indian numbering formats (e.g. 10,00,000 is 10 Lakhs) with US formatting (e.g. 10,00,000 is 1 Crore / 10 Million). Represent the correct sum insured (e.g. 10 Lakhs, NOT 1 Crore).
-- Clearly distinguish between specific selections chosen by the policyholder in their Policy Schedule (e.g. "Aggregate Deductible: No" means no deductible is in force) and generic plan descriptions or brochure notes (e.g. notes explaining what happens if a 5L or 10L deductible is in force). Only report values that are active/selected for the policyholder.
+- Use markdown formatting with clear headings (###) and bullet points to structure the summary into sections:
+  ### Policy Details & Validity
+  ### Covered Persons & Premium
+  ### Key Coverage & Benefits
+  ### Waiting Periods & Exclusions
+  ### Cashless & Claims Process
+- Start IMMEDIATELY with the policy details. Do NOT output any conversational preamble or introduction (e.g., do NOT write "Here is the summary:", "Factual summary:", "Okay, here's a breakdown...", "Based on the document:"). Start directly with the first section heading.
+- Under each heading, use bullet points (e.g., "* **Sum Insured:** ₹20,00,000") to list the facts. Make sure all facts are highly accurate and come directly from the document.
+- Distinguish clearly between options specifically selected/active for this policyholder and generic tables or brochures. Only report values that are active/selected for the policyholder.
+- Keep the summary clean, concise, and professional.
 
 DOCUMENT:
 {document_text}"""
@@ -1308,8 +1310,8 @@ async def warmup_model() -> None:
             "prompt": "hi",
             "stream": False,
             "keep_alive": parse_keep_alive(settings.OLLAMA_KEEP_ALIVE),
-            # Use num_ctx=8192: same as all inference calls to avoid costly reload on first request
-            "options": {"num_predict": 1, "num_ctx": 8192, "temperature": 0},
+            # Use num_ctx from settings: same as all inference calls to avoid costly reload on first request
+            "options": {"num_predict": 1, "num_ctx": settings.OLLAMA_NUM_CTX, "temperature": 0},
         }
         async with httpx.AsyncClient(timeout=30.0) as client:
             await client.post(url, json=payload)
@@ -1323,7 +1325,7 @@ async def call_ollama(
     prompt: str,
     model: Optional[str] = None,
     num_predict: int = 512,
-    num_ctx: int = 8192,  # Must match warmup num_ctx to avoid KV cache reload
+    num_ctx: Optional[int] = None,
 ) -> str:
     """Call Ollama API using shared connection pool with GPU-accelerated settings."""
     from app.services.ollama_client import call_ollama as _pooled_call
@@ -1509,7 +1511,6 @@ async def generate_summary(document_text: str, force_regenerate: bool = False) -
         bullets_response = await call_ollama(
             BULLETS_EXTRACTION_PROMPT.format(document_text=context),
             num_predict=700,   # Bullets only — enough for 4 sections × 4 bullets
-            num_ctx=8192,      # Matches warmup num_ctx — no model reload needed
         )
         bullets_parsed = extract_json_from_response(bullets_response)
         if bullets_parsed:
@@ -1527,7 +1528,6 @@ async def generate_summary(document_text: str, force_regenerate: bool = False) -
         prose_response = await call_ollama(
             PROSE_SUMMARY_PROMPT.format(document_text=context),
             num_predict=600,   # Prose only — 4-5 paragraphs, ~120-150 words
-            num_ctx=8192,      # Matches warmup num_ctx — no model reload needed
         )
         # Prose response is plain text, not JSON
         prose_clean = prose_response.strip()
@@ -1599,7 +1599,6 @@ async def extract_policy_fields(document_text: str, force_regenerate: bool = Fal
         response = await call_ollama(
             FIELD_EXTRACTION_PROMPT.format(document_text=context),
             num_predict=500,
-            num_ctx=8192,      # Consistent with warmup — no model reload
         )
         result = extract_json_from_response(response)
         if result:
@@ -1741,7 +1740,6 @@ async def analyze_risks(document_text: str, force_regenerate: bool = False) -> d
         response = await call_ollama(
             RISK_ANALYSIS_PROMPT.format(document_text=context),
             num_predict=700,
-            num_ctx=8192,      # Consistent with warmup — no model reload
         )
         result = extract_json_from_response(response)
         if result.get("risks"):
