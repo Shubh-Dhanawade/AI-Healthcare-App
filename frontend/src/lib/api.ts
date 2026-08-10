@@ -17,7 +17,7 @@ const apiClient = axios.create({
 apiClient.interceptors.request.use(
   (config) => {
     if (typeof window !== 'undefined') {
-      const token = localStorage.getItem('access_token');
+      const token = sessionStorage.getItem('access_token');
       if (token) {
         config.headers.Authorization = `Bearer ${token}`;
       }
@@ -36,8 +36,8 @@ apiClient.interceptors.response.use(
       typeof window !== 'undefined' && 
       window.location.pathname !== '/login'
     ) {
-      localStorage.removeItem('access_token');
-      localStorage.removeItem('user');
+      sessionStorage.removeItem('access_token');
+      sessionStorage.removeItem('user');
       window.location.href = '/login';
     }
     return Promise.reject(error);

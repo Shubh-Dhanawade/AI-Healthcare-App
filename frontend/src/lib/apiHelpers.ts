@@ -218,7 +218,7 @@ export const exportApi = {
   },
   
   getExportUrl: (id: string) => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
+    const token = typeof window !== 'undefined' ? sessionStorage.getItem('access_token') : null;
     const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
     return `${baseUrl}/documents/${id}/export${token ? `?token=${token}` : ''}`;
   }

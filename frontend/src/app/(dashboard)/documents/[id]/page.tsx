@@ -1360,7 +1360,7 @@ export default function DocumentDetailPage() {
     setStreamingText('');
     setStreamError(null);
 
-    const token = localStorage.getItem('access_token');
+    const token = sessionStorage.getItem('access_token');
     const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
     const controller = new AbortController();
     streamAbortRef.current = controller;
@@ -1663,7 +1663,7 @@ export default function DocumentDetailPage() {
         content: m.isUser ? m.query : m.answer
       }));
 
-      const token = localStorage.getItem('access_token');
+      const token = sessionStorage.getItem('access_token');
       const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
 
       const response = await fetch(`${API_URL}/ai/chat/stream`, {

@@ -335,7 +335,7 @@ export default function ChatPage() {
     // Add empty assistant message slot for streaming
     setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
 
-    const token = localStorage.getItem('access_token');
+    const token = sessionStorage.getItem('access_token');
     const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
 
     try {
