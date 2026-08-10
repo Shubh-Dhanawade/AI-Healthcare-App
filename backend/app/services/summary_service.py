@@ -47,11 +47,17 @@ async def generate_and_store_summary(
             logger.info(f"[SUMMARY] Existing DB summary found for {doc_id}, skipping generation.")
             return existing
 
+    from app.models.document import Document
+    from sqlalchemy import select
+    res = await db.execute(select(Document).where(Document.id == doc_id))
+    doc = res.scalar_one_or_none()
+    is_ocr = (doc.file_type == "image" or doc.extraction_method in ("easyocr", "paddleocr")) if doc else False
+
     # Commit to release any held DB locks before the slow Ollama call
     await db.commit()
 
     from app.services.ai_service import generate_summary
-    summary_data = await generate_summary(text, force_regenerate=force_regenerate)
+    summary_data = await generate_summary(text, force_regenerate=force_regenerate, is_ocr=is_ocr)
 
     # Save freshly generated summary to DB
     summary = Summary(
