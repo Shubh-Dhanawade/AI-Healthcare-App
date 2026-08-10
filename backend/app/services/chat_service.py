@@ -57,14 +57,18 @@ def _text_search_fallback(query: str, policies: List[Dict[str, Any]], top_k: int
         "who is covered": ["insured person", "covered person", "insured members", "member list",
                             "family members", "policy members", "persons insured"],
     }
-    expanded_words = set(re.findall(r'\w+', query_lower))
+    original_tokens = set(re.findall(r'\w+', query_lower))
+    original_words = [w for w in original_tokens if len(w) > 2 and w not in _STOP_WORDS]
+    
+    synonym_words = set()
     for base_term, syns in SYNONYMS.items():
         if any(s in query_lower for s in [base_term] + syns):
             for s in syns:
-                expanded_words.update(s.split())
+                for w in s.split():
+                    if w not in _STOP_WORDS and w not in original_words:
+                        synonym_words.add(w)
 
-    query_words = [w for w in expanded_words if len(w) > 2 and w not in _STOP_WORDS]
-    if not query_words:
+    if not original_words:
         return []
 
     hits: List[Dict[str, Any]] = []
@@ -92,15 +96,20 @@ def _text_search_fallback(query: str, policies: List[Dict[str, Any]], top_k: int
 
         for pos, chunk in chunks:
             chunk_lower = chunk.lower()
-            score = sum(chunk_lower.count(w) for w in query_words)
+            # Original words count for 5 points each
+            orig_score = sum(chunk_lower.count(w) * 5 for w in original_words)
+            # Synonyms count for 1 point each
+            syn_score = sum(chunk_lower.count(w) for w in synonym_words)
+            score = orig_score + syn_score
+            
             if score > 0:
                 # Boost chunks from benefit schedule / coverage sections (tables)
                 schedule_boost = 0
                 if any(k in chunk_lower for k in ["schedule of benefits", "section", "covered upto", "covered up to", "at actuals", "1.1", "1.2"]):
-                    schedule_boost = 3
+                    schedule_boost = 15
                 # Additional boost if exact query terms appear in chunk
-                if any(qw in chunk_lower for qw in query_words if len(qw) > 3):
-                    schedule_boost += 2
+                if any(qw in chunk_lower for qw in original_words if len(qw) > 3):
+                    schedule_boost += 10
 
                 page_num = 1
                 page_match = re.search(r'\[Page (\d+)\]', chunk)
@@ -343,22 +352,28 @@ async def prepare_chat_rag_prompt(
             logger.error(f"Structured context fetch failed: {se}")
             structured_context = ""
 
-        seen_texts: set = set()
-        combined_chunks: List[Dict[str, Any]] = []
+        # Reciprocal Rank Fusion (RRF) to combine results
+        rrf_scores = {}
+        
+        for rank, kc in enumerate(keyword_chunks):
+            key = kc["text"][:80].lower().strip()
+            rrf_scores[key] = {"chunk": kc, "k_rank": rank, "v_rank": None}
+            
+        for rank, vc in enumerate(vector_chunks):
+            key = vc["text"][:80].lower().strip()
+            if key not in rrf_scores:
+                rrf_scores[key] = {"chunk": vc, "k_rank": None, "v_rank": rank}
+            else:
+                rrf_scores[key]["v_rank"] = rank
 
-        for kc in keyword_chunks:
-            kc_key = kc["text"][:80].lower().strip()
-            if kc_key not in seen_texts:
-                seen_texts.add(kc_key)
-                combined_chunks.append(kc)
-
-        for vc in vector_chunks:
-            vc_key = vc["text"][:80].lower().strip()
-            if vc_key not in seen_texts:
-                seen_texts.add(vc_key)
-                combined_chunks.append(vc)
-
-        combined_chunks.sort(key=lambda x: x.get("score", 0.0), reverse=True)
+        combined_chunks = []
+        for key, info in rrf_scores.items():
+            k_score = 1.0 / (60 + info["k_rank"]) if info["k_rank"] is not None else 0.0
+            v_score = 1.0 / (60 + info["v_rank"]) if info["v_rank"] is not None else 0.0
+            info["chunk"]["rrf_score"] = k_score + v_score
+            combined_chunks.append(info["chunk"])
+            
+        combined_chunks.sort(key=lambda x: x["rrf_score"], reverse=True)
         filtered_chunks = combined_chunks[:top_k]
 
         prompt = build_chat_prompt(
@@ -375,8 +390,8 @@ async def prepare_chat_rag_prompt(
     except Exception as prep_err:
         logger.error(f"Error in prepare_chat_rag_prompt: {prep_err}", exc_info=True)
         fallback_prompt = (
-            f"You are HealthPolicyLens, a healthcare insurance assistant helping {user_name}.\n"
-            f"User Query: {query}\n\nAnswer directly based on standard health insurance policy rules."
+            f"You are HealthPolicyLens, a healthcare insurance assistant helping there.\n"
+            f"User Query: query\n\nAnswer directly based on standard health insurance policy rules."
         )
         return fallback_prompt, [], False
 
@@ -386,6 +401,8 @@ async def run_chat_query_stream_with_prompt(
     filtered_chunks: List[Dict[str, Any]],
     is_chitchat: bool = False,
     is_comparison: bool = False,
+    policies: List[Dict[str, Any]] = None,
+    query: str = "",
 ) -> AsyncGenerator[str, None]:
     """Stream LLM tokens using a pre-constructed prompt (zero DB dependency during streaming)."""
     start_time = time.time()
@@ -432,14 +449,159 @@ async def run_chat_query_stream_with_prompt(
         logger.info(f"⏱️ Streaming complete in {total_time:.4f}s [First Token: {first_token_time:.4f}s]")
 
     except Exception as e:
-        error_str = str(e).lower()
-        if "timeout" in error_str or "connect" in error_str or "read" in error_str:
-            logger.error(f"Streaming timed out (model may have been cold-loading): {e}")
-            fallback_msg = "\n⏳ The AI model is loading into memory — this takes ~20 seconds on first use. Please **send your message again** and it will respond instantly."
-        else:
-            logger.error(f"Streaming failed: {e}")
-            fallback_msg = "\n❌ Failed to generate a response. Please try again in a moment."
-        yield fallback_msg
+        logger.error(f"Streaming call to Ollama failed (falling back to fast smart QA): {e}")
+        
+        # Call smart fallback QA engine
+        fallback_msg = generate_smart_fallback_answer(query, policies)
+        
+        # Stream the fallback message token-by-token
+        import re
+        for token in re.split(r'(\s+)', fallback_msg):
+            if token:
+                yield token
+                await asyncio.sleep(0.01)
+
+
+def generate_smart_fallback_answer(query: str, policies: List[Dict[str, Any]]) -> str:
+    """Generate a highly accurate, rule-based QA response based on extracted fields and document text when LLM fails."""
+    if not policies:
+        return "I couldn't access your policy data to answer that. Please make sure your policy document is uploaded."
+
+    query_lower = query.lower()
+    
+    # Identify the primary target document (first one by default, or matched by filename)
+    doc = policies[0]
+    for p in policies:
+        if p.get("filename", "").lower() in query_lower:
+            doc = p
+            break
+            
+    fields = doc.get("extracted_fields", [])
+    text = doc.get("text", "")
+    summary = doc.get("summary", {})
+    
+    # Helper to look up a field value by name
+    def get_field(field_name: str) -> Optional[str]:
+        for f in fields:
+            if f.get("field_name", "").lower() == field_name.lower():
+                return f.get("field_value")
+        return None
+
+    # 1. SUM INSURED
+    if any(k in query_lower for k in ["sum insured", "sum assured", "coverage limit", "si ", " assured"]):
+        si_val = get_field("Sum Insured")
+        if si_val:
+            return f"The Sum Insured under the policy **{doc.get('filename')}** is **{si_val}**."
+        
+    # 2. PREMIUM
+    if any(k in query_lower for k in ["premium", "cost", "pay"]):
+        prem_val = get_field("Premium Amount")
+        if prem_val:
+            return f"The premium for the policy **{doc.get('filename')}** is **₹{prem_val}**."
+            
+    # 3. COVERED MEMBERS
+    if any(k in query_lower for k in ["who is covered", "covered member", "members", "person", "insured person", "proposer", "policyholder"]):
+        members = get_field("Covered Members")
+        insured = get_field("Insured Person")
+        resp = ""
+        if insured:
+            resp += f"The primary policyholder/insured person is **{insured}**.\n"
+        if members:
+            resp += f"The covered members under this policy are: **{members}**."
+        if resp:
+            return resp
+
+    # 4. WAITING PERIOD
+    if any(k in query_lower for k in ["waiting period", "ped", "pre-existing", "pre existing"]):
+        ped_wait = get_field("Pre Existing Coverage")
+        wait_wp = get_field("Waiting Period")
+        resp = "Here are the waiting periods for **" + doc.get('filename') + "**:\n"
+        
+        # Extract using regex
+        import re
+        text_clean = re.sub(r'\s+', ' ', text)
+        m1 = re.search(r'Pre-existing diseases waiting period.*?(?:Code-Excl01)?[:\s\-]*([\d\s/]+months)', text_clean, re.IGNORECASE)
+        ped_reg = m1.group(1).strip() if m1 else None
+        
+        m2 = re.search(r'Specified Disease/Procedure waiting period.*?[:\s\-]*(\d+\s*months)', text_clean, re.IGNORECASE)
+        spec_reg = m2.group(1).strip() if m2 else None
+        
+        m3 = re.search(r'Initial waiting Period.*?[:\s\-]*(\d+\s*days)', text_clean, re.IGNORECASE)
+        init_reg = m3.group(1).strip() if m3 else None
+        
+        found_any = False
+        if ped_reg or ped_wait:
+            resp += f"- **Pre-existing diseases waiting period**: {ped_reg or ped_wait}\n"
+            found_any = True
+        if spec_reg:
+            resp += f"- **Specified diseases/procedures waiting period**: {spec_reg}\n"
+            found_any = True
+        if init_reg or wait_wp:
+            resp += f"- **Initial waiting period**: {init_reg or wait_wp}\n"
+            found_any = True
+            
+        if found_any:
+            return resp
+        if summary.get("waiting_period_summary"):
+            return f"Here is the waiting period summary:\n{summary.get('waiting_period_summary')}"
+
+    # 5. EXCLUSIONS
+    if any(k in query_lower for k in ["exclusion", "not covered", "exclude", "not pay"]):
+        mat = get_field("Maternity Coverage")
+        room = get_field("Room Rent Limit")
+        resp = "Here are the exclusions and limits for **" + doc.get('filename') + "**:\n"
+        if mat:
+            resp += f"- **Maternity Coverage**: {mat}\n"
+        if room:
+            resp += f"- **Room Rent Limit**: {room}\n"
+        if summary.get("exclusions_summary"):
+            resp += f"\nSpecific exclusions:\n{summary.get('exclusions_summary')}"
+            return resp
+        if mat or room:
+            return resp
+
+    # 6. RENEWAL / EXPIRY / TERM
+    if any(k in query_lower for k in ["expiry", "expiration", "renew", "due date", "term", "valid"]):
+        term = get_field("Policy Term")
+        renew = get_field("Renewal Date")
+        resp = ""
+        if term:
+            resp += f"The Policy Term/Period of Insurance is **{term}**.\n"
+        if renew:
+            resp += f"The policy is due for renewal on **{renew}**."
+        if resp:
+            return resp
+
+    # 7. INSURER / POLICY NAME
+    if any(k in query_lower for k in ["insurer", "insurance company", "policy name", "product name", "plan"]):
+        insurer_name = get_field("Insurer Name")
+        pol_name = get_field("Policy Name")
+        resp = ""
+        if pol_name:
+            resp += f"The plan/policy name is **{pol_name}**.\n"
+        if insurer_name:
+            resp += f"It is issued by **{insurer_name}**."
+        if resp:
+            return resp
+
+    # 8. NETWORK HOSPITALS
+    if any(k in query_lower for k in ["hospital", "network", "cashless"]):
+        hosp = get_field("Network Hospitals")
+        if hosp:
+            return f"The policy covers cashless treatment at **{hosp}** network hospitals."
+
+    # 9. GENERAL TEXT RAG FALLBACK
+    from app.services.rag_service import generate_mock_qa_answer
+    fallback_rag = generate_mock_qa_answer(query, text)
+    if fallback_rag and len(fallback_rag) > 30 and "failed" not in fallback_rag.lower() and "unavailable" not in fallback_rag.lower():
+        return fallback_rag
+
+    # 10. Summary fallback
+    sum_text = summary.get("summary_text", "")
+    if sum_text:
+        return f"Here is a summary of the policy **{doc.get('filename')}**:\n\n{sum_text[:400]}..."
+        
+    return "I couldn't find a specific answer to that in the policy document. Please refer to the Policy Schedule or terms for detailed information."
 
 
 async def run_chat_query_stream(
@@ -459,7 +621,14 @@ async def run_chat_query_stream(
         user_name=user_name
     )
     is_comparison = _is_comparison_query(query) and len(policies) > 1
-    async for token in run_chat_query_stream_with_prompt(prompt, filtered_chunks, is_chitchat=is_short, is_comparison=is_comparison):
+    async for token in run_chat_query_stream_with_prompt(
+        prompt,
+        filtered_chunks,
+        is_chitchat=is_short,
+        is_comparison=is_comparison,
+        policies=policies,
+        query=query
+    ):
         yield token
 
 

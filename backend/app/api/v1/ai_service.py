@@ -623,7 +623,10 @@ async def query_chatbot_stream(
         query_stmt = query_stmt.where(Document.id == request.document_id)
     else:
         query_stmt = query_stmt.where(Document.status.in_(["completed", "summarized", "text_extracted"]))
-    query_stmt = query_stmt.options(selectinload(Document.summary))
+    query_stmt = query_stmt.options(
+        selectinload(Document.summary),
+        selectinload(Document.extracted_fields)
+    )
 
     res = await db.execute(query_stmt)
     docs = res.scalars().all()
@@ -643,7 +646,6 @@ async def query_chatbot_stream(
             yield response_text
         return StreamingResponse(empty_generator(), media_type="text/plain", headers={"X-Chat-Session-Id": session_id_val})
 
-    # 3. Package policy data for RAG
     policies_data = [
         {
             "id": d.id,
@@ -655,7 +657,11 @@ async def query_chatbot_stream(
                 "coverage_summary": d.summary.coverage_summary if d.summary else "",
                 "exclusions_summary": d.summary.exclusions_summary if d.summary else "",
                 "waiting_period_summary": d.summary.waiting_period_summary if d.summary else "",
-            }
+            },
+            "extracted_fields": [
+                {"field_name": f.field_name, "field_value": f.field_value}
+                for f in d.extracted_fields
+            ]
         }
         for d in docs
     ]
@@ -685,7 +691,9 @@ async def query_chatbot_stream(
                 prompt,
                 filtered_chunks,
                 is_chitchat=is_short,
-                is_comparison=is_comparison_val
+                is_comparison=is_comparison_val,
+                policies=policies_data,
+                query=query_text_val
             ):
                 yield token
                 full_response += token
