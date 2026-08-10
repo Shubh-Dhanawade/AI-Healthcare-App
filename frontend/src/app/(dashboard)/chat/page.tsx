@@ -244,7 +244,7 @@ export default function ChatPage() {
   const [isThinking, setIsThinking] = useState(false);
   const [isLoadingSessions, setIsLoadingSessions] = useState(true);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
-  const [selectedDocIds, setSelectedDocIds] = useState<string[]>([]);
+  const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -317,10 +317,9 @@ export default function ChatPage() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const handleToggleDoc = (docId: string) => {
-    setSelectedDocIds(prev =>
-      prev.includes(docId) ? prev.filter(id => id !== docId) : [...prev, docId]
-    );
+  const handleSelectDoc = (docId: string | null) => {
+    setSelectedDocId(docId);
+    setIsDropdownOpen(false);
   };
 
   const handleSend = async (textToSend: string) => {
@@ -347,7 +346,7 @@ export default function ChatPage() {
         },
         body: JSON.stringify({
           query: textToSend,
-          document_ids: selectedDocIds.length > 0 ? selectedDocIds : undefined,
+          document_ids: selectedDocId ? [selectedDocId] : undefined,
           session_id: activeSessionId || undefined
         })
       });
@@ -439,20 +438,17 @@ export default function ChatPage() {
   };
 
   const getSelectedDocsLabel = () => {
-    if (selectedDocIds.length === 0) return "Query All Policies (Default)";
-    if (selectedDocIds.length === 1) {
-      const doc = activeDocs.find(d => d.id === selectedDocIds[0]);
-      return doc ? doc.original_filename : "1 policy selected";
-    }
-    return `${selectedDocIds.length} policies selected`;
+    if (!selectedDocId) return "Query All Policies (Default)";
+    const doc = activeDocs.find(d => d.id === selectedDocId);
+    return doc ? doc.original_filename : "Policy selected";
   };
 
   // Active query mode indicator
-  const queryModeInfo = selectedDocIds.length === 0
+  const queryModeInfo = !selectedDocId
     ? { icon: Globe, label: 'All your documents', color: '#60a5fa', bg: 'rgba(59,130,246,0.12)', border: 'rgba(59,130,246,0.25)' }
     : {
         icon: FileText,
-        label: `${selectedDocIds.length} document${selectedDocIds.length > 1 ? 's' : ''} selected`,
+        label: '1 document selected',
         color: '#5eead4',
         bg: 'rgba(20,184,166,0.12)',
         border: 'rgba(20,184,166,0.25)'
@@ -561,22 +557,30 @@ export default function ChatPage() {
                       </div>
                     ) : (
                       <div className="p-1 space-y-1">
+                        {/* Default / Reset option */}
+                        <button
+                          onClick={() => handleSelectDoc(null)}
+                          className={`w-full px-3 py-2 rounded-lg text-left text-xs font-semibold border-b border-slate-800 pb-2 mb-1 transition-all ${
+                            !selectedDocId
+                              ? 'text-teal-400 bg-teal-500/5'
+                              : 'text-slate-400 hover:text-white hover:bg-white/5'
+                          }`}
+                        >
+                          Query All Policies (Default)
+                        </button>
                         {activeDocs.map((doc) => {
-                          const isSelected = selectedDocIds.includes(doc.id);
+                          const isSelected = selectedDocId === doc.id;
                           return (
                             <button
                               key={doc.id}
-                              onClick={() => handleToggleDoc(doc.id)}
-                              className="flex items-center justify-between w-full px-3 py-2 rounded-lg text-left text-sm text-slate-300 hover:text-white hover:bg-white/5 transition-all"
-                            >
-                              <span className="truncate pr-4">{doc.original_filename}</span>
-                              <div className={`w-4.5 h-4.5 rounded border flex items-center justify-center transition-all ${
+                              onClick={() => handleSelectDoc(doc.id)}
+                              className={`w-full px-3 py-2 rounded-lg text-left text-sm transition-all ${
                                 isSelected
-                                  ? 'bg-blue-600 border-blue-500 text-white'
-                                  : 'border-slate-600'
-                              }`}>
-                                {isSelected && <Check className="w-3.5 h-3.5 stroke-[3]" />}
-                              </div>
+                                  ? 'text-teal-400 bg-teal-500/5 font-semibold animate-fade-in'
+                                  : 'text-slate-300 hover:text-white hover:bg-white/5'
+                              }`}
+                            >
+                              <span className="truncate block pr-2">{doc.original_filename}</span>
                             </button>
                           );
                         })}
@@ -726,8 +730,8 @@ export default function ChatPage() {
                     </div>
                     <div className="bg-slate-900/60 border border-slate-800 text-slate-400 rounded-2xl rounded-tl-none px-5 py-3.5 text-sm flex items-center gap-2 backdrop-blur-md">
                       <Loader2 className="w-4 h-4 animate-spin text-teal-400" />
-                      {selectedDocIds.length > 0
-                        ? `Searching ${selectedDocIds.length} selected document${selectedDocIds.length > 1 ? 's' : ''}...`
+                      {selectedDocId
+                        ? 'Searching selected document...'
                         : 'Thinking and searching all policies...'}
                     </div>
                   </div>
@@ -752,8 +756,8 @@ export default function ChatPage() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 placeholder={
-                  selectedDocIds.length > 0
-                    ? `Ask about ${selectedDocIds.length} selected document${selectedDocIds.length > 1 ? 's' : ''}...`
+                  selectedDocId
+                    ? 'Ask a question about this policy...'
                     : 'Ask a question about your policies...'
                 }
                 disabled={isSending}
