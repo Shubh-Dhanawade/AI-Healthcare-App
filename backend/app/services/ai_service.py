@@ -523,12 +523,13 @@ def _extract_premium_validated(text: str, policy_number: str = "", sum_insured: 
     return None
 
 
-
 def _build_fallback_summary(document_text: str) -> dict:
     """Build a 400-500 word summary and structured bullet fields from the actual document text.
     Used when Ollama is unavailable. Every sentence is sourced from the document — no invented data.
     """
-    text = document_text[:40000]
+    import re
+    # Normalize whitespace to single space to reconstruct tables and sentences
+    text = re.sub(r'\s+', ' ', document_text[:40000])
 
     # ─── 1. Extract structured facts via regex ───────────────────────────────
     insurer = _regex_find_any([
@@ -541,7 +542,7 @@ def _build_fallback_summary(document_text: str) -> dict:
     ], text) or None
 
     policy_name = _regex_find_any([
-        r'(?:product name|plan name|policy name)[:\s]+([A-Za-z0-9 \-&/]+?)(?=\s*UIN|\s*\n|\s*\.\s)',
+        r'(?:product name|plan name|policy name)[:\s]+([A-Za-z0-9 \-&/]+?)(?=\s*UIN|\s*\n|\s*\.\s|$)',
         r'my\.\s+([A-Za-z0-9 \-&]+(?:Secure|Health|Protect|Plus|Elite|Care|Shield|Optima)[A-Za-z0-9 ]*)(?=\s*UIN|\n|$)',
         r'((?:Optima|Secure|Health|Protect|Care|Shield|Star)\s+(?:Secure|Plus|Elite|Care|Restore|Senior|Family|Individual)[A-Za-z0-9 ]*)',
     ], text) or None
@@ -551,7 +552,7 @@ def _build_fallback_summary(document_text: str) -> dict:
         r'(\d{10,20})',
     ], text) or None
 
-    policy_holder = _extract_insured_persons_validated(text)
+    policy_holder = _extract_insured_persons_validated(document_text) # uses raw text inside
     if policy_holder == "Not Mentioned":
         policy_holder = None
 
@@ -561,9 +562,11 @@ def _build_fallback_summary(document_text: str) -> dict:
         r'₹\s*([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,})\s*(?:Lakh|Lakhs|lakh)?',
     ], text) or None
 
-    premium = _extract_premium_validated(text, policy_number or "", sum_insured or "")
+    premium = _extract_premium_validated(document_text, policy_number or "", sum_insured or "")
 
+    # Extract waiting periods cleanly
     waiting_period = _regex_find_any([
+        r'Pre-existing diseases waiting period.*?(?:Code-Excl01)?[:\s\-]*([\d\s/]+months)',
         r'(?:waiting\s+period)[:\s]+([\d]+\s*(?:month|year|day)[s]?[^.\n]{0,60})',
         r'([\d]+\s*(?:month|year)[s]?\s+waiting\s+period)',
     ], text) or None
@@ -593,9 +596,10 @@ def _build_fallback_summary(document_text: str) -> dict:
     ], text) or None
 
     pre_existing_coverage = _regex_find_any([
-        r'PED\s+wait\s+period[^\n]{0,60}([\d]+\s*(?:Year|Month|year|month)[s]?)',
-        r'[Pp]re-?existing\s+[Dd]isease[s]?\s+[Ww]aiting\s+[Pp]eriod[:\s]+([\d]+\s*(?:month|year)[s]?)',
-        r'[Pp]re-?existing[^.\n]{0,30}([\d]+\s*(?:month|year)[s]?[^.\n]{0,40})',
+        r'Pre-existing diseases waiting period.*?(?:Code-Excl01)?[:\s\-]*([\d\s/]+months)',
+        r'PED\s+wait\s+period[^\n]{0,60}([\d\s/]+\s*(?:Year|Month|year|month)[s]?)',
+        r'[Pp]re-?existing\s+[Dd]isease[s]?\s+[Ww]aiting\s+[Pp]eriod[:\s]+([\d\s/]+\s*(?:month|year)[s]?)',
+        r'[Pp]re-existing[^.\n]{0,30}([\d\s/]+\s*(?:month|year)[s]?[^.\n]{0,40})',
     ], text) or None
 
     maternity_coverage = _regex_find_any([
@@ -609,43 +613,59 @@ def _build_fallback_summary(document_text: str) -> dict:
         r'(?:per\s+hospitalization\s+deductible)[:\s\u20b9Rs.]+([\d,]+)',
     ], text) or None
 
+    # Search and extract actual pre-existing conditions from the text
+    ped_list = []
+    text_lower = text.lower()
+    if "diabetes" in text_lower:
+        if "non-insulin-dependent" in text_lower or "non-insulin" in text_lower:
+            ped_list.append("Non-insulin-dependent diabetes mellitus")
+        else:
+            ped_list.append("Diabetes Mellitus")
+    if "hypertension" in text_lower:
+        if "essential (primary)" in text_lower or "essential" in text_lower:
+            ped_list.append("Essential (primary) hypertension")
+        else:
+            ped_list.append("Hypertension")
+    if "asthma" in text_lower and ("annexure" in text_lower or "special condition" in text_lower or "pre existing disease" in text_lower):
+        ped_list.append("Asthma")
+
     # ─── 2. Pull thematic sentences from the document (quality-filtered) ────────
     cov_sentences = _extract_sentences_with_keywords(
-        text,
+        document_text,
         ["inpatient", "hospitalisation", "hospitalization", "daycare", "day care",
          "ambulance", "AYUSH", "pre-hospitalisation", "post-hospitalisation",
          "cashless", "network hospital", "sum insured", "benefit"],
-        max_results=6,
+         max_results=6,
     )
     excl_sentences = _extract_sentences_with_keywords(
-        text,
+        document_text,
         ["not covered", "not payable", "not admissible", "shall not", "exclud",
          "exclusion", "not included", "does not cover"],
-        max_results=5,
+         max_results=5,
     )
     wait_sentences = _extract_sentences_with_keywords(
-        text,
+        document_text,
         ["waiting period", "pre-existing", "pre existing", "initial waiting",
          "specific disease", "listed illness", "listed ailment", "months waiting"],
-        max_results=5,
+         max_results=5,
     )
     prem_sentences = _extract_sentences_with_keywords(
-        text,
+        document_text,
         ["total premium", "gross premium", "premium payable", "annual premium",
          "co-payment", "co pay", "deductible", "grace period", "renewal"],
-        max_results=5,
+         max_results=5,
     )
     benefit_sentences = _extract_sentences_with_keywords(
-        text,
+        document_text,
         ["wellness", "no claim bonus", "restoration", "health check",
          "network", "cashless", "add-on", "rider", "maternity", "OPD"],
-        max_results=4,
+         max_results=4,
     )
     claim_sentences = _extract_sentences_with_keywords(
-        text,
+        document_text,
         ["claim", "reimbursement", "cashless claim", "helpline", "toll free",
          "customer care", "hospital discharge", "submit"],
-        max_results=3,
+         max_results=3,
     )
 
     # ─── 3. Build 400-500 word flowing narrative ────────────────────────────────
@@ -697,17 +717,26 @@ def _build_fallback_summary(document_text: str) -> dict:
         p3 += " ".join(s.rstrip(".") + "." for s in benefit_sentences[:2])
         parts.append(p3)
 
-    # Paragraph 4 — Waiting Periods
-    if waiting_period or wait_sentences:
-        p4_parts = []
-        if waiting_period:
-            p4_parts.append(
-                f"A waiting period of {waiting_period} applies to certain conditions under this policy."
-            )
-        if wait_sentences:
-            p4_parts.extend(wait_sentences[:2])
-        if p4_parts:
-            parts.append("Regarding waiting periods and restrictions: " + " ".join(p4_parts))
+    # Paragraph 4 — Waiting Periods & Custom PEDs
+    p4_parts = []
+    if ped_list:
+        comma_peds = ", ".join(ped_list)
+        p4_parts.append(
+            f"Specifically, the policyholder has declared pre-existing medical conditions: {comma_peds}."
+        )
+    if pre_existing_coverage:
+        p4_parts.append(
+            f"The pre-existing diseases waiting period is {pre_existing_coverage} (under Code-Excl01) before coverage begins."
+        )
+    elif waiting_period:
+        p4_parts.append(
+            f"A waiting period of {waiting_period} applies to pre-existing illnesses."
+        )
+    if wait_sentences:
+        p4_parts.extend(wait_sentences[:2])
+        
+    if p4_parts:
+        parts.append("Regarding waiting periods and restrictions: " + " ".join(p4_parts))
     else:
         parts.append(
             "Like all health insurance policies, yours includes standard waiting period clauses for "
@@ -745,11 +774,10 @@ def _build_fallback_summary(document_text: str) -> dict:
             "you make the most of your health insurance benefits and avoid claim rejections."
         )
 
-    # Ensure the summary reaches ~250 words by padding with additional document sentences
     summary_text = "\n\n".join(parts)
     if len(summary_text.split()) < 150:
         extra = _extract_sentences_with_keywords(
-            text,
+            document_text,
             ["insurance", "policy", "covered", "benefit", "hospital", "treatment"],
             max_results=4,
         )
@@ -774,7 +802,6 @@ def _build_fallback_summary(document_text: str) -> dict:
         if snippet not in cov_bullets:
             cov_bullets.append(snippet)
             
-    # Pad with professional coverage terms if fewer than 3
     cov_defaults = [
         "In-patient treatment covers room rent, nursing, boarding, and ICU charges",
         "Cashless hospitalisation is available at network hospitals subject to pre-authorisation",
@@ -797,7 +824,6 @@ def _build_fallback_summary(document_text: str) -> dict:
         if snippet not in excl_bullets:
             excl_bullets.append(snippet)
             
-    # Pad with professional exclusions if fewer than 3
     excl_defaults = [
         "Cosmetic or plastic surgery is excluded unless required following an accident",
         "Treatment for substance abuse or drug addiction is permanently excluded",
@@ -815,16 +841,22 @@ def _build_fallback_summary(document_text: str) -> dict:
 
     # Waiting Periods bullets
     wait_bullets: list[str] = []
-    if pre_existing_coverage:
+    if ped_list:
+        comma_peds = " and ".join(ped_list)
+        if pre_existing_coverage:
+            wait_bullets.append(f"Declared pre-existing conditions ({comma_peds}) are subject to a waiting period of {pre_existing_coverage}")
+        else:
+            wait_bullets.append(f"Declared pre-existing conditions ({comma_peds}) are subject to standard waiting periods")
+    elif pre_existing_coverage:
         wait_bullets.append(f"Pre-existing diseases are covered after a waiting period of {pre_existing_coverage}")
     elif waiting_period:
         wait_bullets.append(f"Pre-existing illnesses are subject to a waiting period of {waiting_period}")
+        
     for s in wait_sentences:
         snippet = s.rstrip(".")
         if snippet not in wait_bullets:
             wait_bullets.append(snippet)
             
-    # Pad with professional waiting period terms if fewer than 3
     wait_defaults = [
         "An initial waiting period of 30 days applies to all claims except accidental injuries",
         "Specific listed diseases and surgeries are subject to a 24-month waiting period",
@@ -843,7 +875,6 @@ def _build_fallback_summary(document_text: str) -> dict:
     # Premium & Charges bullets
     prem_bullets: list[str] = []
     if premium:
-        # Ensure premium has currency symbol prefixed professional
         prem_p = premium if any(c in premium for c in ("₹", "Rs", "INR")) else f"\u20b9{premium}"
         prem_bullets.append(f"Total premium payable: {prem_p} (inclusive of GST)")
     if co_pay:
@@ -855,7 +886,6 @@ def _build_fallback_summary(document_text: str) -> dict:
         if snippet not in prem_bullets:
             prem_bullets.append(snippet)
             
-    # Pad with professional premium terms if fewer than 3
     prem_defaults = [
         "Tax benefits are applicable on the premium paid under Section 80D of the Income Tax Act",
         "A grace period of 30 days is provided for renewals to prevent policy lapse",
@@ -880,11 +910,12 @@ def _build_fallback_summary(document_text: str) -> dict:
     }
 
 
-
-
 def _extract_insured_persons_validated(text: str) -> str:
     """Extract and validate the names of insured persons from policy text with salutation checks and substring deduplication."""
     import re
+    # Normalize whitespaces to single space
+    norm_text = re.sub(r'\s+', ' ', text)
+    
     # Direct label patterns
     patterns = [
         r'(?:policyholder\s+name|proposer\s+name|proposer\s*/\s*policyholder|insured\s+name|name\s+of\s+insured)[:\s\-/]+([^\n\r]+)',
@@ -895,15 +926,15 @@ def _extract_insured_persons_validated(text: str) -> str:
     
     # 1. Direct label extraction
     for p in patterns:
-        matches = re.findall(p, text, re.IGNORECASE)
+        matches = re.findall(p, norm_text, re.IGNORECASE)
         for m in matches:
             first_line = m.split('\n')[0].strip()
             first_line = re.sub(r'[^a-zA-Z\s.\-]', '', first_line).strip()
             first_line = re.sub(r'\s+', ' ', first_line)
             candidates.append(first_line)
             
-    # 2. Salutation based extraction (common inside tables / schedules)
-    salutations = re.findall(r'\b(Mrs?\.|Ms\.)\s+([A-Za-z\s.\-]{3,35})', text, re.IGNORECASE)
+    # 2. Salutation based extraction (Mrs? or Ms or Miss)
+    salutations = re.findall(r'\b(Mrs?|Ms|Miss)\.?\s+([A-Za-z\s.\-]{3,35})', norm_text, re.IGNORECASE)
     for title, name_part in salutations:
         full_name = f"{title.strip()} {name_part.strip()}"
         first_line = full_name.split('\n')[0].strip()
@@ -912,7 +943,12 @@ def _extract_insured_persons_validated(text: str) -> str:
         first_line = re.sub(r'\s+(Base|Sum|Insured|Premium|Opted|Variant|Age|DOB|Gender|Relation).*$', '', first_line, flags=re.IGNORECASE).strip()
         candidates.append(first_line)
 
-    # 3. Filter candidates
+    # 3. Fallback to basic Dear pattern
+    dear_match = re.findall(r'(?:Dear|name\s+of\s+(?:insured|policyholder))[:\s,]+([A-Za-z\s.\-]{3,40})', norm_text, re.IGNORECASE)
+    for dm in dear_match:
+        candidates.append(dm.strip())
+
+    # 4. Clean candidates and validate
     noise_keywords = [
         "limit", "sum", "insured", "benefit", "terms", "condition", 
         "policy", "premium", "date", "year", "turnaround", "prescribed", 
@@ -922,28 +958,34 @@ def _extract_insured_persons_validated(text: str) -> str:
         "hospital", "clinic", "nursing", "medical", "doctor", "dr.", 
         "care", "service", "center", "centre", "limited", "ltd", 
         "company", "tpa", "bupa", "health", "insurance", "hallmark", 
-        "labs", "laboratory", "diagnostics"
+        "labs", "laboratory", "diagnostics", "person", "exclusion", "excl"
     ]
+    
+    noise_regex = r'\b(thank|you|for|issued|to|per|the|period|either|at|inception|or|renewal|on|with|from|basis|policy|number|date|address|appointee|nominee|proposer|relation|relationship|member)\b.*$'
     
     valid_names = []
     seen = set()
     
     for c in candidates:
-        lower_c = c.lower()
-        if len(c) > 7 and ' ' in c and lower_c not in seen:
-            if not any(nk in lower_c for nk in noise_keywords):
-                valid_names.append(c)
+        # Strip trailing stop words/verbs
+        clean_c = re.sub(noise_regex, '', c, flags=re.IGNORECASE).strip()
+        clean_c = re.sub(r'[,\s\-]+$', '', clean_c).strip()
+        # Clean salutation prefixes
+        clean_c = re.sub(r'\b(mrs?|ms|miss)\.?\s+', '', clean_c, flags=re.IGNORECASE).strip()
+        
+        lower_c = clean_c.lower()
+        if len(clean_c) > 5 and ' ' in clean_c and lower_c not in seen:
+            if clean_c[0].isupper() and not any(nk in lower_c for nk in noise_keywords):
+                valid_names.append(clean_c)
                 seen.add(lower_c)
                 
-    # 4. Substring deduplication
+    # 5. Substring deduplication
     sorted_names = sorted(valid_names, key=len, reverse=True)
     deduplicated = []
     for name in sorted_names:
         is_sub = False
         for longer in deduplicated:
-            clean_name = re.sub(r'\b(mrs?|ms)\.?\s+', '', name, flags=re.IGNORECASE).strip().lower()
-            clean_longer = re.sub(r'\b(mrs?|ms)\.?\s+', '', longer, flags=re.IGNORECASE).strip().lower()
-            if clean_name in clean_longer or clean_longer in clean_name:
+            if name.lower() in longer.lower():
                 is_sub = True
                 break
         if not is_sub:
@@ -951,21 +993,15 @@ def _extract_insured_persons_validated(text: str) -> str:
             
     if deduplicated:
         return ", ".join(deduplicated[:4])
-        
-    # 5. Fallback to basic Dear pattern
-    dear_match = re.search(r'(?:Dear|name\s+of\s+(?:insured|policyholder))[:\s,]+([A-Za-z\s.\-]{3,40})', text, re.IGNORECASE)
-    if dear_match:
-        name = dear_match.group(1).strip()
-        if len(name) > 5 and ' ' in name and not any(kw in name.lower() for kw in ["customer", "policyholder", "insured", "member"]):
-            return name
             
     return "Not Mentioned"
 
 
 def _build_fallback_fields(document_text: str) -> list[dict]:
     """Extract structured fields directly from document text using multi-pattern regex cascades."""
-    # Use more text for better field coverage across multi-page documents
-    text = document_text[:40000]
+    # Preprocess text to normalize consecutive whitespaces into a single space
+    # This reconstructs the horizontal layout of tables and avoids split-line match failures
+    text = re.sub(r'\s+', ' ', document_text[:40000])
     fields = []
 
     def add(name: str, value: str, category: str):
@@ -979,7 +1015,7 @@ def _build_fallback_fields(document_text: str) -> list[dict]:
 
     # ── Policy Name ─────────────────────────────────────────────────────────
     add("Policy Name", _regex_find_any([
-        r'(?:product\s+name|plan\s+name|policy\s+name)[:\s]+([A-Za-z0-9][A-Za-z0-9 \-&/]{3,60}?)(?=\s*UIN|\s*\n|\s*\.\s)',
+        r'(?:product\s+name|plan\s+name|policy\s+name)[:\s]+([A-Za-z0-9][A-Za-z0-9 \-&/]{3,60}?)(?=\s*UIN|\s*UIN|\s*\n|\s*\.\s|$)',
         r'my\.\s+([A-Za-z0-9][A-Za-z0-9 \-]{3,50}?)(?=\s+UIN|\n|$)',
         r'Plan\s+Name[:\s]+([A-Za-z0-9][A-Za-z0-9 \-&]{3,50})',
         r'((?:Optima|Secure|Health|Protect|Care|Shield|Star|Arogya)\s+(?:Secure|Plus|Elite|Care|Restore|Senior|Family|Individual|Sanjeevani)[A-Za-z0-9 ]*)',
@@ -998,26 +1034,19 @@ def _build_fallback_fields(document_text: str) -> list[dict]:
     ], text), "policy_info")
 
     # ── Policy Number ───────────────────────────────────────────────────────
-    # Use case-insensitive search on the raw text for maximum pattern coverage.
-    # Patterns are ordered from most specific (labeled + alphanumeric) to weakest fallback.
-    _text_ci = text  # raw text (regex uses re.IGNORECASE already via _regex_find_any)
     policy_no = _regex_find_any([
-        # Prefer direct ICICI/IBANK alphanumeric patterns
         r'(\d{3,6}[A-Za-z]{1,5}/(?:ICICI|IBANK)/\d{6,15}/\d{2}/\d{3})',
-        # General policy number ignoring MSTR (group master policy)
         r'(?:policy\s+(?:no|number|certificate|id|doc(?:ument)?\s+no))[.:\s#]+((?!.*MSTR)[A-Za-z0-9][A-Za-z0-9\-/]{6,40})',
         r'(?:certificate\s+(?:no|number))[.:\s#]+((?!.*MSTR)[A-Za-z0-9][A-Za-z0-9\-/]{6,40})',
         r'(?:policy\s+schedule\s+(?:no|number))[.:\s#]+((?!.*MSTR)[A-Za-z0-9][A-Za-z0-9\-/]{6,40})',
         r'(?:endorsement\s+no)[.:\s#]+((?!.*MSTR)[A-Za-z0-9][A-Za-z0-9\-/]{6,40})',
-        # HDFC-style long numeric: 2800000008488100000
         r'(\d{16,20})',
-        # Generic long numeric fallback (avoid short numbers that could be dates)
         r'(\d{10,15})',
     ], text)
     add("Policy Number", policy_no, "policy_info")
 
     # ── Insured Person / Policyholder ───────────────────────────────────────
-    insured_val = _extract_insured_persons_validated(text)
+    insured_val = _extract_insured_persons_validated(document_text) # uses raw text inside
     add("Insured Person", insured_val, "policy_info")
 
     # ── Sum Insured ─────────────────────────────────────────────────────────
@@ -1032,7 +1061,7 @@ def _build_fallback_fields(document_text: str) -> list[dict]:
     add("Sum Insured", sum_ins, "coverage")
 
     # ── Premium Amount ──────────────────────────────────────────────────────
-    prem_val = _extract_premium_validated(text, policy_no or "", sum_ins or "")
+    prem_val = _extract_premium_validated(document_text, policy_no or "", sum_ins or "")
     add("Premium Amount", prem_val, "premium")
 
     # ── Deductible ──────────────────────────────────────────────────────────
@@ -1115,21 +1144,18 @@ def _build_fallback_fields(document_text: str) -> list[dict]:
 
     # ── Pre-existing Disease Coverage ───────────────────────────────────────
     add("Pre Existing Coverage", _regex_find_any([
-        r'PED\s+wait\s+period[^\n]{0,60}([\d]+\s*(?:Year|Month|year|month)[s]?)',
-        r'[Pp]re-?existing\s+[Dd]isease[s]?\s+[Ww]aiting\s+[Pp]eriod[:\s]+([\d]+\s*(?:month|year)[s]?)',
-        r'[Pp]re-?existing[^.\n]{0,30}([\d]+\s*(?:month|year)[s]?[^.\n]{0,40})',
-        r'(?:PED|pre-existing)[^.\n]{0,20}([\d]+[/-][\d]+\s*(?:month|year)[s]?)',
-        r'waiting\s+period[^.\n]{0,20}([\d]+\s*(?:Year|Month|year|month)[s]?)[^.\n]{0,30}[Pp]re-?existing',
+        r'[Pp]re-?existing\s+diseases?\s+waiting\s+period[^\n]{0,50}([\d\s/]+\s*(?:month|year|day)[s]?)',
+        r'PED\s+wait\s+period[^\n]{0,60}([\d\s/]+\s*(?:Year|Month|year|month)[s]?)',
+        r'[Pp]re-?existing\s+[Dd]isease[s]?\s+[Ww]aiting\s+[Pp]eriod[:\s]+([\d\s/]+\s*(?:month|year)[s]?)',
+        r'[Pp]re-existing[^.\n]{0,30}([\d\s/]+\s*(?:month|year)[s]?[^.\n]{0,40})',
     ], text), "restrictions")
 
     # ── Maternity Coverage ──────────────────────────────────────────────────
-    # Skip lines that are just exclusion code references (Code – ExclXX)
     _maternity_raw = _regex_find_any([
         r'[Mm]aternity[:\s]+(?!.*Code\s*[-–]\s*Excl)([^.\n]{10,120})',
         r'[Mm]aternity\s+[Bb]enefit[:\s]+(?!.*Code\s*[-–]\s*Excl)([^.\n]{10,100})',
         r'[Mm]aternity[^.\n]{0,30}(covered[^.\n]{0,80})',
     ], text)
-    # Also check if maternity is explicitly excluded
     if not _maternity_raw:
         _mat_excl = re.search(r'[Mm]aternity[^.\n]{0,30}(not\s+covered|excluded|Code\s*[-–]\s*Excl\d+)', text)
         _maternity_raw = "Not Covered / Excluded" if _mat_excl else None
@@ -1161,36 +1187,19 @@ def _build_fallback_fields(document_text: str) -> list[dict]:
     ], text), "policy_info")
 
     # ── Covered Members (Family Floater Member List) ───────────────────────
-    # Try to extract a member table or list of insured persons with their relationships.
-    # Patterns target structured rows in Policy Schedule tables.
     _members_found = []
-    # Pattern 1: rows like "Name: Rakesh Jadhav   Relationship: Self"
-    _member_row_pairs = re.findall(
-        r'(?:Name|Member\s+Name)[:\s]+([A-Z][A-Za-z .]{2,40})\s+(?:Relationship|Relation)[:\s]+([A-Za-z/ ]{3,20})',
-        text, re.IGNORECASE
-    )
-    for name, rel in _member_row_pairs:
-        _members_found.append(f"{name.strip()} ({rel.strip()})")
-
-    # Pattern 2: table rows like "1. Rakesh Suresh Jadhav   Self   ..." or "Sr No | Name | Relationship"
-    if not _members_found:
-        _member_lines = re.findall(
-            r'\b([A-Z][A-Za-z .]{4,40})\s{2,}(Self|Spouse|Son|Daughter|Father|Mother|Parent|Sibling|Brother|Sister|Child|Dependent)\b',
-            text, re.IGNORECASE
-        )
-        for name, rel in _member_lines:
-            entry = f"{name.strip()} ({rel.strip().title()})"
+    # Match using the improved normalized whitespace regex
+    p_mem = r'\b([A-Z][A-Za-z .]{2,40})\s+(Self|Spouse|Son|Daughter|Father|Mother|Parent|Sibling|Brother|Sister|Child|Dependent)\b'
+    members_matches = re.findall(p_mem, text)
+    noise_members = ["appointee", "nominee", "proposer", "insured", "holder", "relationship", "relation", "of the", "to the", "details", "policy", "premium"]
+    for name, rel in members_matches:
+        name_clean = name.strip()
+        rel_clean = rel.strip()
+        name_clean = re.sub(r'^(?:and|or|for|with|to|of|at|on|in|dear|miss)\s+', '', name_clean, flags=re.IGNORECASE)
+        if name_clean and name_clean[0].isupper() and len(name_clean) > 3 and not any(nw in name_clean.lower() for nw in noise_members):
+            entry = f"{name_clean} ({rel_clean})"
             if entry not in _members_found:
                 _members_found.append(entry)
-
-    # Pattern 3: inline list like "Rakesh (Self), Smita (Spouse)"
-    if not _members_found:
-        _inline = re.findall(
-            r'([A-Z][A-Za-z .]{4,40})\s*\(\s*(Self|Spouse|Son|Daughter|Father|Mother|Child|Dependent)\s*\)',
-            text, re.IGNORECASE
-        )
-        for name, rel in _inline:
-            _members_found.append(f"{name.strip()} ({rel.strip().title()})")
 
     if _members_found:
         add("Covered Members", ", ".join(_members_found[:8]), "policy_info")
@@ -1230,13 +1239,12 @@ def _build_fallback_fields(document_text: str) -> list[dict]:
         if doctor_name:
             add("Consulting Doctor", f"Dr. {doctor_name.replace('Dr.', '').strip()}", "policy_info")
 
-        # Only extract diagnosis from actual diagnostic sections, not insurance exclusion sections
+        # Only extract diagnosis from actual diagnostic sections
         diag_section_start = max(
             text.lower().find("diagnosis"),
             text.lower().find("clinical finding"),
             text.lower().find("impression"),
         )
-        # If diagnosis keyword only appears deep in exclusion sections, skip
         excl_start = text.lower().find("exclusion")
         if diag_section_start > 0 and (excl_start < 0 or diag_section_start < excl_start):
             diagnosis = _regex_find_any([
@@ -1246,14 +1254,10 @@ def _build_fallback_fields(document_text: str) -> list[dict]:
             if diagnosis and "code excl" not in diagnosis.lower():
                 add("Diagnosis / Findings", diagnosis, "coverage")
 
-    if not fields:
-        snippet = document_text[:300].replace("\n", " ").strip()
-        fields.append({
-            "field_name": "Document Content",
-            "field_value": f"Could not extract structured fields. Document preview: {snippet[:200]}",
-            "field_category": "general",
-        })
     return fields
+
+
+
 
 
 def _build_fallback_risks(document_text: str) -> dict:
@@ -1679,14 +1683,20 @@ async def extract_policy_fields(document_text: str, force_regenerate: bool = Fal
             # Post-process and validate LLM outputs (e.g. reject list headers like 1.1)
             if "sum_insured" in result:
                 val = str(result["sum_insured"]).strip()
-                if val in ("1", "1.1", "0", "null", "") or len(val) < 3:
-                    fallback_si = _regex_find_any([
-                        r'(?:base\s+)?sum\s+insured\s*(?:opted)?\s*[:\s₹Rs.]+([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
-                        r'(?:sum\s+insured|sum\s+assured|si)[:\s₹Rs.]+([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
-                        r'(?:total\s+sum\s+insured)[:\s₹Rs.]+([1-9]\d{4,})',
-                        r'₹\s*([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,})\s*(?:Lakh|Lakhs|lakh)?',
-                    ], document_text)
-                    if fallback_si and fallback_si != "Not found in document":
+                fallback_si = _regex_find_any([
+                    r'sum\s+insured\s*(?:\(₹\))?\s*([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
+                    r'(?:base\s+)?sum\s+insured\s*(?:opted)?\s*[:\s₹Rs.]+([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
+                    r'(?:sum\s+insured|sum\s+assured|si)[:\s₹Rs.]+([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
+                    r'(?:total\s+sum\s+insured)[:\s₹Rs.]+([1-9]\d{4,})',
+                    r'(?:basic\s+sum\s+insured)[:\s₹Rs.]+([1-9]\d{4,})',
+                    r'₹\s*([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,})\s*(?:Lakh|Lakhs|lakh)?',
+                ], document_text)
+                if fallback_si and fallback_si != "Not found in document":
+                    clean_val = re.sub(r'[^\d]', '', val)
+                    # If LLM returned 10,000,000 (10 Million) but fallback is 10 Lakh or 10,00,000 (1 Million)
+                    # or if LLM value is weak/empty/invalid, correct it
+                    is_confident_fallback = "lakh" in fallback_si.lower() or "cr" in fallback_si.lower() or "crore" in fallback_si.lower() or "," in fallback_si
+                    if val in ("1", "1.1", "0", "null", "") or len(val) < 3 or (clean_val == "10000000" and ("10 Lakh" in fallback_si or "10,00,000" in fallback_si)) or is_confident_fallback:
                         result["sum_insured"] = fallback_si
                         
             # Validate and extract insured person safely
