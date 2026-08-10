@@ -46,6 +46,7 @@ async def generate_embeddings_batch(texts: List[str]) -> List[List[float]]:
                         "model": "nomic-embed-text",
                         "input": prefixed,
                         "keep_alive": "0s",
+                        "options": {"num_gpu": 0},  # Force CPU for embedding model to save GPU VRAM!
                     },
                 )
                 response.raise_for_status()

@@ -430,9 +430,12 @@ interface PolicySummary {
 
 const cleanSummaryText = (raw: string): string => {
   if (!raw) return '';
-  return raw
-    .replace(/^(?:okay,\s+)?(?:here\s+(?:is|are)|based\s+on|following\s+is|this\s+is)\s+a?\s*(?:breakdown|summary|factual|factual\s+summary|key\s+information|details)[^:]*:\s*\n*/i, '')
+  let cleaned = raw
+    .replace(/^(?:okay,\s+)?(?:here\s+(?:is|are)|based\s+on|following\s+is|this\s+is)\s+a?\s*(?:breakdown|summary|factual|factual\s+summary|key\s+information|details)[^:\n]*:\s*\n*/i, '')
+    .replace(/^\d+[.:\)]\s*(?:Policy Details|Insured Person Details|Add-On Covers\/?Riders|Key Policy Clauses & Benefits|Key Highlights|Important Exclusions & Conditions|Coverage & Benefits|Waiting Periods & Exclusions|Cashless & Claims Process)[:\s]*/gmi, '')
+    .replace(/^[#\s]*\d+[.:\)]\s+([^\n]+)/gm, '$1')
     .trim();
+  return cleaned;
 };
 
 const stripMarkdownForSpeech = (text: string): string => {
@@ -1725,7 +1728,7 @@ export default function DocumentDetailPage() {
       let pAmount = '';
 
       if (doc.renewal_date) {
-        rDate = new Date(doc.renewal_date).toISOString().split('T')[0];
+        rDate = doc.renewal_date.split('T')[0];
       } else {
         const renewalField = doc.extracted_fields?.find(f => {
           const name = f.field_name.toLowerCase();
@@ -1742,7 +1745,7 @@ export default function DocumentDetailPage() {
       }
 
       if (doc.premium_due_date) {
-        pDate = new Date(doc.premium_due_date).toISOString().split('T')[0];
+        pDate = doc.premium_due_date.split('T')[0];
       } else {
         const dueField = doc.extracted_fields?.find(f => f.field_name.toLowerCase().includes('due date') || f.field_name.toLowerCase().includes('payment due'));
         if (dueField?.field_value) {
@@ -2261,8 +2264,8 @@ export default function DocumentDetailPage() {
                       <Brain className="w-8 h-8 text-emerald-400 absolute inset-0 m-auto animate-bounce" />
                     </div>
                     <div>
-                      <p className="text-slate-200 font-bold text-sm">Preparing live summary...</p>
-                      <p className="text-slate-400 text-xs mt-1">The AI is connecting to stream your policy analysis.</p>
+                      <p className="text-slate-200 font-bold text-sm">Running background analysis...</p>
+                      <p className="text-slate-400 text-xs mt-1">Please wait while we generate your policy summary and extract key details.</p>
                     </div>
                   </div>
                 );

@@ -86,18 +86,19 @@ async def warmup_model(model: Optional[str] = None) -> None:
         logger.warning(f"Ollama model warmup skipped: {e}")
 
 async def generate_embeddings_nomic(text: str) -> List[float]:
-    """Generate 768-dimensional semantic vector embedding using nomic-embed-text from Ollama."""
+    """Generate 768-dimensional semantic vector embedding using nomic-embed-text from Ollama.
+    Always runs on CPU (num_gpu=0) to keep GPU VRAM free for the main LLM."""
     client = get_httpx_client()
     payload = {
         "model": "nomic-embed-text",
         "prompt": text,
         "keep_alive": "0s",
-        "options": {}
+        # Force CPU — nomic-embed-text is tiny (274MB) and runs fast on CPU.
+        # Keeping it off the GPU ensures gemma3 stays fully resident in VRAM.
+        "options": {"num_gpu": 0}
     }
     
     try:
-        if settings.OLLAMA_NUM_GPU is not None:
-            payload["options"]["num_gpu"] = settings.OLLAMA_NUM_GPU
         response = await client.post("/api/embeddings", json=payload)
         response.raise_for_status()
         embedding = response.json().get("embedding")
@@ -111,11 +112,9 @@ async def generate_embeddings_nomic(text: str) -> List[float]:
         "model": "nomic-embed-text",
         "input": text,
         "keep_alive": "0s",
-        "options": {}
+        "options": {"num_gpu": 0}  # Force CPU
     }
     try:
-        if settings.OLLAMA_NUM_GPU is not None:
-            payload_embed["options"]["num_gpu"] = settings.OLLAMA_NUM_GPU
         response = await client.post("/api/embed", json=payload_embed)
         response.raise_for_status()
         embeddings = response.json().get("embeddings")
@@ -220,3 +219,4 @@ async def call_ollama_stream(
         raise
     finally:
         await response.aclose()
+    

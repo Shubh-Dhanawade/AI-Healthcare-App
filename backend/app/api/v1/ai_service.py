@@ -157,46 +157,80 @@ async def stream_summary_sse(
 
     doc = await _get_document(document_id, current_user, db)
 
-    # Plain-text streaming prompt — generates readable prose immediately (no JSON wrapper)
-    STREAM_SUMMARY_PROMPT = """You are a senior healthcare insurance analyst. Write a structured, professional, factual executive summary of the insurance policy document below for the policyholder.
+    STREAM_SUMMARY_PROMPT = """DOCUMENT TO SUMMARIZE:
+{document_text}
 
-CRITICAL RULES:
-- Use markdown formatting with clear headings (###) and bullet points to structure the summary into sections:
-  ### Policy Details & Validity
-  ### Covered Persons & Premium
-  ### Key Coverage & Benefits
-  ### Waiting Periods & Exclusions
-  ### Cashless & Claims Process
-- Start IMMEDIATELY with the policy details. Do NOT output any conversational preamble or introduction (e.g., do NOT write "Here is the summary:", "Factual summary:", "Okay, here's a breakdown...", "Based on the document:"). Start directly with the first section heading.
-- Under each heading, use bullet points (e.g., "* **Sum Insured:** ₹20,00,000") to list the facts. Make sure all facts are highly accurate and come directly from the document.
-- Distinguish clearly between options specifically selected/active for this policyholder and generic tables or brochures. Only report values that are active/selected for the policyholder.
-- Keep the summary clean, concise, and professional.
+---
 
-DOCUMENT:
-{document_text}"""
+INSTRUCTIONS:
+You are a professional health insurance advisor explaining a policy to a customer. Write a quick, easy-to-understand narrative summary of the document above in exactly 3 short paragraphs (about 300 to 350 words total).
+
+HIERARCHY OF TRUTH (PRIORITY RULES):
+1. Policy Schedule / actual policy details (HIGHEST PRIORITY - always overrides generic brochures or Customer Information Sheet (CIS)).
+2. Endorsements and opted/active covers.
+3. Customer Information Sheet (CIS) (Use ONLY to explain opted covers. DO NOT extract covers/values from generic CIS examples).
+4. General Policy Wording (LOWEST PRIORITY).
+
+CRITICAL POLICY CHECKLIST (DO NOT HALLUCINATE):
+- For HDFC ERGO Optima Secure (or similar):
+  * **Cumulative Bonus**: If Cumulative Bonus is marked "Not Covered" or "Not Opted", do NOT mention it. Stating that the plan has a cumulative bonus of 10% or 25% up to 100% is INCORRECT if Cumulative Bonus is marked "Not Covered" in the schedule.
+  * **Secure Benefit**: Stating that Secure Benefit adds 50% after each policy year is INCORRECT. The Secure Benefit provides an additional day-1 cover equal to 100% of the base sum insured (effectively doubling the coverage from day 1). The Plus Benefit is what adds 50% per year, but check if Plus Benefit is covered or not.
+  * **Unlimited Restore**: Check if "Unlimited Restore (Add-on)" is "Not Opted". Do not mention it if marked "Not Opted". Stating that "you can opt for unlimited restore" or that it is active is incorrect if not opted.
+  * **Deductible**: Look at the actual Policy Schedule table. If there is no deductible amount listed (or it's blank/not opted), then there is NO deductible. Stating that an aggregate deductible of ₹5,00,000 must be met is a major hallucination from generic CIS wording.
+  * **Exclusions**: Do not expose internal codes like Excl01, Excl02.
+
+You must follow these formatting rules strictly:
+1. Output ONLY 3 plain text paragraphs. Do NOT output headings, subheadings, bullet points, numbered lists, markdown formatting, or bold text.
+2. Do NOT use field labels or category headers (such as "Policy Details:", "Coverage & Benefits:", "Exclusions:", "Claims Process:"). Write everything as complete, flowing, grammatically correct sentences.
+3. Do NOT output conversational preambles (do NOT start with "Okay", "Here is", "Sure", etc.). Begin directly with the first sentence of the first paragraph.
+4. Do NOT output internal clause codes (like Excl01, Excl02, Excl03). Explain them in plain language (e.g., "30-day initial waiting period").
+5. Do NOT include physical office addresses or contact info. Omit OCR noise and incomplete sentences.
+6. The summary must sound like a professional insurance advisor explaining the policy to a customer.
+
+PARAGRAPH CONTENT:
+- Paragraph 1: Policy name, insurer, policyholder name, covered members (if relevant), validity period, and base sum insured.
+- Paragraph 2: Major active benefits (hospitalization, room rent, ICU, day-care, restore benefit, pre/post-hospitalization). Do not mention benefits marked "Not Opted".
+- Paragraph 3: Limitations (exact PED waiting period from schedule like 3 years, initial waiting period of 30 days for illnesses except accidents, 24-month specified disease waiting period, active deductibles/copays).
+
+EXAMPLE OF THE REQUIRED FORMAT:
+"The HDFC ERGO my: Optima Secure health insurance policy is issued to Swapnil Chavan and covers his family members on a floater basis with a base sum insured of ₹20,00,000. The policy is valid from 5 May 2026 to 4 May 2029.
+
+The policy provides coverage for inpatient hospitalization, day-care procedures, domiciliary treatment, and emergency air ambulance services. It also includes key active benefits such as the Secure Benefit which provides an additional coverage equal to 100% of the base sum insured from day one, and the Automatic Restore Benefit which restores the sum insured upon utilization.
+
+Certain waiting periods and limitations apply, including a 30-day initial waiting period for illnesses except accidents, a 24-month waiting period for specified illnesses, and a 3-year waiting period for pre-existing diseases. Room rent is covered at actuals, and no deductibles or co-payments are active under this plan." """
+
+    # Fetch extracted fields from DB to guide the summary generation
+    fields_result = await db.execute(
+        select(ExtractedField).where(ExtractedField.document_id == document_id)
+    )
+    fields = fields_result.scalars().all()
+    
+    from app.services.ai_service import get_formatted_policy_schedule_facts
+    extracted_fields_text = get_formatted_policy_schedule_facts(fields)
 
     from app.services.ai_service import _extract_key_context_for_summary
-    context = _extract_key_context_for_summary(doc.extracted_text, max_chars=4000)
-    prompt = STREAM_SUMMARY_PROMPT.format(document_text=context)
+    context = _extract_key_context_for_summary(doc.extracted_text, max_chars=12000)
+    prompt = STREAM_SUMMARY_PROMPT.format(document_text=context, extracted_fields_text=extracted_fields_text)
 
     async def event_generator():
         from app.services.ollama_client import call_ollama_stream
+        from app.services.ai_service import sanitize_summary_to_paragraphs
         accumulated = []
         try:
             async for token in call_ollama_stream(
                 prompt,
-                num_predict=600,
-                num_ctx=1536,
+                num_predict=700,
             ):
                 accumulated.append(token)
                 yield f"data: {json.dumps({'token': token})}\n\n"
 
             full_text = "".join(accumulated)
-            yield f"data: {json.dumps({'done': True, 'full_text': full_text})}\n\n"
+            # Sanitize before sending the final event so the browser shows clean prose
+            clean_text = sanitize_summary_to_paragraphs(full_text)
+            yield f"data: {json.dumps({'done': True, 'full_text': clean_text})}\n\n"
 
-            # Persist the streamed text to DB as summary_text so it shows on reload
-            # Run the full structured summary in background to also get the bullet sections
-            asyncio.create_task(_save_streamed_summary_to_db(document_id, full_text, doc.extracted_text))
+            # Persist the cleaned text to DB and trigger full structured summary in background
+            asyncio.create_task(_save_streamed_summary_to_db(document_id, clean_text, doc.extracted_text))
 
         except Exception as e:
             logger.error(f"SSE stream error for doc {document_id}: {e}")
@@ -223,6 +257,9 @@ async def _save_streamed_summary_to_db(doc_id: str, streamed_text: str, full_doc
     from app.models.risk_analysis import Summary
     from sqlalchemy import select, delete
 
+    from app.services.ai_service import sanitize_summary_to_paragraphs
+    clean_streamed_text = sanitize_summary_to_paragraphs(streamed_text)
+
     try:
         async with AsyncSessionLocal() as db:
             # Upsert the streamed prose text immediately
@@ -231,13 +268,13 @@ async def _save_streamed_summary_to_db(doc_id: str, streamed_text: str, full_doc
 
             if existing_summary:
                 # Update existing summary with streamed prose
-                existing_summary.summary_text = streamed_text
+                existing_summary.summary_text = clean_streamed_text
                 logger.info(f"[SSE] Updated existing summary row with streamed text for {doc_id}")
             else:
                 from app.core.config import settings as _settings
                 new_summary = Summary(
                     document_id=doc_id,
-                    summary_text=streamed_text,
+                    summary_text=clean_streamed_text,
                     model_used=_settings.OLLAMA_MODEL,
                 )
                 db.add(new_summary)
@@ -1245,5 +1282,98 @@ async def text_to_speech(
             return Response(content=combined_audio, media_type="audio/mpeg")
         else:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="TTS service unavailable")
+
+
+@router.get("/embedding/health")
+async def embedding_health_check(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Diagnostic endpoint: verifies that nomic-embed-text is generating valid non-zero embeddings
+    and that Qdrant is connected and has indexed vectors for the current user's documents.
+    Returns a health report JSON.
+    """
+    import json as _json
+    from app.services.ollama_client import generate_embeddings_nomic
+    from app.services.vector_store import get_qdrant_client, init_qdrant_collection
+    from app.models.document import DocumentChunk
+
+    report = {
+        "embedding_model": "nomic-embed-text",
+        "embedding_dims": 0,
+        "is_zero_vector": True,
+        "qdrant_connected": False,
+        "qdrant_collection_exists": False,
+        "user_doc_count": 0,
+        "total_indexed_chunks": 0,
+        "zero_vector_chunks": 0,
+        "status": "error"
+    }
+
+    # 1. Test embedding generation
+    try:
+        test_emb = await generate_embeddings_nomic("nominee name health check test")
+        report["embedding_dims"] = len(test_emb)
+        report["is_zero_vector"] = all(v == 0.0 for v in test_emb)
+    except Exception as emb_err:
+        report["embedding_error"] = str(emb_err)
+
+    # 2. Check Qdrant connection
+    try:
+        qdrant = get_qdrant_client()
+        if qdrant:
+            report["qdrant_connected"] = True
+            init_qdrant_collection()
+            collections = qdrant.get_collections().collections
+            report["qdrant_collection_exists"] = any(c.name == "healthcare_policy_chunks" for c in collections)
+    except Exception as qdrant_err:
+        report["qdrant_error"] = str(qdrant_err)
+
+    # 3. Count user docs and check for zero-vector chunks in DB
+    try:
+        docs_res = await db.execute(
+            select(Document).where(Document.user_id == current_user.id)
+        )
+        docs = docs_res.scalars().all()
+        report["user_doc_count"] = len(docs)
+
+        if docs:
+            doc_ids = [d.id for d in docs]
+            from sqlalchemy import select as sa_select
+            chunks_res = await db.execute(
+                sa_select(DocumentChunk).where(DocumentChunk.document_id.in_(doc_ids))
+            )
+            chunks = chunks_res.scalars().all()
+            report["total_indexed_chunks"] = len(chunks)
+            zero_count = 0
+            for chunk in chunks:
+                try:
+                    emb = _json.loads(chunk.embedding)
+                    if all(v == 0.0 for v in emb):
+                        zero_count += 1
+                except Exception:
+                    pass
+            report["zero_vector_chunks"] = zero_count
+    except Exception as db_err:
+        report["db_error"] = str(db_err)
+
+    # 4. Overall status
+    if (
+        not report["is_zero_vector"]
+        and report["embedding_dims"] == 768
+        and report["qdrant_connected"]
+        and report["qdrant_collection_exists"]
+        and report["zero_vector_chunks"] == 0
+    ):
+        report["status"] = "healthy"
+    elif not report["is_zero_vector"] and report["embedding_dims"] == 768:
+        report["status"] = "embeddings_ok_qdrant_issue"
+    else:
+        report["status"] = "embedding_failure"
+
+    return report
+
+
 
 

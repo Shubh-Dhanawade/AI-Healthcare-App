@@ -4,17 +4,13 @@ from typing import List, Dict, Any, Optional
 def clean_exclusion_codes(text: str) -> str:
     """
     Remove IRDAI exclusion codes (e.g., Code - Excl08, Excl08, Code-Excl12)
-    from context so the LLM doesn't see or repeat them in responses.
+    from context so the LLM does not see or repeat them in responses.
     """
     if not text:
         return ""
-    # Remove "(Code - ExclXX)" or "Code - ExclXX" or "Code – ExclXX" (case-insensitive, handles en-dash/hyphen)
-    text = re.sub(r"(?i)\(?Code\s*[-–]\s*Excl\d+\)?", "", text)
-    # Remove standalone "ExclXX"
+    text = re.sub(r"(?i)\(?Code\s*[-\u2013]\s*Excl\d+\)?", "", text)
     text = re.sub(r"(?i)\bExcl\d+\b", "", text)
-    # Clean up empty parentheses
     text = re.sub(r"\(\s*\)", "", text)
-    # Normalize whitespace
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
@@ -29,38 +25,38 @@ def build_chat_prompt(
     structured_context: str = ""
 ) -> str:
     """Build an optimized prompt for RAG Chat."""
-    
-    # 1. Format the retrieved chunks context
-    # Raised to 2000 chars per chunk: insurance benefit schedules are dense tables
-    # that can span 1500+ characters. Old 1200-char limit was cutting key rows.
+
+    # 1. Format retrieved chunks context
     context_lines = []
-    
-    # Prepend structured data as virtual context chunk so the LLM reads it as verified ground-truth document facts
     if structured_context:
-        first_policy_filename = policies[0].get("filename", "Policy Document")
+        first_policy_filename = policies[0].get("filename", "Policy Document") if policies else "Policy Document"
         cleaned_structured = clean_exclusion_codes(structured_context)
-        context_lines.append(f"[{first_policy_filename} - Page 1 - Policy Schedule Summary Details]\n{cleaned_structured}\n")
+        context_lines.append(
+            f"[{first_policy_filename} - Page 1 - Policy Schedule Summary Details]\n{cleaned_structured}\n"
+        )
 
     if is_comparison:
         by_source: Dict[str, List[str]] = {}
         for c in retrieved_chunks:
             src = c["source"]
             by_source.setdefault(src, []).append(c["text"])
-            
         for src, texts in by_source.items():
             context_lines.append(f"=== {src} ===")
             for t in texts:
-                cleaned_t = clean_exclusion_codes(t[:800])
-                context_lines.append(cleaned_t)
+                context_lines.append(clean_exclusion_codes(t[:800]))
             context_lines.append("")
     else:
         for c in retrieved_chunks:
-            cleaned_chunk_text = clean_exclusion_codes(c['text'][:2000])
+            cleaned_chunk_text = clean_exclusion_codes(c["text"][:2000])
             context_lines.append(f"[{c['source']} - Page {c.get('page', 1)}]\n{cleaned_chunk_text}")
-            
-    context_block = "\n---\n".join(context_lines) if context_lines else "No relevant policy chunks found in index. Use the structured data and summaries below to answer."
-    
-    # 2. Format the stored summaries of the policies being queried
+
+    context_block = (
+        "\n---\n".join(context_lines)
+        if context_lines
+        else "No relevant policy chunks found in index. Use the structured data and summaries below to answer."
+    )
+
+    # 2. Format stored policy summaries
     summary_lines = []
     for policy in policies:
         summary_info = policy.get("summary")
@@ -79,20 +75,59 @@ def build_chat_prompt(
             if parts:
                 summary_lines.append(f"- {policy.get('filename')}:\n  " + "\n  ".join(parts))
     summaries_block = "\n".join(summary_lines) if summary_lines else "No policy summary available."
-    
-    # 3. Format the recent conversation history (last 6 messages / 3 exchanges to keep context small)
+
+    # 3. Format recent conversation history
     history_lines = []
     if history:
         for msg in history[-6:]:
             role = msg.get("role", "user").upper()
-            content = msg.get("content", "")[:200]  # Slightly longer history snippets
-            history_lines += [f"{role}: {content}"]
+            content = msg.get("content", "")[:200]
+            history_lines.append(f"{role}: {content}")
     history_str = "\n".join(history_lines) if history_lines else "No previous conversation."
-    
-    # Format optional SQL database details
-    structured_str = f"STRUCTURED DATABASE DETAILS (Exact facts from database — treat as ground truth):\n{clean_exclusion_codes(structured_context)}\n\n" if structured_context else ""
 
-    # 4. Construct prompt
+    # 4. Structured DB details string
+    structured_str = (
+        f"STRUCTURED DATABASE DETAILS (Exact facts from database - treat as ground truth):\n"
+        f"{clean_exclusion_codes(structured_context)}\n\n"
+    ) if structured_context else ""
+
+    # 5. Extract Schedule of Benefits block specifically if present
+    schedule_blocks = []
+    for policy in policies:
+        raw_text = (policy.get("text") or "").strip()
+        if raw_text:
+            pos = raw_text.find("SCHEDULE OF BENEFITS")
+            if pos == -1:
+                pos = raw_text.find("CUSTOMER INFORMATION SHEET")
+            if pos != -1:
+                sched_text = raw_text[pos:pos + 6000]
+                filename = policy.get("filename", "Policy")
+                schedule_blocks.append(f"=== {filename} SCHEDULE OF BENEFITS ===\n{clean_exclusion_codes(sched_text)}")
+    schedule_str = (
+        "SCHEDULE OF BENEFITS & COVERAGE TABLE (Ground-truth benefit table extracted from policy schedule - read every row carefully):\n"
+        + "\n\n".join(schedule_blocks)
+        + "\n\n"
+    ) if schedule_blocks else ""
+
+    # 6. FULL DOCUMENT TEXT fallback block (first 10,000 chars of raw OCR text)
+    # This guarantees that table-based fields (nominee name, insured persons, DOB,
+    # policy number, schedule of benefits) are always visible to the LLM.
+    full_text_blocks = []
+    for policy in policies:
+        raw_text = (policy.get("text") or "").strip()
+        if raw_text:
+            cleaned_raw = clean_exclusion_codes(raw_text[:10000])
+            filename = policy.get("filename", "Policy")
+            full_text_blocks.append(f"=== {filename} ===\n{cleaned_raw}")
+    full_text_str = (
+        "FULL DOCUMENT TEXT (Complete raw text - use this as the primary source for any "
+        "table-row fields such as nominee name, insured person name, date of birth, policy number, "
+        "premium breakdown, or relationship. Read every line carefully):\n"
+        + "\n\n".join(full_text_blocks)
+        + "\n\n"
+    ) if full_text_blocks else ""
+
+    # 7. Construct final prompt
     if is_comparison:
         policy_names = [p.get("filename", "Policy") for p in policies]
         names_str = ", ".join(policy_names)
@@ -107,12 +142,14 @@ def build_chat_prompt(
             "4. Highlight differences in key terms (deductibles, co-pays, waiting periods, room rent caps).\n"
             "5. Maintain a professional tone and end with a concise recommendation.\n"
             "6. Do NOT include any inline references, page numbers, or source citations inside your response text.\n"
-            "7. Do NOT output 'ASSISTANT:', 'USER:', or 'context:' labels in your response.\n"
-            "8. IMPORTANT: Never output exclusion codes (such as 'Code - Excl08', 'Excl08', 'Excl12') under any circumstances. Always refer to exclusions using their descriptive names (e.g. 'maternity expenses' or 'cosmetic treatment').\n"
+            "7. Do NOT output ASSISTANT:, USER:, or context: labels in your response.\n"
+            "8. IMPORTANT: Never output exclusion codes under any circumstances. Always refer to exclusions using their descriptive names.\n"
             "\n"
-            f"{structured_str}"
-            f"STORED POLICY SUMMARIES:\n{summaries_block}\n\n"
+            f"{full_text_str}"
             f"POLICY CONTEXT:\n{context_block}\n\n"
+            f"STORED POLICY SUMMARIES:\n{summaries_block}\n\n"
+            f"{schedule_str}"
+            f"{structured_str}"
             f"PREVIOUS CONVERSATION:\n{history_str}\n\n"
             f"User Query: {query}\n"
             "\n"
@@ -123,26 +160,31 @@ def build_chat_prompt(
             f"You are HealthPolicyLens, a knowledgeable and friendly healthcare insurance assistant helping {user_name}.\n"
             "\n"
             "Instructions:\n"
-            "1. Answer the user's query using the STRUCTURED DATABASE DETAILS, STORED POLICY SUMMARIES, and POLICY CONTEXT blocks below. Treat structured details as verified ground-truth facts.\n"
+            "1. Answer the user query using the STRUCTURED DATABASE DETAILS, SCHEDULE OF BENEFITS, STORED POLICY SUMMARIES, POLICY CONTEXT, and FULL DOCUMENT TEXT blocks below. Treat structured details and schedule of benefits as verified ground-truth facts.\n"
             "2. READ EVERY CONTEXT BLOCK and structured detail carefully before answering.\n"
-            "3. IMPORTANT: The policy may have a SCHEDULE OF BENEFITS table listing all covered items with section numbers (e.g. 1.1, 1.1.a, 1.1.1.i, 1.1.1.ii etc.). If the user asks about a treatment or benefit (e.g. 'dental', 'room rent', 'ambulance', 'AYUSH'), scan ALL context blocks for that exact section/row. Even a single matching row like '1.1.1.ii Dental Treatment - Covered upto sum insured' is sufficient to confirm coverage.\n"
-            "4. If you find the term anywhere in the context — even in a table row — report the EXACT coverage value (e.g. 'Covered upto sum insured', 'At Actuals', 'Not Covered', specific Rupee limit).\n"
-            "5. If the user's topic appears in an EXCLUSIONS section, state clearly: 'This is listed under Exclusions — it is NOT covered under the policy.'\n"
-            "6. NEVER say the topic is 'not mentioned' or 'absent' if it appears in the STRUCTURED DATABASE DETAILS, summaries, or any context block.\n"
-            "7. If the information is genuinely absent from ALL sources, say: 'I could not find that specific detail in the provided document excerpts. You may refer to the full policy document for this information.'\n"
-            "8. Do NOT include any inline references, page numbers, or source citations inside your response text.\n"
-            "9. Do NOT output 'ASSISTANT:', 'USER:', or 'context:' labels in your response.\n"
-            "10. Never output curly braces in your answer.\n"
-            "11. IMPORTANT: Never output exclusion codes (such as 'Code - Excl08', 'Excl08', 'Excl12') under any circumstances. Always refer to exclusions using their descriptive names (e.g. 'maternity expenses' or 'cosmetic treatment').\n"
+            "3. IMPORTANT for Hospitalization: Hospitalization expenses (including Room Rent at actuals, ICU at actuals, Day Care, etc.) ARE COVERED under the policy up to the Sum Insured. Do NOT confuse previous claim history entries (e.g. 'Hospitalization claim made in last policy year NA') with coverage! 'NA' under claim history means zero claims were submitted in past years, NOT that hospitalization is uncovered!\n"
+            "4. IMPORTANT for Dental Treatment: Check the SCHEDULE OF BENEFITS & COVERAGE TABLE or POLICY CONTEXT carefully. If it specifies 'Dental Treatment (Accidental Hospitalization Only) Covered upto sum insured' or similar, state clearly that dental treatment is COVERED specifically for accidental hospitalization up to the full sum insured.\n"
+            "5. IMPORTANT for Maternity Coverage: Check the SCHEDULE OF BENEFITS, STRUCTURED DATABASE DETAILS, and STORED POLICY SUMMARIES carefully. If they specify 'Maternity Coverage' is covered (or list limits/waiting periods for it, or if 'Parenthood' add-on is active), state clearly that maternity is covered and mention any specific limits/waiting periods. If it is marked as excluded, not covered, or if Parenthood is not opted, state clearly that maternity coverage is excluded.\n"
+            "6. IMPORTANT for AYUSH Treatment: Check the SCHEDULE OF BENEFITS table. If it specifies 'Covered upto sum insured', state clearly that AYUSH treatment (Ayurveda, Yoga, Unani, Siddha, Homeopathy) is COVERED up to the full Base Sum Insured (e.g., ₹20,00,000).\n"
+            "7. IMPORTANT: For questions about nominee name, insured person name, date of birth, relationship, policy number, or any table-based field - ALWAYS scan the SCHEDULE OF BENEFITS and FULL DOCUMENT TEXT blocks first.\n"
+            "7. If you find the term anywhere in the context - even in a table row - report the EXACT value (e.g. Covered upto sum insured, At Actuals, Not Covered, specific Rupee limit, specific person name).\n"
+            "8. If the topic appears in an EXCLUSIONS section, state clearly: This is listed under Exclusions - it is NOT covered under the policy.\n"
+            "9. NEVER say a benefit is not mentioned or absent if it appears in the SCHEDULE OF BENEFITS, summaries, POLICY CONTEXT, or FULL DOCUMENT TEXT.\n"
+            "10. If the information is genuinely absent from ALL sources, say: I could not find that specific detail in the provided document. You may refer to the full policy document for this information.\n"
+            "11. Do NOT include any inline references, page numbers, or source citations inside your response text.\n"
+            "12. Do NOT output ASSISTANT:, USER:, or context: labels in your response.\n"
+            "13. Never output curly braces in your answer.\n"
+            "14. IMPORTANT: Never output exclusion codes under any circumstances. Always refer to exclusions using their descriptive names.\n"
             "\n"
-            f"{structured_str}"
+            f"{full_text_str}"
+            f"POLICY CONTEXT (direct document excerpts - read all blocks carefully):\n{context_block}\n\n"
             f"STORED POLICY SUMMARIES:\n{summaries_block}\n\n"
-            f"POLICY CONTEXT (direct document excerpts — read all blocks carefully):\n{context_block}\n\n"
+            f"{schedule_str}"
+            f"{structured_str}"
             f"PREVIOUS CONVERSATION:\n{history_str}\n\n"
             f"User Query: {query}\n"
             "\n"
             "Response:"
         )
-        
-    return prompt
 
+    return prompt

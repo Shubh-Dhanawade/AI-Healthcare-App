@@ -780,16 +780,22 @@ async def process_document_background(doc_id: str, file_path: str, file_type: st
         except Exception as emb_err:
             logger.error(f"[PIPELINE] ❌ Embedding task failed for {doc_id}: {emb_err}")
 
-    # ── PHASE 2: Run LLM tasks AND embedding SEQUENTIALLY to prevent Ollama load overloading ──
+    # ── PHASE 2: Run CPU-bound embedding and sequential LLM tasks concurrently ──
     try:
-        logger.info(f"[PIPELINE] 🚀 Phase 2 starting for {doc_id} — running tasks sequentially")
-        await _run_embedding_task()   # 1. Embed and index first (so RAG/chat is immediately ready)
-        await _run_fields_task()      # 2. Extract policy fields
-        await _run_risks_task()       # 3. Analyze risks
-        await _run_summary_task()     # 4. Generate summary
-        logger.info(f"[PIPELINE] ✅ All Phase 2 tasks complete sequentially for {doc_id}")
+        logger.info(f"[PIPELINE] 🚀 Phase 2 starting for {doc_id} — running CPU embedding concurrently with LLM tasks")
+        # Run CPU-bound embedding concurrently to save time
+        emb_task = asyncio.create_task(_run_embedding_task())
+        
+        # LLM tasks still run sequentially to avoid overloading the GPU Ollama instance
+        await _run_fields_task()      # 1. Extract policy fields
+        await _run_risks_task()       # 2. Analyze risks
+        await _run_summary_task()     # 3. Generate summary
+        
+        # Wait for embedding task to complete
+        await emb_task
+        logger.info(f"[PIPELINE] ✅ All Phase 2 tasks complete for {doc_id}")
     except Exception as pipe_err:
-        logger.error(f"[PIPELINE] ❌ Phase 2 sequential execution failed for {doc_id}: {pipe_err}")
+        logger.error(f"[PIPELINE] ❌ Phase 2 execution failed for {doc_id}: {pipe_err}")
 
     # Warm up LLM model back into VRAM for instant chat responses
     try:
@@ -992,13 +998,10 @@ async def process_multi_image_background(doc_id: str, image_paths: list[str]) ->
             logger.error(f"[MULTI-IMG] Embedding failed for {doc_id}: {e}")
 
     try:
-        await asyncio.gather(
-            _run_summary_task(),
-            _run_fields_background(doc_id),
-            _run_risks_background(doc_id),
-            _run_embedding_task(),
-            return_exceptions=True,
-        )
+        await _run_fields_background(doc_id)
+        await _run_summary_task()
+        await _run_risks_background(doc_id)
+        await _run_embedding_task()
         logger.info(f"[MULTI-IMG] ⚡ All parallel tasks complete for {doc_id}")
     except Exception as llm_err:
         logger.error(f"[MULTI-IMG] Analysis phase failed for {doc_id}: {llm_err}")

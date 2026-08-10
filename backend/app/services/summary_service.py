@@ -47,11 +47,25 @@ async def generate_and_store_summary(
             logger.info(f"[SUMMARY] Existing DB summary found for {doc_id}, skipping generation.")
             return existing
 
+    # Fetch extracted fields from DB to guide the summary generation
+    from app.models.document import ExtractedField
+    fields_result = await db.execute(
+        select(ExtractedField).where(ExtractedField.document_id == doc_id)
+    )
+    fields = fields_result.scalars().all()
+    
+    from app.services.ai_service import get_formatted_policy_schedule_facts
+    extracted_fields_text = get_formatted_policy_schedule_facts(fields)
+
     # Commit to release any held DB locks before the slow Ollama call
     await db.commit()
 
     from app.services.ai_service import generate_summary
-    summary_data = await generate_summary(text, force_regenerate=force_regenerate)
+    summary_data = await generate_summary(
+        text,
+        extracted_fields_text=extracted_fields_text,
+        force_regenerate=force_regenerate
+    )
 
     # Save freshly generated summary to DB
     summary = Summary(

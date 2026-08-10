@@ -29,11 +29,11 @@ async def main() -> None:
     for idx, doc in enumerate(docs, 1):
         logger.info(f"[{idx}/{len(docs)}] Reprocessing: {doc.original_filename} ({doc.id})")
         try:
-            # 1. Summary
-            await _run_summary_background(doc.id, force_regenerate=True)
-            
-            # 2. Fields
+            # 1. Fields
             await _run_fields_background(doc.id, force_regenerate=True)
+            
+            # 2. Summary
+            await _run_summary_background(doc.id, force_regenerate=True)
             
             # 3. Risks
             await _run_risks_background(doc.id, force_regenerate=True)
