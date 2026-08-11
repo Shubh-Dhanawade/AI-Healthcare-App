@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     # Omit to let Ollama auto-detect GPU layer offloading based on free VRAM.
     OLLAMA_NUM_GPU: Optional[int] = None
     OLLAMA_KEEP_ALIVE: str = "-1"
+    OLLAMA_NUM_CTX: int = 4096
 
     # File Uploads
     UPLOAD_DIR: str = "./uploads"

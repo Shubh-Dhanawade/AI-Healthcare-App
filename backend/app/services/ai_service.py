@@ -85,27 +85,37 @@ CRITICAL RULES:
 - Extract ONLY information explicitly present in the document. Do NOT use generic phrases.
 - Every fact must be extremely accurate. Do NOT confuse Indian numbering formats (e.g. 10,00,000 is 10 Lakhs) with US formatting (e.g. 10,00,000 is 1 Crore / 10 Million). Verify the commas and digit count before writing.
 - Do NOT confuse coverages/benefits (like a Sum Insured Protector limit of ₹3,00,000, or a Loyalty Bonus of ₹5,00,000) with co-payments or premium charges. A co-payment is the share of the claim paid by the policyholder. A premium charge is the cost paid to purchase the cover.
-- For 'premium_summary': ONLY extract the actual total premium amount and taxes (GST) from the document. Do NOT hallucinate or manufacture co-payments, deductibles, or separate add-on charges if they are not explicitly specified as active. For example, if a table has column headers for co-pay or deductible but shows zero or is empty for this policy, do NOT invent a charge (like ₹3,00,000 co-pay or ₹5,000 add-on charge). If no co-payment is active, state that no co-payment is active under the policy.
-- Do NOT hallucinate or guess separate Sum Insured amounts for optional add-ons or riders (such as 'Unlimited Restore' or 'ABCD Chronic Care') if they are not explicitly specified in the text. Specifically, do NOT construct values (like ₹28,00,000) using digits from the policy number. If an add-on is active but has no separate sum insured listed, state in a full sentence that it is active under the policy schedule, without claiming a specific sum insured amount.
-- Distinguish between options specifically selected/active for this policyholder (listed under Details of Policyholder / Insured Person's Details) and generic tables or brochures (e.g. Notes or General Exclusions lists). If the schedule says "Aggregate Deductible: No" or "0", then no deductible is active. Do NOT report generic deductible levels (like 5L or 10L) as active.
+- For 'premium_summary': ONLY extract the actual total premium amount and taxes (GST) from the document. Do NOT hallucinate or manufacture co-payments, deductibles, or separate add-on charges if they are not explicitly specified as active. If no co-payment is active, state that no co-payment is active under the policy.
+- Do NOT hallucinate or guess separate Sum Insured amounts for optional add-ons or riders. Do NOT construct values (like ₹28,00,000) using digits from the policy number.
+- Distinguish between options specifically selected/active for this policyholder and generic tables or brochures. If the schedule says "Aggregate Deductible: No" or "0", then no deductible is active.
 - Every bullet MUST contain a specific value (amount, date, percentage, duration, clause name) directly from the document.
 - Start each bullet with the exact category label followed by specific data (e.g. "Sum Insured: ₹10 Lakh as per the Optima Secure plan").
 - Do NOT write generic sentences like "Coverage is available" or "Exclusions apply".
+- MINIMUM REQUIREMENT: Each section must have at least 3 bullet points. If the document only explicitly mentions 1-2 facts for a section, add 2-3 additional factual bullets using other related policy terms found anywhere in the document (e.g. for coverage add hospitalisation expenses, AYUSH coverage, air ambulance if present; for exclusions add cosmetic treatment, dental, OPD if mentioned; for waiting period add initial/specific disease/PED periods found; for premium add GST, grace period, tax benefits if mentioned).
+- DEDUPLICATION: Each bullet in a section must state a DIFFERENT fact. Do NOT repeat the same fact (e.g. "30-day waiting period") in two different bullets even with different wording. If you have already covered a fact, use a completely different one.
 - Return ONLY the JSON object below — no markdown, no preamble.
 
 JSON schema:
 {{
   "coverage_summary": [
-    "One or more complete sentences detailing a specific coverage/benefit active under this policy (e.g. Sum Insured, base cover, specific sub-limit limits). Only include facts directly present in the document."
+    "Complete sentence 1 about a specific coverage/benefit (minimum 3 bullets required)",
+    "Complete sentence 2 about another specific coverage/benefit",
+    "Complete sentence 3 about another specific coverage/benefit"
   ],
   "exclusions_summary": [
-    "One or more complete sentences detailing a specific exclusion, limit, or cap active under this policy."
+    "Complete sentence 1 about a specific exclusion or limit (minimum 3 bullets required)",
+    "Complete sentence 2 about another specific exclusion or limit",
+    "Complete sentence 3 about another specific exclusion or limit"
   ],
   "waiting_period_summary": [
-    "One or more complete sentences detailing a specific waiting period (initial, specific disease, or pre-existing disease waiting period) active under this policy."
+    "Complete sentence 1 about a specific waiting period (minimum 3 bullets required)",
+    "Complete sentence 2 about another specific waiting period",
+    "Complete sentence 3 about another specific waiting period"
   ],
   "premium_summary": [
-    "One or more complete sentences detailing the premium amount, taxes (GST), and any active co-pays, deductibles, or additional charges. ONLY report values that are explicitly specified. If no co-payment is active, state that no co-payment is active under the policy."
+    "Complete sentence 1 about the premium amount and charges (minimum 3 bullets required)",
+    "Complete sentence 2 about another premium/charge detail",
+    "Complete sentence 3 about another specific premium/charge detail"
   ]
 }}
 
@@ -114,17 +124,26 @@ DOCUMENT:
 
 
 # ── PROMPT 2: Generates the prose summary paragraph ──
-PROSE_SUMMARY_PROMPT = """You are a senior healthcare insurance analyst. Write a clean, professional, factual summary of **around 300 to 350 words** of the insurance document below for the policyholder.
+PROSE_SUMMARY_PROMPT = """You are a senior healthcare insurance analyst. Write a clear, factual, and professional health insurance policy summary of approximately 350 to 400 words based ONLY on the document below.
 
-CRITICAL RULES:
-- Start IMMEDIATELY with the first sentence of the summary using the actual insurer and actual plan name from the document (e.g. "Your [Insurer Name] [Plan Name] health insurance policy..."). Do NOT output any intro or preamble (e.g., do NOT write "Here is the summary:", "Factual summary:", "Based on the document:").
-- Write in a natural, professional, and well-synthesized flow based on the report data (do NOT make it read like a dry copy-paste of direct sentences from the document).
-- Do NOT use any markdown formatting, bold tags (**), lists, bullet points, or headers. Write only simple, plain text paragraphs separated by a blank line.
-- Use second person ("Your policy...").
-- Keep it around 300 to 350 words total, making sure to mention all key details (Insurer, Policy Number, Insured Person, Sum Insured, Premium, Deductibles, Exclusions, and Claims TAT).
-- Every fact, name, number, date must come directly from the document. Do NOT assume or invent any values.
-- Do NOT confuse Indian numbering formats (e.g. 10,00,000 is 10 Lakhs) with US formatting (e.g. 10,00,000 is 1 Crore / 10 Million). Represent the correct sum insured (e.g. 10 Lakhs, NOT 1 Crore).
-- Clearly distinguish between specific selections chosen by the policyholder in their Policy Schedule (e.g. "Aggregate Deductible: No" means no deductible is in force) and generic plan descriptions or brochure notes (e.g. notes explaining what happens if a 5L or 10L deductible is in force). Only report values that are active/selected for the policyholder.
+STRICT FORMATTING AND STYLE RULES:
+- Generate approximately 350 to 400 words total.
+- You must write in standard, continuous paragraph-style prose only, divided into exactly 3 to 4 well-structured paragraphs.
+- Do NOT use any numbered lists, bullet points, or lists of any kind.
+- Do NOT use any headings, subheadings, bold markdown (**), italics (*), or section labels (such as "Policy Details", "Coverage & Benefits", "Exclusions", "Waiting Periods", etc.).
+- Do NOT start with intro or conversational phrases such as "Here is a breakdown", "Below is a summary", "The following is", or "Based on the document".
+- Start directly with the actual policy details (e.g., "Your HDFC ERGO Optima Secure health insurance policy provides...").
+- The output must contain normal, flowing sentences and paragraphs only, without bullet points or numbering.
+- Use second person ("Your policy...") or professional third person, but keep the language clear, simple, and easy for a normal policyholder to understand.
+- Preserve all important factual details from the source document (insurer name, policy name, policy number, valid dates, sum insured, premium, covered members, room rent limits, waiting periods, key benefits, and claim helpline/procedures if available).
+- If "VERIFIED POLICY DETAILS" is provided at the top of the document context, ONLY use VERIFIED values for sum insured, premium, covered members, and policy number. Do NOT use values from the raw document text if they conflict with verified values.
+- STRICT: Mention covered members ONCE only — in the first paragraph. Do NOT write "The covered members are..." or similar in any subsequent paragraph.
+- STRICT: Do NOT mention deductibles unless the VERIFIED POLICY DETAILS explicitly list a specific "Deductible" value. Generic tables of deductible options (e.g. "5L or 10L depending on option") are NOT the policyholder's active deductible. If no deductible is verified, omit all mention of deductibles.
+- Do NOT extract or mention doctor names, physician names, or lab names from the document. This is a health insurance policy summary, not a medical report. Only mention the insurance company name and covered family members.
+- Do NOT include names found after the words 'Dr.', 'Doctor', 'Consultant', 'Physician', or 'Referred by' as policyholder or insured names.
+- If a covered member's name appears to have OCR artifacts (e.g. unusual spacing in the middle of a name), write it as-is from the VERIFIED POLICY DETAILS. Do not attempt to correct or alter names.
+- Always prefix Indian currency amounts with the ₹ symbol (e.g., "₹43,047" not "43,047", "₹10 Lakh" not "10 Lakh").
+- If a detail is not present in the document, simply omit it. Do NOT invent, assume, or hallucinate any numbers or facts.
 
 DOCUMENT:
 {document_text}"""
@@ -140,24 +159,25 @@ Rules:
 - Use formats as they appear in the document.
 - Do NOT output markdown code blocks or preamble/postamble.
 - If the document is not related to healthcare/insurance, return all fields as null.
-- For 'covered_members': extract ALL insured/covered persons listed in the Policy Schedule or Member Details table (name + relationship, e.g. 'Rakesh Jadhav (Self), Smita Jadhav (Spouse), Atharv Jadhav (Son), Samayara Jadhav (Daughter)'). If only one person is covered, list that person. Never return null if any person is mentioned.
+- For 'insured_person': return ONLY the primary policyholder's full name. Do NOT include doctor names, physician names, or names from the Insurance Ombudsman list, Grievance Officers, or Intermediaries (e.g. do NOT extract names containing 'Ombudsman', 'Officer', or 'Office of').
+- For 'covered_members': extract ALL insured/covered family members listed in the Policy Schedule or Member Details table (name + relationship in FULL, e.g. 'Rakesh Suresh Jadhav (Self), Smita Rakesh Jadhav (Spouse), Atharv Rakesh Jadhav (Son), Samayara Jadhav (Daughter)'). Use complete full names as they appear in the document. Do NOT include Insurance Ombudsman names, Grievance Officers, or Intermediaries (e.g. reject names containing 'Ombudsman', 'Officer', or 'Office of'). Never return null if any person is mentioned.
+- For 'insurer_name': return the insurance company name ONCE without repetition (e.g. 'HDFC ERGO General Insurance Company Limited', NOT 'HDFC ERGO General Insurance Company Limited HDFC ERGO General Insurance Company Limited').
+- For 'waiting_period': provide a clean, concise description (e.g. '30 days for all illnesses, 2 years for pre-existing diseases'). Do NOT include section codes or OCR noise.
 
 JSON schema:
 {{
   "policy_name": "exact product or plan name",
-  "insurer_name": "exact insurance company or health provider/lab name",
-  "policy_number": "exact policy number, certificate number, or report ID as it appears in the Policy Schedule (NOT a Master Policy Number or MSTR number)",
-  "insured_person": "full name of the primary policyholder only",
-  "covered_members": "comma-separated list of ALL insured persons with their relationship (e.g. Name1 (Self), Name2 (Spouse), Name3 (Son))",
+  "insurer_name": "exact insurance company name (deduplicated, single occurrence only)",
+  "policy_number": "exact policy number as it appears in the Policy Schedule (NOT a Master Policy Number or MSTR number)",
+  "insured_person": "full name of the primary policyholder only (NOT a doctor, physician, or ombudsman name)",
+  "covered_members": "comma-separated list of ALL insured persons with FULL names and relationship (e.g. Full Name1 (Self), Full Name2 (Spouse)) (do NOT include ombudsmen or officers)",
   "sum_insured": "total coverage amount with currency symbol",
   "premium_amount": "total premium amount with currency symbol",
   "policy_term": "exact validity period",
   "renewal_date": "policy end or expiry date",
   "coverage_type": "individual or Family Floater",
   "room_rent_limit": "room rent category or limits",
-  "waiting_period": "waiting period durations",
-  "pre_existing_coverage": "pre-existing disease waiting period",
-  "deductible": "deductible amount",
+  "waiting_period": "clean waiting period description without section codes (e.g. 30 days initial, 2 years for pre-existing diseases)",
   "co_payment": "co-payment details",
   "maternity_coverage": "maternity benefit or exclusion details",
   "network_hospitals": "hospital network count or network name",
@@ -924,9 +944,9 @@ def _extract_insured_persons_validated(text: str) -> str:
     
     candidates = []
     
-    # 1. Direct label extraction
+    # 1. Direct label extraction (runs on original text to respect line boundaries)
     for p in patterns:
-        matches = re.findall(p, norm_text, re.IGNORECASE)
+        matches = re.findall(p, text, re.IGNORECASE)
         for m in matches:
             first_line = m.split('\n')[0].strip()
             first_line = re.sub(r'[^a-zA-Z\s.\-]', '', first_line).strip()
@@ -958,7 +978,8 @@ def _extract_insured_persons_validated(text: str) -> str:
         "hospital", "clinic", "nursing", "medical", "doctor", "dr.", 
         "care", "service", "center", "centre", "limited", "ltd", 
         "company", "tpa", "bupa", "health", "insurance", "hallmark", 
-        "labs", "laboratory", "diagnostics", "person", "exclusion", "excl"
+        "labs", "laboratory", "diagnostics", "person", "exclusion", "excl",
+        "ombudsman", "officer", "office", "intermediary"
     ]
     
     noise_regex = r'\b(thank|you|for|issued|to|per|the|period|either|at|inception|or|renewal|on|with|from|basis|policy|number|date|address|appointee|nominee|proposer|relation|relationship|member)\b.*$'
@@ -971,7 +992,10 @@ def _extract_insured_persons_validated(text: str) -> str:
         clean_c = re.sub(noise_regex, '', c, flags=re.IGNORECASE).strip()
         clean_c = re.sub(r'[,\s\-]+$', '', clean_c).strip()
         # Clean salutation prefixes
-        clean_c = re.sub(r'\b(mrs?|ms|miss)\.?\s+', '', clean_c, flags=re.IGNORECASE).strip()
+        clean_c = re.sub(r'\b(mrs?|ms|miss|no)\.?\s+', '', clean_c, flags=re.IGNORECASE).strip()
+        # OCR name-stitching: join single uppercase letter fragments into adjacent all-caps word
+        # e.g. "RAJKUMA R JAIN" → "RAJKUMAR JAIN"
+        clean_c = re.sub(r'(\b[A-Z]{2,})\s+([A-Z])\s+([A-Z]{2,}\b)', lambda m: m.group(1) + m.group(2) + ' ' + m.group(3), clean_c)
         
         lower_c = clean_c.lower()
         if len(clean_c) > 5 and ' ' in clean_c and lower_c not in seen:
@@ -1064,11 +1088,7 @@ def _build_fallback_fields(document_text: str) -> list[dict]:
     prem_val = _extract_premium_validated(document_text, policy_no or "", sum_ins or "")
     add("Premium Amount", prem_val, "premium")
 
-    # ── Deductible ──────────────────────────────────────────────────────────
-    add("Deductible", _regex_find_any([
-        r'(?:deductible|excess)[:\s\u20b9Rs.]+([\u20b9Rs\d,]+(?:\.[\d]{0,2})?)',
-        r'(?:per\s+hospitalization\s+deductible)[:\s\u20b9Rs.]+([\d,]+)',
-    ], text), "premium")
+    # Removed: Deductible (not a standard display field per user requirements)
 
     # ── Co-payment ──────────────────────────────────────────────────────────
     add("Co Payment", _regex_find_any([
@@ -1108,8 +1128,7 @@ def _build_fallback_fields(document_text: str) -> list[dict]:
     if start_date and end_date:
         add("Policy Term", f"{start_date} to {end_date}", "policy_info")
         add("Renewal Date", end_date, "policy_period")
-        add("Expiry Date", end_date, "policy_period")
-        add("Premium Due Date", end_date, "premium")
+        # Removed: Expiry Date and Premium Due Date (duplicate of Renewal Date)
     else:
         raw_term = _regex_find_any([
             r'(?:policy\s+term|policy\s+period|duration)[:\s]+([0-9][^.\n]{0,60})',
@@ -1124,8 +1143,7 @@ def _build_fallback_fields(document_text: str) -> list[dict]:
         ], text)
         if expiry_val:
             add("Renewal Date", expiry_val, "policy_period")
-            add("Expiry Date", expiry_val, "policy_period")
-            add("Premium Due Date", expiry_val, "premium")
+            # Removed: Expiry Date and Premium Due Date
 
     # ── Network Hospitals ───────────────────────────────────────────────────
     add("Network Hospitals", _regex_find_any([
@@ -1142,13 +1160,7 @@ def _build_fallback_fields(document_text: str) -> list[dict]:
         r'(?:room\s+rent)[^\n]{0,40}(?:is\s+|covers?\s+|limited\s+to\s+|payable\s+at\s+)([A-Za-z0-9 %\./,-]{3,60})',
     ], text), "restrictions")
 
-    # ── Pre-existing Disease Coverage ───────────────────────────────────────
-    add("Pre Existing Coverage", _regex_find_any([
-        r'[Pp]re-?existing\s+diseases?\s+waiting\s+period[^\n]{0,50}([\d\s/]+\s*(?:month|year|day)[s]?)',
-        r'PED\s+wait\s+period[^\n]{0,60}([\d\s/]+\s*(?:Year|Month|year|month)[s]?)',
-        r'[Pp]re-?existing\s+[Dd]isease[s]?\s+[Ww]aiting\s+[Pp]eriod[:\s]+([\d\s/]+\s*(?:month|year)[s]?)',
-        r'[Pp]re-existing[^.\n]{0,30}([\d\s/]+\s*(?:month|year)[s]?[^.\n]{0,40})',
-    ], text), "restrictions")
+    # Removed: Pre Existing Coverage (duplicate info already in Waiting Period)
 
     # ── Maternity Coverage ──────────────────────────────────────────────────
     _maternity_raw = _regex_find_any([
@@ -1188,18 +1200,45 @@ def _build_fallback_fields(document_text: str) -> list[dict]:
 
     # ── Covered Members (Family Floater Member List) ───────────────────────
     _members_found = []
-    # Match using the improved normalized whitespace regex
-    p_mem = r'\b([A-Z][A-Za-z .]{2,40})\s+(Self|Spouse|Son|Daughter|Father|Mother|Parent|Sibling|Brother|Sister|Child|Dependent)\b'
+    # Use improved pattern that captures multi-word full names (up to 5 words) followed by relationship
+    p_mem = r'\b([A-Z][A-Za-z .]{2,50})\s+(Self|Spouse|Wife|Husband|Son|Daughter|Applicant|Father|Mother|Parent|Sibling|Brother|Sister|Child|Dependent)\b'
     members_matches = re.findall(p_mem, text)
-    noise_members = ["appointee", "nominee", "proposer", "insured", "holder", "relationship", "relation", "of the", "to the", "details", "policy", "premium"]
+    
+    # Table-row patterns (e.g. Niva Bupa / Star Health style: Name Age DOB Gender Relationship)
+    p_table = r'\b([A-Z][A-Za-z .]{2,35})\s+\d{1,3}\s+(?:\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4})\s+(?:Male|Female)\s+(Self|Spouse|Wife|Husband|Son|Daughter|Applicant|Father|Mother|Parent|Sibling|Brother|Sister|Child|Dependent)\b'
+    members_matches.extend(re.findall(p_table, text))
+    
+    noise_members = [
+        "appointee", "nominee", "proposer", "insured", "holder", "relationship", "relation", 
+        "of the", "to the", "details", "policy", "premium", "ombudsman", "officer", "office", "intermediary",
+        "male", "female", "gender", "hospital", "clinic", "nursing", "medical", "society", "association", 
+        "road", "avenue", "street", "lane", "building", "floor", "city", "state", "district", "zone", 
+        "pune", "mumbai", "surat", "gujarat", "bhopal", "delhi", "noida", "kolkata", "chennai", "jaipur", 
+        "kochi", "lucknow", "bhubaneswar", "patna", "indore"
+    ]
+    seen_members = set()
     for name, rel in members_matches:
-        name_clean = name.strip()
+        # Normalize multiple spaces within the name (OCR often splits names)
+        name_clean = re.sub(r'\s+', ' ', name.strip())
         rel_clean = rel.strip()
-        name_clean = re.sub(r'^(?:and|or|for|with|to|of|at|on|in|dear|miss)\s+', '', name_clean, flags=re.IGNORECASE)
-        if name_clean and name_clean[0].isupper() and len(name_clean) > 3 and not any(nw in name_clean.lower() for nw in noise_members):
-            entry = f"{name_clean} ({rel_clean})"
-            if entry not in _members_found:
+        name_clean = re.sub(r'^(?:and|or|for|with|to|of|at|on|in|dear|miss|no)\s+', '', name_clean, flags=re.IGNORECASE)
+        # OCR name-stitching: join single uppercase letter fragments into adjacent word
+        name_clean = re.sub(r'(\b[A-Z]{2,})\s+([A-Z])\s+([A-Z]{2,}\b)', lambda m: m.group(1) + m.group(2) + ' ' + m.group(3), name_clean)
+        
+        # Additional filter: reject name if it's too short or contains only digits/noise words
+        name_clean_lower = name_clean.lower()
+        if (
+            name_clean
+            and name_clean[0].isupper()
+            and len(name_clean) > 3
+            and not any(nw in name_clean_lower for nw in noise_members)
+            and not name_clean_lower in ("male", "female", "gender")
+        ):
+            entry_key = (name_clean_lower[:20], rel_clean.lower())
+            if entry_key not in seen_members:
+                entry = f"{name_clean} ({rel_clean})"
                 _members_found.append(entry)
+                seen_members.add(entry_key)
 
     if _members_found:
         add("Covered Members", ", ".join(_members_found[:8]), "policy_info")
@@ -1233,11 +1272,8 @@ def _build_fallback_fields(document_text: str) -> list[dict]:
         if report_date and not any(f["field_name"] == "Policy Term" for f in fields):
             add("Policy Term", f"Report Date: {report_date}", "policy_info")
 
-        doctor_name = _regex_find_any([
-            r'(?:dr\.|doctor|ref\s+by|consultant)[:\s]+([A-Z][A-Za-z .]{3,40})',
-        ], text)
-        if doctor_name:
-            add("Consulting Doctor", f"Dr. {doctor_name.replace('Dr.', '').strip()}", "policy_info")
+        # NOTE: Consulting Doctor is not extracted — it is not an insurance field
+        # and causes confusion when insurance policies mention doctor names in claim sections
 
         # Only extract diagnosis from actual diagnostic sections
         diag_section_start = max(
@@ -1371,8 +1407,8 @@ async def warmup_model() -> None:
             "prompt": "hi",
             "stream": False,
             "keep_alive": parse_keep_alive(settings.OLLAMA_KEEP_ALIVE),
-            # Use num_ctx=8192: same as all inference calls to avoid costly reload on first request
-            "options": {"num_predict": 1, "num_ctx": 8192, "temperature": 0},
+            # Use num_ctx=settings.OLLAMA_NUM_CTX: same as all inference calls to avoid costly reload on first request
+            "options": {"num_predict": 1, "num_ctx": settings.OLLAMA_NUM_CTX, "temperature": 0},
         }
         async with httpx.AsyncClient(timeout=30.0) as client:
             await client.post(url, json=payload)
@@ -1386,9 +1422,10 @@ async def call_ollama(
     prompt: str,
     model: Optional[str] = None,
     num_predict: int = 512,
-    num_ctx: int = 8192,  # Must match warmup num_ctx to avoid KV cache reload
+    num_ctx: Optional[int] = None,  # Must match warmup num_ctx to avoid KV cache reload
 ) -> str:
     """Call Ollama API using shared connection pool with GPU-accelerated settings."""
+    num_ctx = num_ctx or settings.OLLAMA_NUM_CTX
     from app.services.ollama_client import call_ollama as _pooled_call
     return await _pooled_call(prompt, model=model, num_predict=num_predict, num_ctx=num_ctx)
 
@@ -1545,7 +1582,12 @@ def _extract_key_context_for_summary(text: str, max_chars: int = 15000, header_c
     return combined[:max_chars]
 
 
-async def generate_summary(document_text: str, force_regenerate: bool = False, is_ocr: bool = False) -> dict:
+async def generate_summary(
+    document_text: str,
+    force_regenerate: bool = False,
+    is_ocr: bool = False,
+    fields_summary: Optional[str] = None,
+) -> dict:
     """Generate AI summary using two dedicated Ollama calls:
     - Call 1: Structured bullet sections (coverage, exclusions, waiting, premium) via BULLETS_EXTRACTION_PROMPT
     - Call 2: Prose summary paragraph via PROSE_SUMMARY_PROMPT
@@ -1563,7 +1605,10 @@ async def generate_summary(document_text: str, force_regenerate: bool = False, i
         }
 
     # Use larger context to extract coverages, exclusions, and premiums accurately from multi-page documents
-    context = _extract_key_context_for_summary(document_text, max_chars=15000, header_chars=8000)
+    context = _extract_key_context_for_summary(document_text, max_chars=6000, header_chars=3500)
+
+    if fields_summary:
+        context = f"VERIFIED POLICY DETAILS:\n{fields_summary}\n\nDOCUMENT TEXT:\n{context}"
 
     # ── CALL 1: Generate structured bullet sections ───────────────────────────
     bullets_result: dict = {}
@@ -1576,7 +1621,7 @@ async def generate_summary(document_text: str, force_regenerate: bool = False, i
         bullets_response = await call_ollama(
             prompt1.format(document_text=context),
             num_predict=700,   # Bullets only — enough for 4 sections × 4 bullets
-            num_ctx=8192,      # Matches warmup num_ctx — no model reload needed
+            num_ctx=settings.OLLAMA_NUM_CTX,      # Matches warmup num_ctx — no model reload needed
         )
         bullets_parsed = extract_json_from_response(bullets_response)
         if bullets_parsed:
@@ -1598,7 +1643,7 @@ async def generate_summary(document_text: str, force_regenerate: bool = False, i
         prose_response = await call_ollama(
             prompt2.format(document_text=context),
             num_predict=600,   # Prose only — 4-5 paragraphs, ~120-150 words
-            num_ctx=8192,      # Matches warmup num_ctx — no model reload needed
+            num_ctx=settings.OLLAMA_NUM_CTX,      # Matches warmup num_ctx — no model reload needed
         )
         # Prose response is plain text, not JSON
         prose_clean = prose_response.strip()
@@ -1674,7 +1719,7 @@ async def extract_policy_fields(document_text: str, force_regenerate: bool = Fal
         response = await call_ollama(
             prompt.format(document_text=context),
             num_predict=500,
-            num_ctx=8192,      # Consistent with warmup — no model reload
+            num_ctx=settings.OLLAMA_NUM_CTX,      # Consistent with warmup — no model reload
         )
         result = extract_json_from_response(response)
         if result:
@@ -1701,11 +1746,16 @@ async def extract_policy_fields(document_text: str, force_regenerate: bool = Fal
                         
             # Validate and extract insured person safely
             insured_person = str(result.get("insured_person") or "").strip()
+            # Clean common prefixes/suffixes
+            insured_person = re.sub(r'^(?:proposer|insured|member|policyholder|name)\s*[:\-]\s*', '', insured_person, flags=re.IGNORECASE).strip()
+            insured_person = re.sub(r'\s*\((?:proposer|self|insured|spouse|holder|owner)\)\s*$', '', insured_person, flags=re.IGNORECASE).strip()
+            
             is_insured_valid = False
             if insured_person and len(insured_person) > 5 and ' ' in insured_person:
-                noise_keywords = ["limit", "sum", "insured", "benefit", "terms", "condition", "policy", "premium", "date", "year", "turnaround", "prescribed", "servicing", "question", "answer", "relationship", "gender", "age", "dob", "address", "number", "details", "abha", "id"]
+                noise_keywords = ["limit", "sum", "insured", "benefit", "terms", "condition", "policy", "premium", "date", "year", "turnaround", "prescribed", "servicing", "question", "answer", "relationship", "gender", "age", "dob", "address", "number", "details", "abha", "id", "ombudsman", "officer", "office", "intermediary"]
                 if not any(nk in insured_person.lower() for nk in noise_keywords):
                     is_insured_valid = True
+                    result["insured_person"] = insured_person
             
             if not is_insured_valid:
                 result["insured_person"] = _extract_insured_persons_validated(document_text)
@@ -1744,8 +1794,6 @@ async def extract_policy_fields(document_text: str, force_regenerate: bool = Fal
                 "coverage_type": "coverage",
                 "room_rent_limit": "restrictions",
                 "waiting_period": "restrictions",
-                "pre_existing_coverage": "restrictions",
-                "deductible": "premium",
                 "co_payment": "premium",
                 "maternity_coverage": "coverage",
                 "network_hospitals": "coverage",
@@ -1765,8 +1813,6 @@ async def extract_policy_fields(document_text: str, force_regenerate: bool = Fal
                 "coverage_type": "Coverage Type",
                 "room_rent_limit": "Room Rent Limit",
                 "waiting_period": "Waiting Period",
-                "pre_existing_coverage": "Pre Existing Coverage",
-                "deductible": "Deductible",
                 "co_payment": "Co Payment",
                 "maternity_coverage": "Maternity Coverage",
                 "network_hospitals": "Network Hospitals",
@@ -1779,8 +1825,19 @@ async def extract_policy_fields(document_text: str, force_regenerate: bool = Fal
                     "field_category": field_category_map.get(key, "general"),
                 }
                 for key, value in result.items()
-                if value and str(value).lower() not in ("null", "none", "not specified")
+                if value
+                   and str(value).lower() not in ("null", "none", "not specified")
+                   and key not in ("pre_existing_coverage", "deductible")  # removed fields
             ]
+
+            # Post-process: clean insurer name duplications (e.g. "HDFC ERGO... HDFC ERGO...")
+            for f in fields:
+                if f["field_name"] == "Insurer Name":
+                    parts = f["field_value"].split()
+                    half = len(parts) // 2
+                    if half > 3 and parts[:half] == parts[half:]:
+                        f["field_value"] = " ".join(parts[:half])
+                    break
             
             # Ensure date fields and member fields are included from document text if LLM omitted them
             fallback_fields = _build_fallback_fields(document_text)
@@ -1822,7 +1879,7 @@ async def analyze_risks(document_text: str, force_regenerate: bool = False) -> d
         response = await call_ollama(
             RISK_ANALYSIS_PROMPT.format(document_text=context),
             num_predict=700,
-            num_ctx=8192,      # Consistent with warmup — no model reload
+            num_ctx=settings.OLLAMA_NUM_CTX,      # Consistent with warmup — no model reload
         )
         result = extract_json_from_response(response)
         if result.get("risks"):
@@ -1888,7 +1945,7 @@ async def generate_comparison_synthesis(policies_data: list[dict]) -> dict:
         response = await call_ollama(
             COMPARISON_PROMPT.format(policies_data=policies_text),
             num_predict=300,
-            num_ctx=2048
+            num_ctx=settings.OLLAMA_NUM_CTX
         )
         result = extract_json_from_response(response)
         if result.get("synthesis"):
@@ -2156,7 +2213,7 @@ async def translate_text(text: str, target_language: str) -> str:
         response = await call_ollama(
             TRANSLATE_PROMPT.format(text=text[:1000], target_language=target_language),
             num_predict=300,
-            num_ctx=2048
+            num_ctx=settings.OLLAMA_NUM_CTX
         )
         if response:
             logger.info(f"Successfully translated via local Ollama fallback ({target_language})")
@@ -2208,7 +2265,7 @@ async def extract_covered_treatments(document_id: str, document_text: str) -> li
     try:
         # Take the first 10,000 characters where coverages are usually defined
         prompt = TREATMENTS_EXTRACTION_PROMPT.format(document_text=document_text[:10000])
-        response = await call_ollama(prompt, num_predict=150, num_ctx=2048)
+        response = await call_ollama(prompt, num_predict=150, num_ctx=settings.OLLAMA_NUM_CTX)
         result = extract_json_from_response(response)
         
         treatments = result.get("treatments", [])
@@ -2462,7 +2519,7 @@ async def rewrite_query_with_history(query: str, history: list[dict]) -> str:
         "Standalone Query:"
     )
     try:
-        rewritten = await call_ollama(prompt, num_predict=60, num_ctx=2048)
+        rewritten = await call_ollama(prompt, num_predict=60, num_ctx=settings.OLLAMA_NUM_CTX)
         rewritten_clean = rewritten.strip().strip('"\'')
         if rewritten_clean:
             logger.info(f"Rewrote query: '{query}' -> '{rewritten_clean}'")

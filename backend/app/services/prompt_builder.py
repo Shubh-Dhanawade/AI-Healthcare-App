@@ -21,11 +21,6 @@ def build_chat_prompt(
     # Raised to 2000 chars per chunk: insurance benefit schedules are dense tables
     # that can span 1500+ characters. Old 1200-char limit was cutting key rows.
     context_lines = []
-    
-    # Prepend structured data as virtual context chunk so the LLM reads it as verified ground-truth document facts
-    if structured_context:
-        first_policy_filename = policies[0].get("filename", "Policy Document")
-        context_lines.append(f"[{first_policy_filename} - Page 1 - Policy Schedule Summary Details]\n{structured_context}\n")
 
     if is_comparison:
         by_source: Dict[str, List[str]] = {}
@@ -44,25 +39,26 @@ def build_chat_prompt(
             
     context_block = "\n---\n".join(context_lines) if context_lines else "No relevant policy chunks found in index. Use the structured data and summaries below to answer."
     
-    # 2. Format the stored summaries of the policies being queried
+    # 2. Format the stored summaries of the policies being queried (only if structured database data is not already present)
     summary_lines = []
-    for policy in policies:
-        summary_info = policy.get("summary")
-        if summary_info:
-            parts = []
-            if summary_info.get("summary_text"):
-                parts.append(f"Summary: {summary_info['summary_text'][:500]}")
-            if summary_info.get("premium_summary"):
-                parts.append(f"Premium: {summary_info['premium_summary'][:200]}")
-            if summary_info.get("coverage_summary"):
-                parts.append(f"Coverage: {summary_info['coverage_summary'][:300]}")
-            if summary_info.get("exclusions_summary"):
-                parts.append(f"Exclusions: {summary_info['exclusions_summary'][:300]}")
-            if summary_info.get("waiting_period_summary"):
-                parts.append(f"Waiting Periods: {summary_info['waiting_period_summary'][:200]}")
-            if parts:
-                summary_lines.append(f"- {policy.get('filename')}:\n  " + "\n  ".join(parts))
-    summaries_block = "\n".join(summary_lines) if summary_lines else "No policy summary available."
+    if not structured_context:
+        for policy in policies:
+            summary_info = policy.get("summary")
+            if summary_info:
+                parts = []
+                if summary_info.get("summary_text"):
+                    parts.append(f"Summary: {summary_info['summary_text'][:500]}")
+                if summary_info.get("premium_summary"):
+                    parts.append(f"Premium: {summary_info['premium_summary'][:200]}")
+                if summary_info.get("coverage_summary"):
+                    parts.append(f"Coverage: {summary_info['coverage_summary'][:300]}")
+                if summary_info.get("exclusions_summary"):
+                    parts.append(f"Exclusions: {summary_info['exclusions_summary'][:300]}")
+                if summary_info.get("waiting_period_summary"):
+                    parts.append(f"Waiting Periods: {summary_info['waiting_period_summary'][:200]}")
+                if parts:
+                    summary_lines.append(f"- {policy.get('filename')}:\n  " + "\n  ".join(parts))
+    summaries_block = "\n".join(summary_lines) if summary_lines else ""
     
     # 3. Format the recent conversation history (last 6 messages / 3 exchanges to keep context small)
     history_lines = []
@@ -75,6 +71,7 @@ def build_chat_prompt(
     
     # Format optional SQL database details
     structured_str = f"STRUCTURED DATABASE DETAILS (Exact facts from database — treat as ground truth):\n{structured_context}\n\n" if structured_context else ""
+    summaries_str = f"STORED POLICY SUMMARIES:\n{summaries_block}\n\n" if summaries_block else ""
 
     # 4. Construct prompt
     if is_comparison:
@@ -94,7 +91,7 @@ def build_chat_prompt(
             "7. Do NOT output 'ASSISTANT:', 'USER:', or 'context:' labels in your response.\n"
             "\n"
             f"{structured_str}"
-            f"STORED POLICY SUMMARIES:\n{summaries_block}\n\n"
+            f"{summaries_str}"
             f"POLICY CONTEXT:\n{context_block}\n\n"
             f"PREVIOUS CONVERSATION:\n{history_str}\n\n"
             f"User Query: {query}\n"
@@ -110,15 +107,16 @@ def build_chat_prompt(
             "2. READ EVERY CONTEXT BLOCK and structured detail carefully before answering.\n"
             "3. IMPORTANT: The policy may have a SCHEDULE OF BENEFITS table listing all covered items with section numbers (e.g. 1.1, 1.1.a, 1.1.1.i, 1.1.1.ii etc.). If the user asks about a treatment or benefit (e.g. 'dental', 'room rent', 'ambulance', 'AYUSH'), scan ALL context blocks for that exact section/row. Even a single matching row like '1.1.1.ii Dental Treatment - Covered upto sum insured' is sufficient to confirm coverage.\n"
             "4. If you find the term anywhere in the context — even in a table row — report the EXACT coverage value (e.g. 'Covered upto sum insured', 'At Actuals', 'Not Covered', specific Rupee limit).\n"
-            "5. If the user's topic appears in an EXCLUSIONS section (e.g., listed under 'Excl18'), state clearly: 'This is listed under Exclusions — it is NOT covered under the policy.'\n"
+            "5. If the user's topic is explicitly excluded or listed as not covered, state clearly: 'This is listed under Exclusions — it is NOT covered under the policy.' If the treatment or benefit is covered (even with a sub-limit), do NOT state that it is excluded or not covered.\n"
             "6. NEVER say the topic is 'not mentioned' or 'absent' if it appears in the STRUCTURED DATABASE DETAILS, summaries, or any context block.\n"
             "7. If the information is genuinely absent from ALL sources, say: 'I could not find that specific detail in the provided document excerpts. You may refer to the full policy document for this information.'\n"
             "8. Do NOT include any inline references, page numbers, or source citations inside your response text.\n"
             "9. Do NOT output 'ASSISTANT:', 'USER:', or 'context:' labels in your response.\n"
             "10. Never output curly braces in your answer.\n"
+            "11. STRICT: Do NOT assume or guess that a treatment or illness is covered or excluded under general categories (such as Unproven Treatments or Congenital diseases) unless the document explicitly names the treatment/illness in that context. If a specific treatment/illness (e.g. cataract surgery) is not mentioned anywhere in the POLICY CONTEXT, STORED POLICY SUMMARIES, or STRUCTURED DATABASE DETAILS, state clearly that it is not mentioned in the provided excerpts.\n"
             "\n"
             f"{structured_str}"
-            f"STORED POLICY SUMMARIES:\n{summaries_block}\n\n"
+            f"{summaries_str}"
             f"POLICY CONTEXT (direct document excerpts — read all blocks carefully):\n{context_block}\n\n"
             f"PREVIOUS CONVERSATION:\n{history_str}\n\n"
             f"User Query: {query}\n"

@@ -77,7 +77,16 @@ async def summarize_document(
     async with _document_locks[doc.id]:
         # 1. Generate new summary via AI first (NO database locks held during slow Ollama call)
         logger.info(f"Generating AI summary for document {doc.id}")
-        summary_data = await generate_summary(doc.extracted_text, force_regenerate=True)
+        
+        # Fetch extracted fields from DB if they exist
+        from app.models.document import ExtractedField
+        fields_res = await db.execute(select(ExtractedField).where(ExtractedField.document_id == doc.id))
+        fields = fields_res.scalars().all()
+        fields_summary = ""
+        if fields:
+            fields_summary = "\n".join(f"- {f.field_name}: {f.field_value}" for f in fields)
+            
+        summary_data = await generate_summary(doc.extracted_text, force_regenerate=True, fields_summary=fields_summary)
         
         # 2. Delete existing summary for re-generation in a fast database transaction
         existing = await db.execute(
@@ -157,31 +166,49 @@ async def stream_summary_sse(
 
     doc = await _get_document(document_id, current_user, db)
 
-    # Plain-text streaming prompt — generates readable prose immediately (no JSON wrapper)
-    STREAM_SUMMARY_PROMPT = """You are a senior healthcare insurance analyst. Write a clear, factual 5-6 paragraph summary of the following insurance policy document using ONLY information present in the document. Write in second person ("Your policy..."). Do NOT use bullet points or headers. Write flowing prose paragraphs separated by blank lines.
+    STREAM_SUMMARY_PROMPT = """You are a senior healthcare insurance analyst. Write a clear, factual, and professional health insurance policy summary of approximately 350 to 400 words based ONLY on the document below.
 
-Paragraph 1: Name the policy, insurer, policyholder full name, policy number, and validity period.
-Paragraph 2: State the exact Sum Insured and all covered categories (inpatient, daycare, ambulance, AYUSH, etc.).
-Paragraph 3: List every insured member and the total premium paid with date.
-Paragraph 4: Describe key benefits: restore benefit, secure benefit, cumulative bonus, cash for shared room, air ambulance, preventive health check-up.
-Paragraph 5: State all waiting periods with exact durations and any co-payment or deductible.
-Paragraph 6: Explain cashless and reimbursement claim procedures, customer helpline, and advisory.
+STRICT FORMATTING AND STYLE RULES:
+- Generate approximately 350 to 400 words total.
+- You must write in standard, continuous paragraph-style prose only.
+- Do NOT use any numbered lists, bullet points, or lists of any kind.
+- Do NOT use any headings, subheadings, bold markdown (**), italics (*), or section labels (such as "Policy Details", "Coverage & Benefits", "Exclusions", "Waiting Periods", etc.).
+- Do NOT start with intro or conversational phrases such as "Here is a breakdown", "Below is a summary", "The following is", or "Based on the document".
+- Start directly with the actual policy details (e.g., "Your HDFC ERGO Optima Secure health insurance policy provides...").
+- The output must contain normal, flowing sentences and paragraphs only.
+- Use second person ("Your policy...") or professional third person, but keep the language clear, simple, and easy for a normal policyholder to understand.
+- Preserve all important factual details from the source document (insurer name, policy name, policy number, valid dates, sum insured, premium, covered members, room rent limits, waiting periods, deductibles, key benefits, and claim helpline/procedures if available).
+- If "VERIFIED POLICY DETAILS" is provided at the top of the document context, prioritize those verified values (especially Sum Insured, Premium, and Policy Number) for the summary text over any conflicting raw document text. Specifically, do NOT construct values (like ₹28,00,000) using digits from the policy number.
+- If a detail is not present in the document, simply omit it. Do NOT invent, assume, or hallucinate any numbers or facts.
 
 DOCUMENT:
 {document_text}"""
 
     from app.services.ai_service import _extract_key_context_for_summary
     context = _extract_key_context_for_summary(doc.extracted_text, max_chars=4000)
+    
+    # Fetch extracted fields from DB if they exist
+    from app.models.document import ExtractedField
+    fields_res = await db.execute(select(ExtractedField).where(ExtractedField.document_id == document_id))
+    fields = fields_res.scalars().all()
+    fields_summary = ""
+    if fields:
+        fields_summary = "\n".join(f"- {f.field_name}: {f.field_value}" for f in fields)
+        
+    if fields_summary:
+        context = f"VERIFIED POLICY DETAILS:\n{fields_summary}\n\nDOCUMENT TEXT:\n{context}"
+        
     prompt = STREAM_SUMMARY_PROMPT.format(document_text=context)
 
     async def event_generator():
         from app.services.ollama_client import call_ollama_stream
+        from app.core.config import settings
         accumulated = []
         try:
             async for token in call_ollama_stream(
                 prompt,
                 num_predict=600,
-                num_ctx=1536,
+                num_ctx=settings.OLLAMA_NUM_CTX,
             ):
                 accumulated.append(token)
                 yield f"data: {json.dumps({'token': token})}\n\n"
