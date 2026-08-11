@@ -11,6 +11,7 @@ from typing import AsyncGenerator, List, Dict, Any, Optional, Tuple
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.services.cache_manager import CacheManager
 from app.services.ollama_client import call_ollama, call_ollama_stream
 from app.services.vector_store import search_vector_store
@@ -237,7 +238,7 @@ async def run_chat_query(
         
     # 4. Parallel Hybrid RAG Retrieval (Vector Search + Keyword Match + Structured DB Data)
     is_comparison = _is_comparison_query(search_query) and len(policies) > 1
-    top_k = 10 if is_comparison else 8
+    top_k = 6 if is_comparison else 4
     
     retrieval_start = time.time()
     keyword_chunks = _text_search_fallback(search_query, policies, top_k=top_k)
@@ -280,9 +281,9 @@ async def run_chat_query(
         structured_context=structured_context
     )
     
-    # 6. Call LLM — using num_ctx=8192 (to prevent context truncation for complex health policies)
+    # 6. Call LLM — using configured num_ctx (to prevent context truncation for complex health policies)
     llm_start = time.time()
-    response = await call_ollama(prompt, num_predict=600 if is_comparison else 450, num_ctx=8192)
+    response = await call_ollama(prompt, num_predict=600 if is_comparison else 450, num_ctx=settings.OLLAMA_NUM_CTX)
     llm_time = time.time() - llm_start
     
     total_time = time.time() - start_time
@@ -338,7 +339,7 @@ async def prepare_chat_rag_prompt(
 
         # Hybrid Retrieval
         is_comparison = _is_comparison_query(search_query) and len(policies) > 1
-        top_k = 10 if is_comparison else 8
+        top_k = 6 if is_comparison else 4
 
         keyword_chunks = _text_search_fallback(search_query, policies, top_k=top_k)
         try:
@@ -419,7 +420,7 @@ async def run_chat_query_stream_with_prompt(
 
     try:
         max_tokens = 700 if is_comparison else 500
-        async for token in call_ollama_stream(prompt, num_predict=max_tokens, num_ctx=8192):
+        async for token in call_ollama_stream(prompt, num_predict=max_tokens, num_ctx=settings.OLLAMA_NUM_CTX):
             if first_token_time is None:
                 first_token_time = time.time() - start_time
                 logger.info(f"⚡ Time to first token: {first_token_time:.4f}s")

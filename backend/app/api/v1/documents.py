@@ -109,14 +109,32 @@ async def _auto_schedule_policy_alerts(db, doc, fields_data) -> None:
         val = str(field["field_value"]).strip()
         if not val or val.lower() in ("not found in document", "not specified", "null", "none"):
             continue
-        if any(x in name_lower for x in ["renewal date", "expiry date", "valid to", "policy end date", "period of insurance to", "policy term"]):
+
+        # If it is a range (contains "to", "till", or "-"), try to extract the last date in the range as renewal/expiry
+        import re
+        parsed_d = None
+        if any(x in val.lower() for x in [" to ", " till ", " - "]) or (name_lower in ("policy term", "policy period") and "-" in val):
+            parts = re.split(r'\bto\b|\btill\b|\s+-\s+|\s*\-\s*', val, flags=re.IGNORECASE)
+            if parts:
+                parsed_d = _parse_date_string(parts[-1].strip())
+        
+        # If range parsing didn't find/need a value, parse the whole value
+        if not parsed_d:
             parsed_d = _parse_date_string(val)
+
+        if any(x in name_lower for x in ["renewal date", "expiry date", "valid to", "policy end date", "period of insurance to"]):
             if parsed_d:
                 extracted_renewal = parsed_d
+        elif "policy term" in name_lower or "policy period" in name_lower:
+            # Policy Term range (e.g. 05-05-2026 to 04-05-2029) should extract the end date
+            if parsed_d and not extracted_renewal:
+                extracted_renewal = parsed_d
+
         if any(x in name_lower for x in ["premium due", "payment due"]):
             parsed_pd = _parse_date_string(val)
             if parsed_pd:
                 extracted_premium_due = parsed_pd
+
         if any(x in name_lower for x in ["premium amount", "gross premium", "net premium", "total premium", "premium"]):
             if val and val.lower() not in ("not mentioned in policy", "not specified"):
                 extracted_premium_val = val
@@ -182,15 +200,25 @@ async def _auto_schedule_policy_alerts(db, doc, fields_data) -> None:
             ))
 
     if not has_premium_due:
-        # Default to 11 months from now
-        extracted_premium_due = datetime.utcnow() + timedelta(days=330)
-        db.add(ExtractedField(
-            document_id=doc.id,
-            field_name="Premium Due Date",
-            field_value=f"{extracted_premium_due.strftime('%Y-%m-%d')} (Not Mentioned, Defaulted)",
-            field_category="premium"
-        ))
-        logger.info(f"[AUTO-ALERT] Premium due date not found in document. Defaulting to 11 months: {extracted_premium_due}")
+        # Default to renewal date if available, else 11 months from now
+        if extracted_renewal:
+            extracted_premium_due = extracted_renewal
+            db.add(ExtractedField(
+                document_id=doc.id,
+                field_name="Premium Due Date",
+                field_value=extracted_premium_due.strftime('%Y-%m-%d'),
+                field_category="premium"
+            ))
+            logger.info(f"[AUTO-ALERT] Premium due date not found. Defaulting to renewal date: {extracted_premium_due}")
+        else:
+            extracted_premium_due = datetime.utcnow() + timedelta(days=330)
+            db.add(ExtractedField(
+                document_id=doc.id,
+                field_name="Premium Due Date",
+                field_value=f"{extracted_premium_due.strftime('%Y-%m-%d')} (Not Mentioned, Defaulted)",
+                field_category="premium"
+            ))
+            logger.info(f"[AUTO-ALERT] Premium due date not found. Defaulting to 11 months: {extracted_premium_due}")
     else:
         existing_prem_due = any(f["field_name"].lower() == "premium due date" for f in fields_data)
         if not existing_prem_due:
@@ -785,10 +813,10 @@ async def process_document_background(doc_id: str, file_path: str, file_type: st
     # ── PHASE 2: Run LLM tasks AND embedding SEQUENTIALLY to prevent Ollama load overloading ──
     try:
         logger.info(f"[PIPELINE] 🚀 Phase 2 starting for {doc_id} — running tasks sequentially")
-        await _run_embedding_task()   # 1. Embed and index first (so RAG/chat is immediately ready)
-        await _run_fields_task()      # 2. Extract policy fields
-        await _run_risks_task()       # 3. Analyze risks
-        await _run_summary_task()     # 4. Generate summary
+        await _run_fields_task()      # 1. Extract policy fields first (takes 2-4s, required for verified summary details)
+        await _run_summary_task()     # 2. Generate summary second (so user sees it immediately in the UI)
+        await _run_embedding_task()   # 3. Embed and index (so RAG/chat is ready)
+        await _run_risks_task()       # 4. Analyze risks
         logger.info(f"[PIPELINE] ✅ All Phase 2 tasks complete sequentially for {doc_id}")
     except Exception as pipe_err:
         logger.error(f"[PIPELINE] ❌ Phase 2 sequential execution failed for {doc_id}: {pipe_err}")
@@ -992,9 +1020,9 @@ async def process_multi_image_background(doc_id: str, image_paths: list[str]) ->
     try:
         # Run sequentially to prevent VRAM paging/RAM thrashing under 8GB memory limits
         logger.info(f"[MULTI-IMG] Starting sequential analysis tasks for {doc_id}...")
-        await _run_embedding_task()
-        await _run_summary_task()
         await _run_fields_background(doc_id)
+        await _run_summary_task()
+        await _run_embedding_task()
         await _run_risks_background(doc_id)
         logger.info(f"[MULTI-IMG] ⚡ All sequential analysis tasks complete for {doc_id}")
     except Exception as llm_err:

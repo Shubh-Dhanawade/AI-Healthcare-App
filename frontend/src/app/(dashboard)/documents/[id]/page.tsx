@@ -1551,6 +1551,25 @@ export default function DocumentDetailPage() {
     return parseClientDate(str);
   };
 
+  const formatDateLocal = (dateInput: string | Date | null | undefined): string => {
+    if (!dateInput) return '';
+    const d = new Date(dateInput);
+    if (isNaN(d.getTime())) return '';
+    
+    // If the input is a string like "2029-05-04" or starts with YYYY-MM-DD
+    if (typeof dateInput === 'string') {
+      const match = dateInput.match(/^(\d{4})[\-\/](\d{1,2})[\-\/](\d{1,2})/);
+      if (match) {
+        return `${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')}`;
+      }
+    }
+    
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
   // Reminders states auto loader
   useEffect(() => {
     if (doc) {
@@ -1559,7 +1578,7 @@ export default function DocumentDetailPage() {
       let pAmount = '';
 
       if (doc.renewal_date) {
-        rDate = new Date(doc.renewal_date).toISOString().split('T')[0];
+        rDate = formatDateLocal(doc.renewal_date);
       } else {
         const renewalField = doc.extracted_fields?.find(f => {
           const name = f.field_name.toLowerCase();
@@ -1576,7 +1595,7 @@ export default function DocumentDetailPage() {
       }
 
       if (doc.premium_due_date) {
-        pDate = new Date(doc.premium_due_date).toISOString().split('T')[0];
+        pDate = formatDateLocal(doc.premium_due_date);
       } else {
         const dueField = doc.extracted_fields?.find(f => f.field_name.toLowerCase().includes('due date') || f.field_name.toLowerCase().includes('payment due'));
         if (dueField?.field_value) {

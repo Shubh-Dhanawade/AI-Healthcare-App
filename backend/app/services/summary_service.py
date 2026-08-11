@@ -47,17 +47,35 @@ async def generate_and_store_summary(
             logger.info(f"[SUMMARY] Existing DB summary found for {doc_id}, skipping generation.")
             return existing
 
-    from app.models.document import Document
+    from app.models.document import Document, ExtractedField
     from sqlalchemy import select
     res = await db.execute(select(Document).where(Document.id == doc_id))
     doc = res.scalar_one_or_none()
     is_ocr = (doc.file_type == "image" or doc.extraction_method in ("easyocr", "paddleocr")) if doc else False
 
+    # Fetch extracted fields from DB if they exist
+    fields_res = await db.execute(select(ExtractedField).where(ExtractedField.document_id == doc_id))
+    fields = fields_res.scalars().all()
+    fields_summary = ""
+    if fields:
+        def _ensure_rupee(name: str, value: str) -> str:
+            """Ensure monetary fields always show ₹ symbol."""
+            monetary_fields = {"sum insured", "premium amount", "co payment", "room rent limit"}
+            if name.lower() in monetary_fields and value and not any(c in value for c in ("₹", "Rs", "INR")):
+                import re
+                if re.search(r'\d', value):
+                    return f"₹{value}"
+            return value
+        fields_summary = "\n".join(
+            f"- {f.field_name}: {_ensure_rupee(f.field_name, f.field_value)}"
+            for f in fields
+        )
+
     # Commit to release any held DB locks before the slow Ollama call
     await db.commit()
 
     from app.services.ai_service import generate_summary
-    summary_data = await generate_summary(text, force_regenerate=force_regenerate, is_ocr=is_ocr)
+    summary_data = await generate_summary(text, force_regenerate=force_regenerate, is_ocr=is_ocr, fields_summary=fields_summary)
 
     # Save freshly generated summary to DB
     summary = Summary(

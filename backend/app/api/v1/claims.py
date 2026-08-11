@@ -151,7 +151,8 @@ Address the patient directly. If policy details are provided above under 'ASSOCI
 Do not mention 'the machine learning model' or 'feature importances' in the text; present the reasoning as an expert underwriting evaluation.
 """
     try:
-        explanation = await call_ollama(prompt, num_predict=180, num_ctx=1024)
+        from app.core.config import settings
+        explanation = await call_ollama(prompt, num_predict=180, num_ctx=settings.OLLAMA_NUM_CTX)
         return explanation
     except Exception as e:
         logger.warning(f"Ollama offline during underwriting explanation: {e}. Using rule-based fallback.")

@@ -69,10 +69,10 @@ async def warmup_model(model: Optional[str] = None) -> None:
             "keep_alive": parse_keep_alive(settings.OLLAMA_KEEP_ALIVE),
             "options": {
                 "num_predict": 1,
-                # CRITICAL: num_ctx=8192 must match ALL inference calls.
+                # CRITICAL: num_ctx must match ALL inference calls.
                 # If warmup uses a different num_ctx (e.g. 1024), Ollama reloads the model KV cache
                 # on EVERY actual inference call, causing ~20s cold-start + potential OOM kill.
-                "num_ctx": 8192,
+                "num_ctx": settings.OLLAMA_NUM_CTX,
                 "temperature": 0,
                 "num_thread": settings.OLLAMA_NUM_THREAD,
                 # Pin model weights in RAM — prevents paging to disk under memory pressure
@@ -134,7 +134,7 @@ async def call_ollama(
     prompt: str,
     model: Optional[str] = None,
     num_predict: int = 512,
-    num_ctx: int = 8192,   # Must match warmup num_ctx to avoid KV cache reload
+    num_ctx: Optional[int] = None,   # Must match warmup num_ctx to avoid KV cache reload
 ) -> str:
     """Call Ollama /api/generate endpoint synchronously with dynamic CPU/GPU layer allocation.
     Uses /api/generate (completion) which works with all GGUF models including
@@ -146,6 +146,7 @@ async def call_ollama(
     """
     client = get_httpx_client()
     model_name = model or settings.OLLAMA_MODEL
+    num_ctx = num_ctx or settings.OLLAMA_NUM_CTX
     
     payload = {
         "model": model_name,
@@ -176,7 +177,7 @@ async def call_ollama_stream(
     prompt: str,
     model: Optional[str] = None,
     num_predict: int = 450,
-    num_ctx: int = 8192,   # Must match warmup num_ctx to avoid KV cache reload
+    num_ctx: Optional[int] = None,   # Must match warmup num_ctx to avoid KV cache reload
 ) -> AsyncGenerator[str, None]:
     """Generate streaming tokens from Ollama /api/generate with GPU-accelerated speed optimizations.
     
@@ -193,6 +194,7 @@ async def call_ollama_stream(
     """
     client = get_httpx_client()
     model_name = model or settings.OLLAMA_MODEL
+    num_ctx = num_ctx or settings.OLLAMA_NUM_CTX
     
     payload = {
         "model": model_name,

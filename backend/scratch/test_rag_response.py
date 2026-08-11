@@ -7,7 +7,7 @@ from app.services.chat_service import prepare_chat_rag_prompt
 from app.services.ollama_client import call_ollama
 
 async def main():
-    target_doc_id = 'b65098e2-fb83-4cdb-8268-c93128a306c5'
+    target_doc_id = 'b916e230-688a-4fab-8b9c-82f04c580063'
     
     async with AsyncSessionLocal() as db:
         stmt = select(Document).where(Document.id == target_doc_id).options(
@@ -50,7 +50,8 @@ async def main():
         
     print("Calling Ollama...")
     try:
-        response = await call_ollama(prompt, num_predict=200, num_ctx=8192)
+        from app.core.config import settings
+        response = await call_ollama(prompt, num_predict=200, num_ctx=settings.OLLAMA_NUM_CTX)
         safe_response = response.encode('ascii', errors='replace').decode('ascii')
         print("\n--- LLM RESPONSE ---")
         print(safe_response)
