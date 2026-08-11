@@ -281,6 +281,12 @@ def send_alert_email_notification(
     import uuid
     from loguru import logger
 
+    # Load SMTP settings first to use in sender address
+    smtp_server = os.getenv("SMTP_SERVER") or getattr(settings, "SMTP_SERVER", "smtp.gmail.com")
+    smtp_port = int(os.getenv("SMTP_PORT") or getattr(settings, "SMTP_PORT", 587))
+    smtp_user = os.getenv("SMTP_USER") or getattr(settings, "SMTP_USER", "")
+    smtp_password = os.getenv("SMTP_PASSWORD") or getattr(settings, "SMTP_PASSWORD", "")
+
     # 1. Format dates
     renewal_str = renewal_date.strftime('%Y-%m-%d') if renewal_date else "Not set"
     premium_due_str = premium_due_date.strftime('%Y-%m-%d') if premium_due_date else "Not set"
@@ -388,9 +394,10 @@ def send_alert_email_notification(
     """
 
     # 3. Setup email structure
+    sender_email = smtp_user if smtp_user else "noreply@healthpolicylens.local"
     msg = MIMEMultipart("alternative")
     msg["Subject"] = f"[HealthPolicyLens] Active Alert Configured: {policy_name}"
-    msg["From"] = "noreply@healthpolicylens.local"
+    msg["From"] = f"HealthPolicyLens <{sender_email}>"
     msg["To"] = user_email
     
     text_fallback = (
@@ -409,16 +416,12 @@ def send_alert_email_notification(
     # 4. Try sending SMTP or write to local debug folder
     sent_successfully = False
     try:
-        smtp_server = os.getenv("SMTP_SERVER")
-        smtp_port = int(os.getenv("SMTP_PORT", "587"))
-        smtp_user = os.getenv("SMTP_USER")
-        smtp_password = os.getenv("SMTP_PASSWORD")
-        
         if smtp_server and smtp_user and smtp_password:
             with smtplib.SMTP(smtp_server, smtp_port) as server:
                 server.starttls()
                 server.login(smtp_user, smtp_password)
-                server.sendmail(msg["From"], msg["To"], msg.as_string())
+                envelope_sender = smtp_user
+                server.sendmail(envelope_sender, [user_email], msg.as_string())
             sent_successfully = True
             logger.info(f"📧 Notification email successfully sent via SMTP to {user_email}")
     except Exception as e:
@@ -1187,6 +1190,7 @@ class ScheduleReminderRequest(BaseModel):
 
 class EmailReportRequest(BaseModel):
     email: EmailStr
+    language: Optional[str] = "English"
 
 
 @router.get("/reminders")
@@ -1649,106 +1653,197 @@ async def compare_documents(
     )
 
 
-# ─────────────────────────────────────────
-# Reminders and Exporter Endpoints
-# ─────────────────────────────────────────
-
-class ScheduleReminderRequest(BaseModel):
-    document_id: str
-    renewal_date: Optional[datetime] = None
-    premium_due_date: Optional[datetime] = None
-    premium_amount: Optional[str] = None
-
-
-class EmailReportRequest(BaseModel):
-    email: EmailStr
-
-
-@router.get("/reminders")
-async def get_reminders(
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """List scheduled premium/renewal reminders for the user."""
-    result = await db.execute(
-        select(PolicyReminder)
-        .where(PolicyReminder.user_id == current_user.id, PolicyReminder.is_dismissed == False)
-        .order_by(PolicyReminder.reminder_date)
-    )
-    reminders = result.scalars().all()
-    
-    # Format responses dynamically
-    return [
-        {
-            "id": r.id,
-            "document_id": r.document_id,
-            "title": r.title,
-            "reminder_type": r.reminder_type,
-            "reminder_date": r.reminder_date,
-            "premium_amount": r.premium_amount,
-            "is_dismissed": r.is_dismissed
-        }
-        for r in reminders
-    ]
-
-
-
-
-
-@router.patch("/reminders/{reminder_id}/dismiss")
-async def dismiss_reminder(
-    reminder_id: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Dismiss/acknowledge an active notification alert."""
-    result = await db.execute(
-        select(PolicyReminder).where(
-            PolicyReminder.id == reminder_id,
-            PolicyReminder.user_id == current_user.id
-        )
-    )
-    reminder = result.scalar_one_or_none()
-    if not reminder:
-        raise HTTPException(status_code=404, detail="Notification alert not found")
-        
-    reminder.is_dismissed = True
-    await db.commit()
-    return {"message": "Notification successfully dismissed"}
-
-
-def generate_html_report(doc: Document) -> str:
+async def generate_html_report(doc: Document, language: Optional[str] = "English") -> str:
     """Helper to generate a clean, responsive HTML print template for policy reports."""
+    from app.services.ai_service import translate_text
+    import asyncio
+    
+    lang_lower = language.lower() if language else "english"
+    should_translate = lang_lower != "english"
+    
+    # Static translations for common UI labels to save API calls
+    STATIC_LABELS = {
+        "hindi": {
+            "Healthcare Policy Analysis Report": "स्वास्थ्य सेवा नीति विश्लेषण रिपोर्ट",
+            "Document": "दस्तावेज़",
+            "Processed": "संसाधित",
+            "Pages": "पृष्ठ",
+            "AI Executive Summary": "एआई कार्यकारी सारांश",
+            "Top Coverages": "शीर्ष कवरेज",
+            "Top Exclusions": "शीर्ष बहिष्करण",
+            "Extracted Policy Parameters": "निकाले गए नीति पैरामीटर",
+            "Critical Risk Audit": "महत्वपूर्ण जोखिम ऑडिट",
+            "No critical risk clauses detected.": "कोई महत्वपूर्ण जोखिम खंड नहीं पाया गया।",
+            "Clause": "खंड",
+            "Explanation": "स्पष्टीकरण",
+            "Recommendation": "सिफारिश"
+        },
+        "marathi": {
+            "Healthcare Policy Analysis Report": "आरोग्य विमा पॉलिसी विश्लेषण अहवाल",
+            "Document": "दस्तऐवज",
+            "Processed": "प्रक्रिया केलेले",
+            "Pages": "पाने",
+            "AI Executive Summary": "एआय कार्यकारी सारांश",
+            "Top Coverages": "प्रमुख कव्हरेज",
+            "Top Exclusions": "प्रमुख अपवर्जन (वगळलेले मुद्दे)",
+            "Extracted Policy Parameters": "गोळा केलेले पॉलिसी तपशील",
+            "Critical Risk Audit": "गंभीर जोखीम तपासणी",
+            "No critical risk clauses detected.": "कोणतेही गंभीर जोखीम कलम आढळले नाही.",
+            "Clause": "कलम",
+            "Explanation": "स्पष्टीकरण",
+            "Recommendation": "शिफारस"
+        }
+    }
+    
+    def get_label(text: str) -> str:
+        if not should_translate:
+            return text
+        return STATIC_LABELS.get(lang_lower, {}).get(text, text)
+        
+    # Helper to check if a string warrants translation (not empty, not placeholders)
+    def should_translate_str(s: str) -> bool:
+        if not s or not s.strip():
+            return False
+        if s.strip() in ("—", "-", "", "no", "yes"):
+            return False
+        return True
+
+    # Gather all dynamic content that needs translation
+    dynamic_texts = []
+    
+    # 1. Extracted fields
+    for f in doc.extracted_fields:
+        if f.field_name:
+            dynamic_texts.append(f.field_name)
+        if f.field_value:
+            dynamic_texts.append(f.field_value)
+            
+    # 2. Risk analyses
+    for r in doc.risk_analyses:
+        if r.risk_type:
+            dynamic_texts.append(r.risk_type.replace('_', ' ').upper())
+        if r.severity:
+            dynamic_texts.append(r.severity.upper())
+        if r.clause_text:
+            dynamic_texts.append(r.clause_text)
+        if r.explanation:
+            dynamic_texts.append(r.explanation)
+        if r.recommendation:
+            dynamic_texts.append(r.recommendation)
+            
+    # 3. Summary values
+    summary_val = doc.summary.summary_text if doc.summary else "No summary available."
+    coverage_val = doc.summary.coverage_summary if doc.summary else "—"
+    exclusions_val = doc.summary.exclusions_summary if doc.summary else "—"
+    dynamic_texts.extend([summary_val, coverage_val, exclusions_val])
+    
+    # Deduplicate while preserving order
+    seen = set()
+    unique_dynamic_texts = []
+    for x in dynamic_texts:
+        if x and should_translate_str(x) and x not in seen:
+            seen.add(x)
+            unique_dynamic_texts.append(x)
+            
+    # Perform batch translation
+    translation_map = {}
+    if should_translate and unique_dynamic_texts:
+        separator = "\n----\n"
+        combined_text = separator.join(unique_dynamic_texts)
+        try:
+            translated_combined = await translate_text(combined_text, lang_lower)
+            translated_parts = [p.strip() for p in translated_combined.split("----")]
+            if len(translated_parts) == len(unique_dynamic_texts):
+                translation_map = dict(zip(unique_dynamic_texts, translated_parts))
+                logger.info(f"Batch translation successful for {len(unique_dynamic_texts)} items")
+            else:
+                logger.warning(
+                    f"Batch translation count mismatch: expected {len(unique_dynamic_texts)}, "
+                    f"got {len(translated_parts)}. Falling back to concurrent translation."
+                )
+                raise ValueError("Length mismatch")
+        except Exception as e:
+            logger.info(f"Batch translation failed or triggered fallback: {e}")
+            # Fallback to concurrent translations using a semaphore to limit rate limits
+            sem = asyncio.Semaphore(5)
+            
+            async def translate_single(text: str) -> str:
+                async with sem:
+                    try:
+                        return await translate_text(text, lang_lower)
+                    except Exception:
+                        return text
+                        
+            tasks = [translate_single(t) for t in unique_dynamic_texts]
+            results = await asyncio.gather(*tasks)
+            translation_map = dict(zip(unique_dynamic_texts, results))
+
+    def t(text: Optional[str]) -> str:
+        if not text:
+            return "—"
+        if not should_translate:
+            return text
+        if not should_translate_str(text):
+            return text
+        return translation_map.get(text, text)
+
     fields_list = ""
     for f in doc.extracted_fields:
+        field_name = t(f.field_name)
+        field_value = t(f.field_value)
         fields_list += f"""
         <div class="field-item">
-            <span class="field-label">{f.field_name}</span>
-            <span class="field-value">{f.field_value or "—"}</span>
+            <span class="field-label">{field_name}</span>
+            <span class="field-value">{field_value}</span>
         </div>
         """
         
     risks_list = ""
     if not doc.risk_analyses:
-        risks_list = "<p style='color: #10b981; font-weight: 500;'>No critical risk clauses detected.</p>"
+        no_risks_text = get_label("No critical risk clauses detected.")
+        risks_list = f"<p style='color: #10b981; font-weight: 500;'>{no_risks_text}</p>"
     else:
         for r in doc.risk_analyses:
             color = "#f87171" if r.severity == "high" else ("#fbbf24" if r.severity == "medium" else "#34d399")
+            risk_type = t(r.risk_type.replace('_', ' ').upper())
+            severity = t(r.severity.upper())
+            clause_text = t(r.clause_text)
+            explanation = t(r.explanation)
+            rec = t(r.recommendation)
+            
+            label_clause = get_label("Clause")
+            label_explanation = get_label("Explanation")
+            label_rec = get_label("Recommendation")
+            
             risks_list += f"""
             <div class="risk-card" style="border-left: 4px solid {color}">
                 <div class="risk-header">
-                    <span class="risk-type">{r.risk_type.replace('_', ' ').upper()}</span>
-                    <span class="risk-severity" style="color: {color}; font-weight: bold;">{r.severity.upper()}</span>
+                    <span class="risk-type">{risk_type}</span>
+                    <span class="risk-severity" style="color: {color}; font-weight: bold;">{severity}</span>
                 </div>
-                <p class="risk-clause"><strong>Clause:</strong> <em>"{r.clause_text}"</em></p>
-                <p class="risk-explanation"><strong>Explanation:</strong> {r.explanation or "—"}</p>
-                <p class="risk-rec"><strong>Recommendation:</strong> {r.recommendation or "—"}</p>
+                <p class="risk-clause"><strong>{label_clause}:</strong> <em>"{clause_text}"</em></p>
+                <p class="risk-explanation"><strong>{label_explanation}:</strong> {explanation}</p>
+                <p class="risk-rec"><strong>{label_rec}:</strong> {rec}</p>
             </div>
             """
             
-    summary_text = doc.summary.summary_text if doc.summary else "No summary available."
-    coverage = doc.summary.coverage_summary if doc.summary else "—"
-    exclusions = doc.summary.exclusions_summary if doc.summary else "—"
+    summary_val = doc.summary.summary_text if doc.summary else "No summary available."
+    coverage_val = doc.summary.coverage_summary if doc.summary else "—"
+    exclusions_val = doc.summary.exclusions_summary if doc.summary else "—"
+    
+    summary_text = t(summary_val)
+    coverage = t(coverage_val)
+    exclusions = t(exclusions_val)
+    
+    title_report = get_label("Healthcare Policy Analysis Report")
+    label_doc = get_label("Document")
+    label_processed = get_label("Processed")
+    label_pages = get_label("Pages")
+    title_summary = get_label("AI Executive Summary")
+    label_coverages = get_label("Top Coverages")
+    label_exclusions = get_label("Top Exclusions")
+    title_params = get_label("Extracted Policy Parameters")
+    title_risk = get_label("Critical Risk Audit")
     
     html = f"""
     <!DOCTYPE html>
@@ -1860,38 +1955,38 @@ def generate_html_report(doc: Document) -> str:
     <body>
         <div class="container">
             <div class="header">
-                <h1>Healthcare Policy Analysis Report</h1>
+                <h1>{title_report}</h1>
                 <div class="metadata">
-                    <strong>Document:</strong> {doc.original_filename} &nbsp;|&nbsp;
-                    <strong>Processed:</strong> {doc.created_at.strftime('%Y-%m-%d')} &nbsp;|&nbsp;
-                    <strong>Pages:</strong> {doc.page_count}
+                    <strong>{label_doc}:</strong> {doc.original_filename} &nbsp;|&nbsp;
+                    <strong>{label_processed}:</strong> {doc.created_at.strftime('%Y-%m-%d')} &nbsp;|&nbsp;
+                    <strong>{label_pages}:</strong> {doc.page_count}
                 </div>
             </div>
             
             <div class="section">
-                <h2>AI Executive Summary</h2>
+                <h2>{title_summary}</h2>
                 <p style="font-size: 14px; line-height: 1.6; color: #334155;">{summary_text}</p>
                 <div style="margin-top: 15px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
                     <div>
-                        <strong style="font-size: 13px; color: #1e293b;">Top Coverages:</strong>
+                        <strong style="font-size: 13px; color: #1e293b;">{label_coverages}:</strong>
                         <pre style="font-family: inherit; font-size: 12px; color: #475569; white-space: pre-wrap; margin-top: 5px;">{coverage}</pre>
                     </div>
                     <div>
-                        <strong style="font-size: 13px; color: #1e293b;">Top Exclusions:</strong>
+                        <strong style="font-size: 13px; color: #1e293b;">{label_exclusions}:</strong>
                         <pre style="font-family: inherit; font-size: 12px; color: #475569; white-space: pre-wrap; margin-top: 5px;">{exclusions}</pre>
                     </div>
                 </div>
             </div>
             
             <div class="section">
-                <h2>Extracted Policy Parameters</h2>
+                <h2>{title_params}</h2>
                 <div class="field-grid">
                     {fields_list}
                 </div>
             </div>
             
             <div class="section">
-                <h2>Critical Risk Audit</h2>
+                <h2>{title_risk}</h2>
                 {risks_list}
             </div>
         </div>
@@ -1904,6 +1999,7 @@ def generate_html_report(doc: Document) -> str:
 @router.get("/{id}/export", response_class=HTMLResponse)
 async def export_report(
     id: str,
+    language: Optional[str] = "English",
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -1924,7 +2020,7 @@ async def export_report(
     # Explicitly load relationships to avoid lazy loading MissingGreenlet errors in sync generator
     await db.refresh(doc, ["summary", "extracted_fields", "risk_analyses"])
     
-    html_content = generate_html_report(doc)
+    html_content = await generate_html_report(doc, language)
     headers = {"Content-Disposition": f"attachment; filename=HealthPolicyLens_Report_{doc.id}.html"}
     return HTMLResponse(content=html_content, headers=headers)
 
@@ -1953,7 +2049,7 @@ async def email_report(
     # Explicitly load relationships to avoid lazy loading MissingGreenlet errors in sync generator
     await db.refresh(doc, ["summary", "extracted_fields", "risk_analyses"])
     
-    html_content = generate_html_report(doc)
+    html_content = await generate_html_report(doc, request.language)
     
     # 1. Setup email structure
     smtp_server = os.getenv("SMTP_SERVER") or getattr(settings, "SMTP_SERVER", "smtp.gmail.com")
@@ -1961,20 +2057,37 @@ async def email_report(
     smtp_user = os.getenv("SMTP_USER") or getattr(settings, "SMTP_USER", "")
     smtp_password = os.getenv("SMTP_PASSWORD") or getattr(settings, "SMTP_PASSWORD", "")
 
-    # Set the From header to the registered user's email address
+    # Set the From header using the authenticated smtp_user if available to comply with SPF/DMARC policies,
+    # and provide the user's name/details in the Display Name and Reply-To headers.
     user_sender = current_user.email
     user_name = current_user.full_name or "User"
+    sender_email = smtp_user if smtp_user else user_sender
+
+    lang_lower = request.language.lower() if request.language else "english"
+    
+    # Setup translated Subject and Plaintext fallback
+    if lang_lower == "hindi":
+        subject = f"[HealthPolicyLens] नीति विश्लेषण ऑडिट रिपोर्ट: {doc.original_filename}"
+        text_fallback = f"प्रिय उपयोगकर्ता,\n\nकृपया {doc.original_filename} के लिए HealthPolicyLens नीति विश्लेषण रिपोर्ट संलग्न पाएं।"
+    elif lang_lower == "marathi":
+        subject = f"[HealthPolicyLens] पॉलिसी विश्लेषण ऑडिट अहवाल: {doc.original_filename}"
+        text_fallback = f"प्रिय वापरकर्ता,\n\nकृपया {doc.original_filename} साठी HealthPolicyLens पॉलिसी विश्लेषण अहवाल सोबत जोडलेला पहा."
+    else:
+        subject = f"[HealthPolicyLens] Policy Analysis Audit Report: {doc.original_filename}"
+        text_fallback = f"Dear User,\n\nPlease find attached the HealthPolicyLens policy analysis report for {doc.original_filename}."
+
+    # Using Header to support UTF-8 encoded subject
+    from email.header import Header
 
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"[HealthPolicyLens] Policy Analysis Audit Report: {doc.original_filename}"
-    msg["From"] = f"{user_name} <{user_sender}>"
+    msg["Subject"] = Header(subject, "utf-8")
+    msg["From"] = f"{user_name} via HealthPolicyLens <{sender_email}>"
     msg["To"] = request.email
     msg["Reply-To"] = user_sender
     
-    # Plaintext fallback
-    text_fallback = f"Dear User,\n\nPlease find attached the HealthPolicyLens policy analysis report for {doc.original_filename}."
-    part1 = MIMEText(text_fallback, "plain")
-    part2 = MIMEText(html_content, "html")
+    # Plaintext fallback and HTML content formatted with UTF-8
+    part1 = MIMEText(text_fallback, "plain", "utf-8")
+    part2 = MIMEText(html_content, "html", "utf-8")
     msg.attach(part1)
     msg.attach(part2)
     
@@ -1986,14 +2099,11 @@ async def email_report(
             with smtplib.SMTP(smtp_server, smtp_port) as server:
                 server.starttls()
                 server.login(smtp_user, smtp_password)
-                # To prevent Gmail/SMTP servers from rejecting unauthorized envelope senders (MAIL FROM),
-                # we use the authenticated smtp_user as the envelope sender, while the From header
-                # displayed to the recipient remains the registered user's email (user_sender).
-                # If smtp_user is not available, we fall back to user_sender.
-                envelope_sender = smtp_user if smtp_user else user_sender
+                # Use authenticated smtp_user as envelope sender for DMARC/SPF compatibility
+                envelope_sender = smtp_user
                 server.sendmail(envelope_sender, [request.email], msg.as_string())
             sent_successfully = True
-            logger.info(f"📧 Email report successfully sent via SMTP to {request.email} from user {user_sender}")
+            logger.info(f"📧 Email report successfully sent via SMTP to {request.email} from authenticated sender {envelope_sender}")
     except Exception as e:
         error_msg = str(e)
         logger.error(f"Failed to send email via SMTP: {e}")
@@ -2012,9 +2122,15 @@ async def email_report(
     if sent_successfully:
         return {"status": "sent", "message": f"Report successfully emailed to {request.email}."}
     else:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to send email to {request.email}. {error_msg if error_msg else 'SMTP configuration issue.'}"
-        )
+        if settings.DEBUG:
+            return {
+                "status": "debug_saved",
+                "message": f"SMTP sending failed ({error_msg or 'credentials missing'}). Report saved locally to {debug_filepath} (Debug Mode)."
+            }
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to send email to {request.email}. {error_msg if error_msg else 'SMTP configuration issue.'}"
+            )
 
 

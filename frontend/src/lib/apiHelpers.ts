@@ -207,20 +207,27 @@ export const remindersApi = {
 };
 
 export const exportApi = {
-  emailReport: async (id: string, email: string) => {
-    const res = await apiClient.post(`/documents/${id}/email`, { email });
+  emailReport: async (id: string, email: string, language?: string) => {
+    const res = await apiClient.post(`/documents/${id}/email`, { email, language });
     return res.data;
   },
   
-  downloadReport: async (id: string) => {
-    const res = await apiClient.get(`/documents/${id}/export`, { responseType: 'blob' });
+  downloadReport: async (id: string, language?: string) => {
+    const res = await apiClient.get(`/documents/${id}/export`, { 
+      params: { language },
+      responseType: 'blob' 
+    });
     return res.data;
   },
   
-  getExportUrl: (id: string) => {
+  getExportUrl: (id: string, language?: string) => {
     const token = typeof window !== 'undefined' ? sessionStorage.getItem('access_token') : null;
     const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
-    return `${baseUrl}/documents/${id}/export${token ? `?token=${token}` : ''}`;
+    const params = new URLSearchParams();
+    if (token) params.append('token', token);
+    if (language) params.append('language', language);
+    const queryString = params.toString();
+    return `${baseUrl}/documents/${id}/export${queryString ? `?${queryString}` : ''}`;
   }
 };
 
@@ -238,6 +245,7 @@ export const claimsApi = {
     systolic_bp: number;
     diastolic_bp: number;
     document_id?: string;
+    treatment_name?: string;
   }) => {
     const res = await apiClient.post('/claims/predict', data);
     return res.data;

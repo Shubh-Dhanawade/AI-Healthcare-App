@@ -60,10 +60,56 @@ class ClaimPredictionRequest(BaseModel):
     systolic_bp: int = Field(..., ge=80, le=200, description="Systolic Blood Pressure (mmHg)")
     diastolic_bp: int = Field(..., ge=50, le=130, description="Diastolic Blood Pressure (mmHg)")
     document_id: Optional[str] = Field(None, description="Optional associated policy document ID")
+    treatment_name: Optional[str] = Field(None, description="The treatment/surgery type for the claim")
 
 
 def get_mock_prediction_response(request: ClaimPredictionRequest, error_msg: str) -> Dict[str, Any]:
     """Fallback generator providing realistic mock predictions if models are unbuilt."""
+    rule_denial_reasons = []
+    rule_prob_adjust = 0.0
+    is_hard_denial = False
+    rule_contributions = []
+    
+    treatment_lower = (request.treatment_name or "").lower().strip()
+    if treatment_lower:
+        if "maternity" in treatment_lower or "delivery" in treatment_lower:
+            if request.age > 45 or request.age < 18:
+                rule_denial_reasons.append(f"Patient age ({request.age}) is outside the standard covered childbearing range (18-45 years) for maternity benefits.")
+                is_hard_denial = True
+                rule_contributions.append({
+                    "feature": "age_maternity_limit",
+                    "label": "Maternity Age Exceeded",
+                    "value": str(request.age),
+                    "contribution": 100.0
+                })
+        elif "cataract" in treatment_lower:
+            rule_denial_reasons.append("Cataract surgery is subject to a standard 24-month waiting period from policy inception.")
+            rule_prob_adjust += 0.35
+            rule_contributions.append({
+                "feature": "cataract_waiting_period",
+                "label": "Cataract specific wait time",
+                "value": "24 Months Limit",
+                "contribution": 35.0
+            })
+        elif "knee" in treatment_lower or "joint replacement" in treatment_lower:
+            rule_denial_reasons.append("Joint/Knee replacement has a specific 24-to-48-month waiting period under standard policy terms.")
+            rule_prob_adjust += 0.4
+            rule_contributions.append({
+                "feature": "joint_replacement_wait",
+                "label": "Knee Replacement Wait Time",
+                "value": "2-4 Year Limit",
+                "contribution": 40.0
+            })
+        elif "accident" in treatment_lower or "fracture" in treatment_lower:
+            rule_prob_adjust -= 0.3
+            rule_denial_reasons.append("Accidental injuries are covered from Day 1 and are exempt from standard waiting periods.")
+            rule_contributions.append({
+                "feature": "accidental_waiver",
+                "label": "Accidental Cover (Waiver Active)",
+                "value": "Exempt from Wait Time",
+                "contribution": -30.0
+            })
+
     score = 0.1
     if request.smoker == 1:
         score += 0.35
@@ -76,8 +122,12 @@ def get_mock_prediction_response(request: ClaimPredictionRequest, error_msg: str
     if request.diastolic_bp > 85:
         score += 0.05
         
-    probability = min(max(score, 0.05), 0.95)
-    denied = probability > 0.5
+    probability = min(max(score + rule_prob_adjust, 0.05), 0.95)
+    if is_hard_denial:
+        probability = 1.0
+        denied = True
+    else:
+        denied = probability > 0.5
     
     contributions_formatted = [
         {"feature": "age", "label": "Patient Age", "value": str(request.age), "contribution": round((request.age - 35) * 0.2, 1)},
@@ -88,11 +138,16 @@ def get_mock_prediction_response(request: ClaimPredictionRequest, error_msg: str
         {"feature": "systolic_bp", "label": "Systolic Blood Pressure", "value": str(request.systolic_bp), "contribution": 8.0 if request.systolic_bp > 130 else -2.0},
         {"feature": "diastolic_bp", "label": "Diastolic Blood Pressure", "value": str(request.diastolic_bp), "contribution": 4.0 if request.diastolic_bp > 85 else -1.0}
     ]
+
+    for rc in rule_contributions:
+        contributions_formatted.append(rc)
     
     explanation = (
         f"Based on your profile, the claim denial risk is assessed as {'HIGH' if denied else 'LOW'} ({probability*100:.1f}% probability) "
         f"primarily due to your smoking status and body mass index. (Note: Using baseline rules; model load failed: {error_msg})"
     )
+    if rule_denial_reasons:
+        explanation += " Rules triggered: " + "; ".join(rule_denial_reasons)
     
     return {
         "success": True,
@@ -108,9 +163,11 @@ async def generate_underwriting_explanation(
     probability: float, 
     denied: int, 
     contributions: List[Dict[str, Any]],
-    policy_context: Optional[Dict[str, Any]] = None
+    policy_context: Optional[Dict[str, Any]] = None,
+    treatment_name: Optional[str] = None,
+    rule_denial_reasons: Optional[List[str]] = None
 ) -> str:
-    """Generate dynamic narrative explanation with Gemma 3 based on ML outputs and policy context."""
+    """Generate dynamic narrative explanation with Gemma 3 based on ML outputs, treatment type, and policy rules."""
     # Sort contributions by absolute value to find the top drivers
     sorted_contribs = sorted(contributions, key=lambda x: abs(x["contribution"]), reverse=True)
     top_drivers = []
@@ -129,7 +186,12 @@ ASSOCIATED POLICY DETAILS:
 - Policy Coverage Terms: {policy_context['fields_summary']}
 """
 
-    prompt = f"""You are a senior healthcare underwriting consultant. We have a machine learning model that has predicted the claim denial probability for a user's health profile.
+    treatment_str = f"- Claiming for Treatment: {treatment_name}\n" if treatment_name else ""
+    rules_str = ""
+    if rule_denial_reasons:
+        rules_str = "Policy Underwriting Rules & Exclusions Triggered:\n" + "\n".join([f"  • {reason}" for reason in rule_denial_reasons]) + "\n"
+    
+    prompt = f"""You are a senior healthcare underwriting consultant. We have a machine learning model that has predicted the claim denial probability for a user's health profile and policy terms.
     
 User Health Profile:
 - Age: {request.age}
@@ -138,7 +200,9 @@ User Health Profile:
 - Pre-existing Conditions Count: {request.pre_existing_conditions}
 - Coverage Tier: {{1: "Basic", 2: "Standard", 3: "Premium"}}[{request.coverage_tier}]
 - Blood Pressure: {request.systolic_bp}/{request.diastolic_bp} mmHg (Normal range: 120/80)
+{treatment_str}
 {policy_str}
+{rules_str}
 
 Machine Learning Model Results:
 - Denial Risk Probability: {probability * 100:.1f}%
@@ -146,8 +210,9 @@ Machine Learning Model Results:
 - Local Feature Risk Drivers (Marginal Impact on Denial Probability):
 {drivers_str}
 
-Write a professional, clear, and empathetic plain-language summary under 120 words.
-Address the patient directly. If policy details are provided above under 'ASSOCIATED POLICY DETAILS', explicitly relate your explanation to those policy limits (e.g., deductibles, co-pays, or waiting periods) to state if their claim will be covered. Otherwise, focus on general parameters.
+Write a professional, clear, and concise plain-language summary under 120 words.
+Do NOT use a letter or email format (do NOT write "Dear [Patient Name]", "Subject:", "Dear Sangita", or sign-offs like "Sincerely", "Regards", or underwriting signatures).
+Provide a direct, general short summary of the underwriting verdict and list the valid points based on the health vitals, policy rules, or exclusions. If any policy exclusions or rules are triggered (e.g. age limits for maternity, specific waiting periods for cataract/joint replacement, pre-existing waiting periods, or accident waiver), explicitly relate your explanation to those policy terms and state if their claim will be covered.
 Do not mention 'the machine learning model' or 'feature importances' in the text; present the reasoning as an expert underwriting evaluation.
 """
     try:
@@ -159,16 +224,19 @@ Do not mention 'the machine learning model' or 'feature importances' in the text
         # Rule-based fallback if Ollama is offline
         risk_level = "HIGH" if probability > 0.5 else "LOW"
         reasons = []
-        if request.smoker == 1:
-            reasons.append("active smoking status")
-        if request.bmi > 29.9:
-            reasons.append("elevated Body Mass Index (obesity range)")
-        if request.pre_existing_conditions > 1:
-            reasons.append(f"{request.pre_existing_conditions} pre-existing health conditions")
-        if request.systolic_bp > 139 or request.diastolic_bp > 89:
-            reasons.append("hypertensive blood pressure indicators")
+        if rule_denial_reasons:
+            reasons.extend(rule_denial_reasons)
+        else:
+            if request.smoker == 1:
+                reasons.append("active smoking status")
+            if request.bmi > 29.9:
+                reasons.append("elevated Body Mass Index (obesity range)")
+            if request.pre_existing_conditions > 1:
+                reasons.append(f"{request.pre_existing_conditions} pre-existing health conditions")
+            if request.systolic_bp > 139 or request.diastolic_bp > 89:
+                reasons.append("hypertensive blood pressure indicators")
             
-        reasons_str = ", ".join(reasons) if reasons else "general actuarial risk profiling parameters"
+        reasons_str = "; ".join(reasons) if reasons else "general actuarial risk profiling parameters"
         recommendation = "We recommend consulting a wellness coordinator for health improvement programs and reviewing standard or premium tiers to optimize coverage limits."
         if request.smoker == 1:
             recommendation = "Participating in a smoking cessation program could significantly reduce your underwriting risk profile and premiums."
@@ -249,6 +317,8 @@ async def predict_claim_denial(
     try:
         # 1. Query database for associated policy details if document_id is provided
         policy_context = None
+        fields_dict = {}
+        doc = None
         if request.document_id:
             try:
                 from app.models.document import Document, ExtractedField
@@ -265,6 +335,7 @@ async def predict_claim_denial(
                         "policy_name": doc.original_filename,
                         "fields_summary": fields_summary
                     }
+                    fields_dict = {f.field_name.lower().strip(): (f.field_value or "").strip() for f in fields}
             except Exception as db_err:
                 logger.warning(f"Failed to query database for policy context in predict: {db_err}")
 
@@ -284,8 +355,8 @@ async def predict_claim_denial(
         scaled_features = scaler.transform(features)
         
         # 4. Model inference
-        denied_prediction = int(model.predict(scaled_features)[0])
-        denial_probability = float(model.predict_proba(scaled_features)[0][1])
+        base_denied_prediction = int(model.predict(scaled_features)[0])
+        base_denial_probability = float(model.predict_proba(scaled_features)[0][1])
         
         # 5. Mathematically compute local feature contributions using counterfactual baseline
         baseline = {
@@ -307,7 +378,7 @@ async def predict_claim_denial(
             scaled_temp = scaler.transform([temp_values])
             prob_temp = float(model.predict_proba(scaled_temp)[0][1])
             # positive difference means this feature increased risk relative to baseline
-            contributions[key] = denial_probability - prob_temp
+            contributions[key] = base_denial_probability - prob_temp
             
         contributions_formatted = []
         for key, diff in contributions.items():
@@ -315,6 +386,7 @@ async def predict_claim_denial(
                 "age": "Patient Age",
                 "bmi": "BMI Level",
                 "smoker": "Smoking Status",
+                "pre_existing_existing_conditions": "Pre-existing Conditions",  # wait, make sure it maps to pre_existing_conditions
                 "pre_existing_conditions": "Pre-existing Conditions",
                 "coverage_tier": "Policy Coverage Tier",
                 "systolic_bp": "Systolic Blood Pressure",
@@ -333,20 +405,249 @@ async def predict_claim_denial(
                 "value": value_str,
                 "contribution": round(diff * 100, 1)
             })
+
+        # 6. Apply hybrid rule-based evaluations
+        rule_denial_reasons = []
+        rule_prob_adjust = 0.0
+        is_hard_denial = False
+        rule_contributions = []
+
+        treatment_lower = (request.treatment_name or "").lower().strip()
+        
+        # A. Contractual Presence Check: Verify if treatment is mentioned/covered in the policy
+        if request.document_id and treatment_lower and doc:
+            treatment_words = [w for w in treatment_lower.replace("/", " ").replace("-", " ").split() if len(w) > 3]
+            stop_words = {"surgery", "cover", "treatment", "care", "delivery", "procedure", "replacement", "bypass", "cabg"}
+            keywords_to_check = [w for w in treatment_words if w not in stop_words]
             
-        # 6. Send to Gemma 3 for explanation synthesis
+            if keywords_to_check:
+                text_to_search = (doc.extracted_text or "").lower()
+                is_mentioned_in_text = any(kw in text_to_search for kw in keywords_to_check)
+                is_mentioned_in_fields = any(kw in str(val).lower() for kw in keywords_to_check for val in fields_dict.values())
+                is_general_fallback = any(x in treatment_lower for x in ["hospitalization", "day care", "room rent", "ambulance"])
+                is_standard_treatment = any(x in treatment_lower for x in [
+                    "cataract", "bypass", "cabg", "knee", "replacement", 
+                    "dialysis", "kidney", "chemo", "cancer", "oncology", 
+                    "hernia", "gallbladder", "cholecyst", "fracture", "accident"
+                ])
+                
+                if not (is_mentioned_in_text or is_mentioned_in_fields or is_general_fallback or is_standard_treatment):
+                    reason = f"The requested treatment '{request.treatment_name}' is not explicitly mentioned or covered in the uploaded policy schedule/report."
+                    rule_denial_reasons.append(reason)
+                    is_hard_denial = True
+                    rule_contributions.append({
+                        "feature": "policy_unmentioned_treatment",
+                        "label": "Policy Exclusion: Treatment Not Found",
+                        "value": "Not in Policy Document",
+                        "contribution": 100.0
+                    })
+
+        if treatment_lower:
+            # A. Maternity Delivery
+            if "maternity" in treatment_lower or "delivery" in treatment_lower:
+                # Age limit check
+                if request.age > 45 or request.age < 18:
+                    reason = f"Patient age ({request.age}) is outside the standard covered childbearing range (18-45 years) for maternity benefits."
+                    rule_denial_reasons.append(reason)
+                    is_hard_denial = True
+                    rule_contributions.append({
+                        "feature": "age_maternity_limit",
+                        "label": "Policy Rule: Maternity Age Limit",
+                        "value": f"Age {request.age} Exceeded",
+                        "contribution": 100.0
+                    })
+                
+                # Exclusion check from extracted policy fields
+                maternity_cov = fields_dict.get("maternity coverage", "").lower()
+                if any(x in maternity_cov for x in ["not covered", "exclude", "exclus", "no coverage", "excluded"]):
+                    reason = "Maternity benefits are explicitly excluded under this policy."
+                    rule_denial_reasons.append(reason)
+                    is_hard_denial = True
+                    rule_contributions.append({
+                        "feature": "maternity_policy_exclusion",
+                        "label": "Policy Exclusion: Maternity",
+                        "value": "Excluded",
+                        "contribution": 100.0
+                    })
+                elif "waiting period" in maternity_cov or "2-yr" in maternity_cov or "9 months" in maternity_cov:
+                    reason = f"Maternity claims are subject to the policy's specific waiting period: '{fields_dict.get('maternity coverage')}'."
+                    rule_denial_reasons.append(reason)
+                    rule_prob_adjust += 0.4
+                    rule_contributions.append({
+                        "feature": "maternity_waiting_period",
+                        "label": "Policy Rule: Maternity Wait Time",
+                        "value": "Pending Verification",
+                        "contribution": 40.0
+                    })
+
+            # B. Cataract Surgery
+            elif "cataract" in treatment_lower:
+                waiting_period = fields_dict.get("waiting period", "").lower()
+                pre_existing_cov = fields_dict.get("pre existing coverage", "").lower()
+                has_wait_indicator = any(x in waiting_period or x in pre_existing_cov for x in ["waiting", "months", "years", "ped", "36", "24", "12"])
+                if has_wait_indicator or not fields_dict:
+                    reason = "Cataract surgery is subject to a standard 24-month specific disease waiting period from policy inception."
+                    rule_denial_reasons.append(reason)
+                    rule_prob_adjust += 0.35
+                    rule_contributions.append({
+                        "feature": "cataract_waiting_period",
+                        "label": "Policy Rule: Cataract Wait Time",
+                        "value": "24 Months Limit",
+                        "contribution": 35.0
+                    })
+                
+                room_rent = fields_dict.get("room rent limit", "").lower()
+                if any(x in room_rent for x in ["cataract", "cap", "limit", "50,000", "30,000"]):
+                    reason = "Cataract surgery is capped under a policy-defined sub-limit, which may result in a partial claim denial or payout cap."
+                    rule_denial_reasons.append(reason)
+                    rule_contributions.append({
+                        "feature": "cataract_sublimit_cap",
+                        "label": "Policy Rule: Cataract Payout Cap",
+                        "value": "Sub-limit applies",
+                        "contribution": 15.0
+                    })
+
+            # C. Knee Replacement
+            elif "knee" in treatment_lower or "joint replacement" in treatment_lower:
+                waiting_period = fields_dict.get("waiting period", "").lower()
+                pre_existing_cov = fields_dict.get("pre existing coverage", "").lower()
+                has_wait_indicator = any(x in waiting_period or x in pre_existing_cov for x in ["waiting", "months", "years", "ped", "36", "24", "12"])
+                if has_wait_indicator or not fields_dict:
+                    reason = "Knee/Joint replacement is subject to a standard 24-to-48-month waiting period from policy inception, unless caused by an acute accident."
+                    rule_denial_reasons.append(reason)
+                    rule_prob_adjust += 0.4
+                    rule_contributions.append({
+                        "feature": "joint_replacement_wait",
+                        "label": "Policy Rule: Knee Replacement Wait",
+                        "value": "2-4 Year Limit",
+                        "contribution": 40.0
+                    })
+
+            # D. Heart Bypass / CABG
+            elif "bypass" in treatment_lower or "cabg" in treatment_lower or "heart" in treatment_lower:
+                pre_existing_cov = fields_dict.get("pre existing coverage", "").lower()
+                has_wait_indicator = any(x in pre_existing_cov for x in ["waiting", "months", "years", "ped", "36", "24", "12", "exclusion"])
+                if (has_wait_indicator or not fields_dict) and (request.pre_existing_conditions > 0 or request.smoker == 1 or request.systolic_bp > 140 or request.diastolic_bp > 90):
+                    reason = "Heart Bypass/CABG is highly associated with cardiovascular pre-existing conditions, which are subject to a 48-month waiting period."
+                    rule_denial_reasons.append(reason)
+                    rule_prob_adjust += 0.3
+                    rule_contributions.append({
+                        "feature": "heart_bypass_ped",
+                        "label": "Policy Rule: Pre-existing Cardiac Risk",
+                        "value": "Subject to 48-month wait",
+                        "contribution": 30.0
+                    })
+
+            # E. Kidney Dialysis
+            elif "dialysis" in treatment_lower or "kidney" in treatment_lower:
+                pre_existing_cov = fields_dict.get("pre existing coverage", "").lower()
+                has_wait_indicator = any(x in pre_existing_cov for x in ["waiting", "months", "years", "ped", "36", "24", "12", "exclusion"])
+                if (has_wait_indicator or not fields_dict) and request.pre_existing_conditions > 0:
+                    reason = "Kidney Dialysis is for chronic renal failure, which is treated as a pre-existing condition subject to a 48-month waiting period."
+                    rule_denial_reasons.append(reason)
+                    rule_prob_adjust += 0.35
+                    rule_contributions.append({
+                        "feature": "dialysis_ped",
+                        "label": "Policy Rule: Chronic Renal Risk",
+                        "value": "Subject to 48-month wait",
+                        "contribution": 35.0
+                    })
+
+            # F. Accidental Fracture Cover
+            elif "accident" in treatment_lower or "fracture" in treatment_lower:
+                rule_prob_adjust -= 0.3
+                reason = "Accidental injuries are covered from Day 1 and are exempt from standard waiting periods."
+                rule_denial_reasons.append(reason)
+                rule_contributions.append({
+                    "feature": "accidental_waiver",
+                    "label": "Policy Rule: Accidental Cover Waiver",
+                    "value": "Exempt from Wait Time",
+                    "contribution": -30.0
+                })
+
+            # G. Cancer Chemotherapy
+            elif "chemo" in treatment_lower or "cancer" in treatment_lower or "oncology" in treatment_lower:
+                pre_existing_cov = fields_dict.get("pre existing coverage", "").lower()
+                has_wait_indicator = any(x in pre_existing_cov for x in ["waiting", "months", "years", "ped", "36", "24", "12", "exclusion"])
+                if (has_wait_indicator or not fields_dict) and (request.pre_existing_conditions > 0 or request.smoker == 1):
+                    reason = "Oncology/Chemotherapy is for chronic neoplastic conditions, subject to a 36-to-48-month pre-existing disease waiting period."
+                    rule_denial_reasons.append(reason)
+                    rule_prob_adjust += 0.35
+                    rule_contributions.append({
+                        "feature": "cancer_chemo_ped",
+                        "label": "Policy Rule: Chronic Cancer Risk",
+                        "value": "Subject to PED Wait",
+                        "contribution": 35.0
+                    })
+
+            # H. Hernia / Gallbladder Removal
+            elif "hernia" in treatment_lower or "gallbladder" in treatment_lower or "cholecyst" in treatment_lower:
+                waiting_period = fields_dict.get("waiting period", "").lower()
+                pre_existing_cov = fields_dict.get("pre existing coverage", "").lower()
+                has_wait_indicator = any(x in waiting_period or x in pre_existing_cov for x in ["waiting", "months", "years", "ped", "36", "24", "12"])
+                if has_wait_indicator or not fields_dict:
+                    reason = "Hernia repair and Gallbladder removal are standard specified diseases subject to a 24-month waiting period from inception."
+                    rule_denial_reasons.append(reason)
+                    rule_prob_adjust += 0.3
+                    rule_contributions.append({
+                        "feature": "specific_surgery_wait",
+                        "label": "Policy Rule: Specified Surgery Wait",
+                        "value": "24-Month Wait Applies",
+                        "contribution": 30.0
+                    })
+
+            # I. Cosmetic / Plastic Surgery
+            elif "cosmetic" in treatment_lower or "plastic" in treatment_lower:
+                reason = "Cosmetic or plastic surgeries are strictly excluded under standard policies (Code Excl08) unless necessitated by an acute accidental injury."
+                rule_denial_reasons.append(reason)
+                is_hard_denial = True
+                rule_contributions.append({
+                    "feature": "cosmetic_exclusion",
+                    "label": "Policy Exclusion: Cosmetic Surgery",
+                    "value": "Excluded (Excl08)",
+                    "contribution": 100.0
+                })
+
+            # J. Hazardous Sports Injury
+            elif "hazardous" in treatment_lower or "adventure" in treatment_lower or "sports" in treatment_lower:
+                reason = "Injuries resulting from participation in hazardous or adventure sports are strictly excluded under policy terms (Code Excl09)."
+                rule_denial_reasons.append(reason)
+                is_hard_denial = True
+                rule_contributions.append({
+                    "feature": "hazardous_sports_exclusion",
+                    "label": "Policy Exclusion: Hazardous Sports",
+                    "value": "Excluded (Excl09)",
+                    "contribution": 100.0
+                })
+
+        # Calculate final denial outputs combining ML and Policy Rules
+        final_denial_probability = base_denial_probability
+        if is_hard_denial:
+            final_denial_probability = 1.0
+            final_denied_prediction = True
+        else:
+            final_denial_probability = min(max(base_denial_probability + rule_prob_adjust, 0.0), 1.0)
+            final_denied_prediction = final_denial_probability > 0.5
+
+        # Append rule contributions to formatted contributions list
+        for rc in rule_contributions:
+            contributions_formatted.append(rc)
+
+        # 7. Send to Gemma 3 for explanation synthesis
         explanation = await generate_underwriting_explanation(
             request, 
-            denial_probability, 
-            denied_prediction, 
+            final_denial_probability, 
+            1 if final_denied_prediction else 0, 
             contributions_formatted,
-            policy_context
+            policy_context,
+            request.treatment_name,
+            rule_denial_reasons
         )
         
         return {
             "success": True,
-            "claim_denied": denied_prediction == 1,
-            "denial_probability": round(denial_probability * 100, 1),
+            "claim_denied": final_denied_prediction,
+            "denial_probability": round(final_denial_probability * 100, 1),
             "contributions": contributions_formatted,
             "explanation": explanation
         }
