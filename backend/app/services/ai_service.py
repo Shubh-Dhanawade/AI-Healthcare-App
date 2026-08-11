@@ -2185,13 +2185,15 @@ def extract_claim_section(text: str, max_chars: int = 6000) -> str:
     return text[:max_chars]
 
 
-TREATMENTS_EXTRACTION_PROMPT = """Analyze the following health insurance policy document and extract a list of up to 6 major medical treatments, surgeries, or procedures that are covered or mentioned in the document (e.g., Cataract Surgery, Knee Replacement, Heart Bypass, Dialysis, Maternity, Accidental Fracture, etc.).
-Return ONLY a valid JSON object with a single key "treatments" containing an array of strings. Do not include any markdown fences or explanatory text.
+TREATMENTS_EXTRACTION_PROMPT = """Analyze the following health insurance policy document and extract a list of up to 10 major medical treatments, procedures, or chronic conditions that are explicitly covered, mentioned, or declared in the document.
+Look only at the document text. Do not make up or copy example treatments.
 
-JSON Format:
+You must return the response as a JSON object inside a ```json ``` code block:
+```json
 {{
-  "treatments": ["Cataract Surgery", "Heart Bypass", "Knee Replacement", ...]
+  "treatments": ["Hospitalization Expenses", "Day Care Treatment", "Asthma Care", "Diabetes Treatment"]
 }}
+```
 
 DOCUMENT:
 {document_text}"""
@@ -2211,7 +2213,7 @@ async def extract_covered_treatments(document_id: str, document_text: str) -> li
         
         treatments = result.get("treatments", [])
         if isinstance(treatments, list) and len(treatments) > 0:
-            clean_treatments = [str(t).strip() for t in treatments if str(t).strip()][:6]
+            clean_treatments = [str(t).strip() for t in treatments if str(t).strip()][:10]
             _ai_cache[cache_key] = {"treatments": clean_treatments}
             return clean_treatments
     except Exception as e:
@@ -2223,7 +2225,12 @@ async def extract_covered_treatments(document_id: str, document_text: str) -> li
         "Knee Replacement",
         "Accidental Fracture Cover",
         "Kidney Dialysis",
-        "Maternity Delivery"
+        "Maternity Delivery",
+        "Cancer Chemotherapy",
+        "Hernia Repair Surgery",
+        "Gallbladder Removal",
+        "Cosmetic Surgery",
+        "Hazardous Sports Injury"
     ]
     return fallback
 

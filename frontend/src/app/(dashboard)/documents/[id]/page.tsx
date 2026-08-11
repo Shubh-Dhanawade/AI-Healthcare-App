@@ -537,7 +537,12 @@ export default function DocumentDetailPage() {
     "Knee Replacement",
     "Accidental Fracture Cover",
     "Kidney Dialysis",
-    "Maternity Delivery"
+    "Maternity Delivery",
+    "Cancer Chemotherapy",
+    "Hernia Repair Surgery",
+    "Gallbladder Removal",
+    "Cosmetic Surgery",
+    "Hazardous Sports Injury"
   ];
 
   // Interactive Claims Predictor states (within policy details tab)
@@ -565,7 +570,8 @@ export default function DocumentDetailPage() {
         coverage_tier: 2, // Default to standard tier
         systolic_bp: predictSystolic,
         diastolic_bp: predictDiastolic,
-        document_id: docId
+        document_id: docId,
+        treatment_name: treatmentTypeInput
       });
       setClaimPredictionResult(res);
     } catch (err: any) {
@@ -585,6 +591,7 @@ export default function DocumentDetailPage() {
   const handleDownload = async () => {
     if (!doc) return;
     const toastId = toast.loading('Generating PDF report...', { position: 'top-right' });
+    let iframe: HTMLIFrameElement | null = null;
 
     try {
       // 1. Load html2pdf from CDN
@@ -610,7 +617,7 @@ export default function DocumentDetailPage() {
       const printHTML = generateSimplePrintHTML(docToPrint as any, selectedLanguage);
 
       // 3. Create a temporary hidden iframe container
-      const iframe = document.createElement('iframe');
+      iframe = document.createElement('iframe');
       iframe.style.position = 'fixed';
       iframe.style.left = '-9999px';
       iframe.style.top = '-9999px';
@@ -626,50 +633,61 @@ export default function DocumentDetailPage() {
       iframeDoc.write(printHTML);
       iframeDoc.close();
 
-      // Wait for the stylesheet rules inside the iframe to mount and paint
-      setTimeout(async () => {
-        try {
-          const opt = {
-            margin: 10,
-            filename: `HealthPolicyLens_Report_${doc.original_filename.replace(/\.[^/.]+$/, "") || docId}.pdf`,
-            image: { type: 'jpeg', quality: 0.98 },
-            html2canvas: {
-              scale: 2,
-              useCORS: true,
-              backgroundColor: '#ffffff' // Clear white background
-            },
-            jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
-          };
+      // Wait for fonts inside the iframe to be loaded (crucial for non-English scripts)
+      if (iframeDoc.fonts) {
+        await iframeDoc.fonts.ready;
+      }
+      // Brief pause to ensure the browser paints the fonts in the iframe viewport
+      await new Promise(resolve => setTimeout(resolve, 500));
 
-          // @ts-ignore
-          await html2pdf().from(iframeDoc.documentElement).set(opt).save();
+      const opt = {
+        margin: 10,
+        filename: `HealthPolicyLens_Report_${doc.original_filename.replace(/\.[^/.]+$/, "") || docId}.pdf`,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: {
+          scale: 2,
+          useCORS: true,
+          backgroundColor: '#ffffff'
+        },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+      };
 
-          toast.success('PDF report generated and downloaded successfully!', { id: toastId, position: 'top-right', duration: 4000 });
-        } catch (pdfError) {
-          console.error('PDF generation inside iframe failed, falling back to window print:', pdfError);
-          const printWindow = window.open('', '_blank');
-          if (printWindow) {
-            printWindow.document.write(printHTML);
-            printWindow.document.close();
-            printWindow.focus();
-            setTimeout(() => {
-              printWindow.print();
-            }, 800);
-            toast.success('Print to PDF dialog opened successfully!', { id: toastId, position: 'top-right', duration: 4000 });
-          } else {
-            toast.error('Pop-up blocked. Please allow pop-ups to print the PDF report.', { id: toastId, position: 'top-right', duration: 5000 });
-          }
-        } finally {
-          // Cleanup iframe
-          if (document.body.contains(iframe)) {
-            document.body.removeChild(iframe);
-          }
-        }
-      }, 500);
+      // @ts-ignore
+      await html2pdf().from(iframeDoc.documentElement).set(opt).save();
+
+      toast.success('PDF report generated and downloaded successfully!', { id: toastId, position: 'top-right', duration: 4000 });
 
     } catch (error) {
-      console.error('Download error:', error);
-      toast.error('Failed to generate PDF report', { id: toastId, position: 'top-right', duration: 5000 });
+      console.error('PDF generation failed, falling back to window print:', error);
+      try {
+        const printHTML = generateSimplePrintHTML({
+          ...doc,
+          summary: displayedSummary || cleanSummaryFields(doc.summary),
+          extracted_fields: selectedLanguage === 'English' ? doc.extracted_fields : (translations[selectedLanguage]?.extracted_fields || doc.extracted_fields),
+          risk_analyses: selectedLanguage === 'English' ? doc.risk_analyses : (translations[selectedLanguage]?.risk_analyses || doc.risk_analyses)
+        } as any, selectedLanguage);
+
+        const printWindow = window.open('', '_blank');
+        if (printWindow) {
+          printWindow.document.write(printHTML);
+          printWindow.document.close();
+          printWindow.focus();
+          setTimeout(() => {
+            printWindow.print();
+          }, 800);
+          toast.success('Print to PDF dialog opened successfully!', { id: toastId, position: 'top-right', duration: 4000 });
+        } else {
+          toast.error('Pop-up blocked. Please allow pop-ups to print the PDF report.', { id: toastId, position: 'top-right', duration: 5000 });
+        }
+      } catch (fallbackError) {
+        console.error('Fallback printing also failed:', fallbackError);
+        toast.error('Failed to generate PDF. Please try again.', { id: toastId, position: 'top-right' });
+      }
+    } finally {
+      // Cleanup iframe
+      if (iframe && document.body.contains(iframe)) {
+        document.body.removeChild(iframe);
+      }
     }
   };
 
@@ -731,16 +749,22 @@ export default function DocumentDetailPage() {
       toast.error('Please enter a valid email address', { position: 'top-right' });
       return;
     }
+
     setSendingEmail(true);
-    const toastId = toast.loading(`Sending PDF report to ${emailInput}...`, { position: 'top-right' });
+    const toastId = toast.loading('Sending email report...', { position: 'top-right' });
     try {
-      const res = await exportApi.emailReport(docId, emailInput);
-      toast.success(res.message || `PDF report sent successfully to ${emailInput}!`, { id: toastId, position: 'top-right', duration: 4000 });
+      const result = await exportApi.emailReport(docId, emailInput.trim(), selectedLanguage);
+      if (result.status === 'debug_saved') {
+        toast.success(result.message || 'Report saved locally (Debug mode).', { id: toastId, position: 'top-right', duration: 6000 });
+      } else {
+        toast.success(`Audit report successfully emailed to ${emailInput}!`, { id: toastId, position: 'top-right', duration: 4000 });
+      }
       setShowEmailForm(false);
       setEmailInput('');
-    } catch (error: any) {
-      console.error('Email error:', error);
-      toast.error(error.response?.data?.detail || `Failed to send PDF report to ${emailInput}`, { id: toastId, position: 'top-right', duration: 5000 });
+    } catch (err: any) {
+      console.error("Failed to send email report:", err);
+      const detail = err.response?.data?.detail || "An unexpected error occurred.";
+      toast.error(`Failed to send email: ${detail}`, { id: toastId, position: 'top-right', duration: 5000 });
     } finally {
       setSendingEmail(false);
     }
@@ -2769,7 +2793,7 @@ export default function DocumentDetailPage() {
 
                             <div className="bg-slate-950/40 p-4 border border-white/5 rounded-xl">
                               <h5 className="text-[10px] font-bold text-slate-300 mb-1.5 uppercase tracking-wider flex items-center gap-1">
-                                <Brain className="w-3.5 h-3.5 text-purple-400" /> Gemma 3 Underwriting Verdict
+                                <Brain className="w-3.5 h-3.5 text-purple-400" /> AI Verdict
                               </h5>
                               <p className="text-xs text-slate-300 leading-relaxed italic bg-slate-950/60 p-3 rounded-lg border border-slate-800">
                                 "{claimPredictionResult.explanation}"

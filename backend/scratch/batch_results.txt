@@ -1,0 +1,16 @@
+Results:
+Original: Healthcare Policy Analysis Report -> Hindi: स्वास्थ्य सेवा नीति विश्लेषण रिपोर्ट
+Original: No critical risk clauses detected. -> Hindi: कोई गंभीर जोखिम खंड नहीं पाया गया।
+Original: Document -> Hindi: दस्तावेज़
+Original: Processed -> Hindi: संसाधित
+Original: Pages -> Hindi: पन्ने
+Original: AI Executive Summary -> Hindi: एआई कार्यकारी सारांश
+Original: Top Coverages -> Hindi: शीर्ष कवरेज
+Original: Top Exclusions -> Hindi: शीर्ष बहिष्करण
+Original: Extracted Policy Parameters -> Hindi: निकाले गए नीति पैरामीटर
+Original: Critical Risk Audit -> Hindi: क्रिटिकल रिस्क ऑडिट
+Original: Clause -> Hindi: खण्ड
+Original: Explanation -> Hindi: स्पष्टीकरण
+Original: Recommendation -> Hindi: सिफ़ारिश
+
+Lengths match: True (13 vs 13)
