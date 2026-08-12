@@ -145,27 +145,6 @@ function ChatResponseCard({ msg }: { msg: any }) {
       </div>
 
 
-
-      {context && context.length > 0 && (
-        <div className="border-t border-white/5 pt-2">
-          <button
-            onClick={() => setShowSources(!showSources)}
-            className="flex items-center gap-1 text-[11px] text-blue-400 hover:text-blue-300 font-semibold"
-          >
-            <List className="w-3 h-3" /> {showSources ? 'Hide' : 'Show'} retrieved document context ({context.length} chunks)
-          </button>
-          {showSources && (
-            <div className="mt-2 space-y-1.5 border-l-2 border-blue-500/30 pl-3">
-              {context.map((c: string, idx: number) => (
-                <div key={idx} className="p-2 rounded bg-slate-900/30 border border-white/5">
-                  <p className="text-[10px] text-slate-400 font-bold mb-0.5">Source Passage #{idx + 1}</p>
-                  <p className="text-xs text-slate-300 italic">"...{c}..."</p>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }
@@ -351,7 +330,6 @@ const generateSimplePrintHTML = (doc: DocumentDetail, selectedLanguage: string) 
           <div class="header-meta">
             <span class="meta-item">Document: ${doc.original_filename}</span>
             <span class="meta-item">&bull; Processed: ${new Date(doc.created_at).toLocaleDateString()}</span>
-            <span class="meta-item">&bull; Safety Score: ${doc.safety_score}/100</span>
           </div>
         </div>
 
@@ -2483,9 +2461,9 @@ export default function DocumentDetailPage() {
                     <tbody className="divide-y divide-slate-700/30">
                       {(selectedLanguage === 'English' ? doc.extracted_fields : (translations[selectedLanguage]?.extracted_fields || doc.extracted_fields)).map((field) => (
                         <tr key={field.id} className="hover:bg-white/3">
-                          <td className="px-6 py-4 text-sm font-medium text-slate-300">{field.field_name}</td>
-                          <td className="px-6 py-4 text-sm text-white">{field.field_value || '—'}</td>
-                          <td className="px-6 py-4 hidden md:table-cell">
+                          <td className="px-6 py-2 text-sm font-medium text-slate-300">{field.field_name}</td>
+                          <td className="px-6 py-2 text-sm text-white">{field.field_value || '—'}</td>
+                          <td className="px-6 py-2 hidden md:table-cell">
                             {field.field_category && (
                               <span className="text-xs px-2 py-1 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 capitalize">
                                 {field.field_category.replace(/_/g, ' ')}
@@ -2669,9 +2647,9 @@ export default function DocumentDetailPage() {
                         <tbody className="divide-y divide-slate-700/30">
                           {displayedChecklist.checklist.map((item: any, idx: number) => (
                             <tr key={idx} className="hover:bg-white/3">
-                              <td className="px-5 py-3.5 text-sm font-medium text-slate-300">{item.document_name}</td>
-                              <td className="px-5 py-3.5 text-xs">
-                                <span className={`px-2 py-0.5 rounded-full font-bold border capitalize ${item.importance.toLowerCase().includes('mandatory') || item.importance.includes('अनिवार्य')
+                              <td className="px-2 py-2 text-sm font-medium text-slate-300">{item.document_name}</td>
+                              <td className="px-2 py-2 text-xs ">
+                                <span className={`px-2  py-0.5 rounded-full font-bold text-center border capitalize ${item.importance.toLowerCase().includes('mandatory') || item.importance.includes('अनिवार्य')
                                   ? 'bg-red-500/10 text-red-400 border-red-500/20'
                                   : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
                                   }`}>
