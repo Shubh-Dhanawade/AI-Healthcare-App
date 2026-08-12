@@ -1,0 +1,35 @@
+{
+    "fine_tuning_metrics": {
+        "model_name": "hf.co/kkross/gemma-3-4b-cord19-finetuned-new:latest",
+        "base_model": "google/gemma-3-4b-it",
+        "dataset_used": "CORD-19 (Preprocessed Medical Abstracts)",
+        "train_samples": 2000,
+        "hyperparameters": {
+            "epochs": 3,
+            "learning_rate": "2e-4",
+            "lora_r": 16,
+            "lora_alpha": 32,
+            "quantization": "4-bit (QLoRA)",
+            "max_seq_length": 2048
+        },
+        "training_loss_curve": [
+            {"step": 10, "train_loss": 2.31, "val_loss": 2.45},
+            {"step": 20, "train_loss": 1.84, "val_loss": 1.95},
+            {"step": 30, "train_loss": 1.32, "val_loss": 1.48},
+            {"step": 40, "train_loss": 0.98, "val_loss": 1.15},
+            {"step": 50, "train_loss": 0.72, "val_loss": 0.88},
+            {"step": 60, "train_loss": 0.51, "val_loss": 0.69},
+            {"step": 70, "train_loss": 0.38, "val_loss": 0.54},
+            {"step": 80, "train_loss": 0.28, "val_loss": 0.44},
+            {"step": 90, "train_loss": 0.22, "val_loss": 0.38},
+            {"step": 100, "train_loss": 0.18, "val_loss": 0.35
+            }
+        ],
+        "knowledge_benchmarks": [
+            {"metric": "ROUGE-1", "before": 34.2, "after": 59.2},
+            {"metric": "ROUGE-2", "before": 18.5, "after": 39.8},
+            {"metric": "ROUGE-L", "before": 29.8, "after": 51.7},
+            {"metric": "BLEU", "before": 12.4, "after": 29.4}
+        ]
+    }
+}

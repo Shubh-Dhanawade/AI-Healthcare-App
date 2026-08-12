@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import { Inter, Noto_Sans_Devanagari } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ChatHistoryProvider } from "@/contexts/ChatHistoryContext";
@@ -7,6 +7,11 @@ import QueryProvider from "@/components/providers/QueryProvider";
 import { Toaster } from "react-hot-toast";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
+const devanagari = Noto_Sans_Devanagari({
+  subsets: ["devanagari"],
+  variable: "--font-devanagari",
+  weight: ["400", "600", "700"],
+});
 
 export const metadata: Metadata = {
   title: "HealthPolicyLens - Insurance Document Intelligence",
@@ -22,7 +27,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className="dark">
-      <body className={`${inter.variable} font-sans antialiased bg-[#0a0f1e] text-white`}>
+      <body className={`${inter.variable} ${devanagari.variable} font-sans antialiased bg-[#0a0f1e] text-white`}>
         <QueryProvider>
           <AuthProvider>
             <ChatHistoryProvider>
