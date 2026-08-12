@@ -1579,7 +1579,7 @@ export default function DocumentDetailPage() {
     if (!dateInput) return '';
     const d = new Date(dateInput);
     if (isNaN(d.getTime())) return '';
-    
+
     // If the input is a string like "2029-05-04" or starts with YYYY-MM-DD
     if (typeof dateInput === 'string') {
       const match = dateInput.match(/^(\d{4})[\-\/](\d{1,2})[\-\/](\d{1,2})/);
@@ -1587,7 +1587,7 @@ export default function DocumentDetailPage() {
         return `${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')}`;
       }
     }
-    
+
     const year = d.getFullYear();
     const month = String(d.getMonth() + 1).padStart(2, '0');
     const day = String(d.getDate()).padStart(2, '0');

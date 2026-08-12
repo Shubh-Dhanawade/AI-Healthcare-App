@@ -957,8 +957,32 @@ async def get_model_metrics(
             }
         ]
 
-    return {
-        "fine_tuning_metrics": {
+    # Load dynamic fine-tuning metrics if available, otherwise fall back to defaults
+    fine_tuning_metrics = None
+    import json
+    import os
+    
+    paths_to_check = [
+        os.path.join(os.path.dirname(__file__), "fine_tuning_results.json"),
+        "fine_tuning_results.json",
+        "backend/app/api/v1/fine_tuning_results.json",
+        "backend/fine_tuning_results.json",
+        os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "fine_tuning_results.json")
+    ]
+    
+    for path in paths_to_check:
+        if os.path.exists(path):
+            try:
+                with open(path, "r") as f:
+                    data = json.load(f)
+                    if "fine_tuning_metrics" in data:
+                        fine_tuning_metrics = data["fine_tuning_metrics"]
+                        break
+            except Exception as e:
+                logger.error(f"Failed to read dynamic fine_tuning_results.json at {path}: {e}")
+                
+    if not fine_tuning_metrics:
+        fine_tuning_metrics = {
             "model_name": "hf.co/kkross/gemma-3-4b-cord19-finetuned-new:latest",
             "base_model": "google/gemma-3-4b-it",
             "dataset_used": "CORD-19 (Preprocessed Medical Abstracts)",
@@ -989,7 +1013,10 @@ async def get_model_metrics(
                 {"metric": "ROUGE-L", "before": 29.8, "after": 51.2},
                 {"metric": "BLEU", "before": 12.4, "after": 28.9}
             ]
-        },
+        }
+
+    return {
+        "fine_tuning_metrics": fine_tuning_metrics,
         "rag_evaluation_metrics": {
             "averages": averages,
             "recent_evals": recent_evals
