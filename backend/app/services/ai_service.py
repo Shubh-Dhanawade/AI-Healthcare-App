@@ -2067,9 +2067,9 @@ def _build_context_and_prompt(
     top_chunks: list[dict],
     policies: list[dict],
     query: str,
-    history_str: str,
-    user_name: str,
-    is_comparison: bool,
+    history_str: str = "",
+    user_name: str = "there",
+    is_comparison: bool = False,
 ) -> str:
     """
     Build a clean prompt string for Ollama.
@@ -2097,7 +2097,7 @@ def _build_context_and_prompt(
             f"You are comparing the following insurance policies: {names_str}.\n"
             "\n"
             "Instructions:\n"
-            "1. Compare the policies directly based on the provided POLICY CONTEXT and PREVIOUS CONVERSATION.\n"
+            "1. Compare the policies directly based on the provided POLICY CONTEXT.\n"
             "2. Clearly specify which details belong to which policy by name.\n"
             "3. Use a markdown comparison table or bullet lists grouped by policy name for readability.\n"
             "4. Highlight differences in key terms (deductibles, co-pays, waiting periods, room rent caps).\n"
@@ -2105,7 +2105,6 @@ def _build_context_and_prompt(
             "6. Do NOT include any 'ASSISTANT:', 'USER:', or 'context:' labels in your response.\n"
             "\n"
             f"POLICY CONTEXT:\n{context_block}\n"
-            f"PREVIOUS CONVERSATION:\n{history_str}\n"
             f"User Query: {query}\n"
             "\n"
             "Comparison Response:"
@@ -2120,15 +2119,14 @@ def _build_context_and_prompt(
             f"You are HealthPolicyLens, a knowledgeable and friendly healthcare insurance assistant helping {user_name}.\n"
             "\n"
             "Instructions:\n"
-            "1. Answer the user's query clearly and concisely using the provided POLICY CONTEXT and PREVIOUS CONVERSATION.\n"
-            "2. If the user is asking for clarification, explanation of terms, or a follow-up question on previous responses, use the PREVIOUS CONVERSATION and general insurance knowledge to answer directly and politely.\n"
+            "1. Answer the user's query clearly and concisely using the provided POLICY CONTEXT.\n"
+            "2. If the user is asking for clarification or explanation of terms, use general insurance knowledge to answer directly and politely.\n"
             "3. When referencing specific policy facts, always mention the source document name (e.g., 'In Star_Health.pdf...').\n"
-            "4. If the query asks for policy details that are not in the context, and cannot be inferred from history, state: 'I could not find this specific information in the selected policies.'\n"
+            "4. If the query asks for policy details that are not in the context, state: 'I could not find this specific information in the selected policies.'\n"
             "5. Do NOT output 'ASSISTANT:', 'USER:', or 'context:' labels in your response.\n"
             "6. Never output curly braces in your answer.\n"
             "\n"
             f"POLICY CONTEXT:\n{context_block}\n"
-            f"PREVIOUS CONVERSATION:\n{history_str}\n"
             f"User Query: {query}\n"
             "\n"
             "Response:"

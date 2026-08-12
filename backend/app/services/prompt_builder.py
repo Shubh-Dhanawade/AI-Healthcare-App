@@ -60,14 +60,7 @@ def build_chat_prompt(
                     summary_lines.append(f"- {policy.get('filename')}:\n  " + "\n  ".join(parts))
     summaries_block = "\n".join(summary_lines) if summary_lines else ""
     
-    # 3. Format the recent conversation history (last 6 messages / 3 exchanges to keep context small)
-    history_lines = []
-    if history:
-        for msg in history[-6:]:
-            role = msg.get("role", "user").upper()
-            content = msg.get("content", "")[:200]  # Slightly longer history snippets
-            history_lines += [f"{role}: {content}"]
-    history_str = "\n".join(history_lines) if history_lines else "No previous conversation."
+    # 3. History injection into prompt is disabled as per project requirements
     
     # Format optional SQL database details
     structured_str = f"STRUCTURED DATABASE DETAILS (Exact facts from database — treat as ground truth):\n{structured_context}\n\n" if structured_context else ""
@@ -82,7 +75,7 @@ def build_chat_prompt(
             f"You are comparing the following insurance policies: {names_str}.\n"
             "\n"
             "Instructions:\n"
-            "1. Compare the policies directly based on the provided POLICY CONTEXT, STORED SUMMARIES, and PREVIOUS CONVERSATION.\n"
+            "1. Compare the policies directly based on the provided POLICY CONTEXT and STORED SUMMARIES.\n"
             "2. Clearly specify which details belong to which policy by name.\n"
             "3. Use a markdown comparison table or bullet lists grouped by policy name for readability.\n"
             "4. Highlight differences in key terms (deductibles, co-pays, waiting periods, room rent caps).\n"
@@ -93,7 +86,6 @@ def build_chat_prompt(
             f"{structured_str}"
             f"{summaries_str}"
             f"POLICY CONTEXT:\n{context_block}\n\n"
-            f"PREVIOUS CONVERSATION:\n{history_str}\n\n"
             f"User Query: {query}\n"
             "\n"
             "Comparison Response:"
@@ -187,8 +179,7 @@ def build_chat_prompt(
             "\n"
             f"{structured_str}"
             f"{summaries_str}"
-            f"POLICY CONTEXT (direct document excerpts — read ALL blocks fully before answering):\n{context_block}\n\n"
-            f"PREVIOUS CONVERSATION:\n{history_str}\n\n"
+            f"POLICY CONTEXT (direct document excerpts — read all blocks carefully):\n{context_block}\n\n"
             f"User Query: {query}\n"
             "\n"
             "Response:"
