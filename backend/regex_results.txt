@@ -1,0 +1,5 @@
+Line 177 matched: Premium Details (₹)
+  Found matching numbers: [(194, '16,412.71'), (196, '1477.14'), (198, '1477.14'), (203, '2,954.29'), (204, '0.50'), (205, '19,367.00')]
+  Selected premium: 19,367.00
+
+Final Extracted Premium: 19,367.00

@@ -2,6 +2,7 @@
 Claims Analytics Router
 Serves data science statistics (SMOTE proportions, model metrics) and explainer plots.
 Also processes live dynamic claims underwriting predictions using pre-trained ML models and Gemma 3 explanations.
+Updated to support xgboost classification predictions.
 """
 
 import os

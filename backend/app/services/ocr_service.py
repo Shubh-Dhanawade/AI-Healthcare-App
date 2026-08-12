@@ -70,7 +70,7 @@ def get_paddleocr_reader():
     global _paddleocr_instance
     if _paddleocr_instance is None:
         from paddleocr import PaddleOCR
-        _paddleocr_instance = PaddleOCR(use_angle_cls=True, lang="en", show_log=False)
+        _paddleocr_instance = PaddleOCR(use_angle_cls=False, lang="en", show_log=False)
     return _paddleocr_instance
 
 
@@ -87,9 +87,9 @@ def extract_text_with_easyocr(file_path: str, page_count: int = 1) -> Tuple[str,
             page_count = len(doc)
             for page_num in range(page_count):
                 page = doc[page_num]
-                mat = fitz.Matrix(2.0, 2.0)
+                mat = fitz.Matrix(1.5, 1.5)
                 pix = page.get_pixmap(matrix=mat)
-                img_bytes = pix.tobytes("png")
+                img_bytes = pix.tobytes("jpeg")
                 
                 result = reader.readtext(img_bytes, detail=0, adjust_contrast=0)
                 if result:
@@ -128,9 +128,9 @@ def extract_text_with_pytesseract(file_path: str, page_count: int = 1) -> Tuple[
             page_count = len(doc)
             for page_num in range(page_count):
                 page = doc[page_num]
-                mat = fitz.Matrix(2.0, 2.0)
+                mat = fitz.Matrix(1.5, 1.5)
                 pix = page.get_pixmap(matrix=mat)
-                img_bytes = pix.tobytes("png")
+                img_bytes = pix.tobytes("jpeg")
                 
                 img = Image.open(io.BytesIO(img_bytes))
                 page_text = pytesseract.image_to_string(img)
@@ -174,10 +174,10 @@ def extract_text_with_ocr(file_path: str, page_count: int = 1) -> Tuple[str, str
             page_count = len(doc)
             for page_num in range(page_count):
                 page = doc[page_num]
-                mat = fitz.Matrix(2.0, 2.0)
+                mat = fitz.Matrix(1.5, 1.5)
                 pix = page.get_pixmap(matrix=mat)
-                img_bytes = pix.tobytes("png")
-                result = ocr.ocr(img_bytes, cls=True)
+                img_bytes = pix.tobytes("jpeg")
+                result = ocr.ocr(img_bytes, cls=False)
                 if result and result[0]:
                     page_text = "\n".join(
                         [line[1][0] for line in result[0] if line[1][0].strip()]
@@ -185,7 +185,7 @@ def extract_text_with_ocr(file_path: str, page_count: int = 1) -> Tuple[str, str
                     text_parts.append(f"[Page {page_num + 1}]\n{page_text}")
             doc.close()
         else:
-            result = ocr.ocr(file_path, cls=True)
+            result = ocr.ocr(file_path, cls=False)
             if result and result[0]:
                 page_text = "\n".join(
                     [line[1][0] for line in result[0] if line[1][0].strip()]

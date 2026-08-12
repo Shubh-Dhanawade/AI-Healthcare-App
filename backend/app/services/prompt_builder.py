@@ -161,8 +161,9 @@ def build_chat_prompt(
 
             "=== RESPONSE STYLE ===\n"
             "Write concise, natural paragraph-style answers. Avoid unnecessary bullet lists.\n"
+            "When the user query is about maternity, you MUST explicitly detail the specific exclusion points mentioned in the policy document under Maternity (Code-Excl18), specifically: (i) medical treatment expenses traceable to childbirth (including complicated deliveries and caesarean sections incurred during hospitalization) except ectopic pregnancy, and (ii) expenses towards miscarriage (unless due to an accident) and lawful medical termination of pregnancy during the Policy Period.\n"
             "Good example: 'Yes. Dental treatment is covered when associated with accidental hospitalization, up to the sum insured and subject to policy terms.'\n"
-            "Good example: 'No. Maternity expenses are excluded under the policy, including childbirth and Caesarean sections.'\n"
+            "Good example: 'No. Maternity coverage is excluded under this policy (Code-Excl18), which includes medical treatment expenses traceable to childbirth, complicated deliveries, and caesarean sections (except ectopic pregnancy), as well as miscarriage (unless due to an accident) and lawful medical termination of pregnancy.'\n"
             "Never expose internal labels such as [STRUCTURED DETAILS], [POLICY CONTEXT], [RAG CONTEXT], or [STORED POLICY SUMMARIES] in your answer.\n"
             "Do NOT output 'ASSISTANT:', 'USER:', or 'context:' labels in your response.\n"
             "Never output curly braces in your answer.\n"

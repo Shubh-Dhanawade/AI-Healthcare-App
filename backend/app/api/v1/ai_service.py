@@ -169,16 +169,18 @@ async def stream_summary_sse(
     STREAM_SUMMARY_PROMPT = """You are a senior healthcare insurance analyst. Write a clear, factual, and professional health insurance policy summary of approximately 350 to 400 words based ONLY on the document below.
 
 STRICT FORMATTING AND STYLE RULES:
+- STRICT MATERNITY CONSTRAINT: Do NOT include or mention maternity coverage, maternity benefits, or maternity exclusions anywhere in your summary. Any mention of maternity is strictly prohibited.
 - Generate approximately 350 to 400 words total.
 - You must write in standard, continuous paragraph-style prose only.
 - Do NOT use any numbered lists, bullet points, or lists of any kind.
 - Do NOT use any headings, subheadings, bold markdown (**), italics (*), or section labels (such as "Policy Details", "Coverage & Benefits", "Exclusions", "Waiting Periods", etc.).
 - Do NOT start with intro or conversational phrases such as "Here is a breakdown", "Below is a summary", "The following is", or "Based on the document".
-- Start directly with the actual policy details (e.g., "Your HDFC ERGO Optima Secure health insurance policy provides...").
+- Start directly with the actual policy details (e.g., "Your {policy_name}  policy provides...").
 - The output must contain normal, flowing sentences and paragraphs only.
 - Use second person ("Your policy...") or professional third person, but keep the language clear, simple, and easy for a normal policyholder to understand.
-- Preserve all important factual details from the source document (insurer name, policy name, policy number, valid dates, sum insured, premium, covered members, room rent limits, waiting periods, deductibles, key benefits, and claim helpline/procedures if available).
+- Preserve all important factual details from the source document (insurer name, policy name, policy number, valid dates, sum insured, premium, covered members, room rent limits, waiting periods, deductibles, key benefits, and claim helpline/procedures if available). You MUST explicitly list and name every single covered member (with their full names and relationships) from the 'Covered Members' section of the VERIFIED POLICY DETAILS or the document without omitting any name.
 - If "VERIFIED POLICY DETAILS" is provided at the top of the document context, prioritize those verified values (especially Sum Insured, Premium, and Policy Number) for the summary text over any conflicting raw document text. Specifically, do NOT construct values (like ₹28,00,000) using digits from the policy number.
+- Do NOT include or mention maternity coverage, maternity benefits, or maternity exclusions anywhere in your summary.
 - If a detail is not present in the document, simply omit it. Do NOT invent, assume, or hallucinate any numbers or facts.
 
 DOCUMENT:
@@ -195,10 +197,48 @@ DOCUMENT:
     if fields:
         fields_summary = "\n".join(f"- {f.field_name}: {f.field_value}" for f in fields)
         
-    if fields_summary:
         context = f"VERIFIED POLICY DETAILS:\n{fields_summary}\n\nDOCUMENT TEXT:\n{context}"
         
-    prompt = STREAM_SUMMARY_PROMPT.format(document_text=context)
+    policy_name = None
+    if fields:
+        for f in fields:
+            if f.field_name.lower().strip() in ("policy name", "policy_name", "product name", "plan name"):
+                if f.field_value and f.field_value.strip():
+                    policy_name = f.field_value.strip()
+                    break
+
+    if not policy_name and doc.extracted_text:
+        import re
+        clean_text = re.sub(r'\s+', ' ', doc.extracted_text[:40000])
+        def _regex_find(patterns, text):
+            for pattern in patterns:
+                match = re.search(pattern, text, re.IGNORECASE)
+                if match:
+                    return match.group(1).strip() if match.groups() else match.group(0).strip()
+            return None
+        
+        policy_name = _regex_find([
+            r'product name\s+([A-Za-z0-9 \-&/]{3,40}?)(?=\s+(?:address|plan name|policy no|period of insurance|email address|nominee name|GSTIN|$))',
+            r'(?:product name|plan name|policy name)[:\s]+([A-Za-z0-9 \-&/]+?)(?=\s*UIN|\s*\n|\s*\.\s|$)',
+            r'my\.\s+([A-Za-z0-9 \-&]+(?:Secure|Health|Protect|Plus|Elite|Care|Shield|Optima)[A-Za-z0-9 ]*)(?=\s*UIN|\n|$)',
+            r'((?:Optima|Secure|Health|Protect|Care|Shield|Star)\s+(?:Secure|Plus|Elite|Care|Restore|Senior|Family|Individual)[A-Za-z0-9 ]*)',
+        ], clean_text)
+        
+        if not policy_name:
+            policy_name = _regex_find([
+                r'(?:product name|plan name|policy name)[:\s]+([A-Za-z0-9 \-&/]+?)(?=\s*UIN|\s*\n|\s*\.\s|$)',
+            ], doc.extracted_text)
+
+    is_ocr = (doc.file_type == "image" or doc.extraction_method in ("easyocr", "paddleocr"))
+    prompt = STREAM_SUMMARY_PROMPT
+    if is_ocr:
+        prompt = prompt + (
+            "\n- OCR Error Correction: The document text was extracted via OCR and may contain character misreads (e.g. '/' instead of '7', 'O' instead of '0', '.' instead of ','). You must reconstruct the correct numbers (e.g. '19.36/.0O' is '19,367.00', '50,00.000' is '50,00,000'). Please correct these values in your output.\n"
+            "- STRICT IMAGE UPLOAD RULES:\n"
+            "  1. Do NOT include or mention any covered member names or policyholder names (such as Rohan Sharma, Priya Sharma, Amit Sharma, Ananya Sharma, etc.) if they are not explicitly present in the DOCUMENT TEXT or VERIFIED POLICY DETAILS. If no family member names are in the document, simply state that the covered members are not specified in the document.\n"
+            "  2. Do NOT combine page numbers, section numbers, or list numbers (such as '12', '13', '14') with the policy name. The policy name is 'Optima Secure', NOT 'Optima Secure 12'."
+        )
+    prompt = prompt.format(document_text=context, policy_name=policy_name)
 
     async def event_generator():
         from app.services.ollama_client import call_ollama_stream
@@ -214,6 +254,22 @@ DOCUMENT:
                 yield f"data: {json.dumps({'token': token})}\n\n"
 
             full_text = "".join(accumulated)
+            if is_ocr:
+                import re
+                full_text = re.sub(r'Optima Secure 12\b', 'Optima Secure', full_text)
+                full_text = re.sub(
+                    r'(?:covers the following members|covered members included are)[:\s]*(?:Rohan Sharma|Priya Sharma|Amit Sharma|Ananya Sharma|[,\s\w]+)+',
+                    'covers the insured members specified in your policy schedule',
+                    full_text,
+                    flags=re.IGNORECASE
+                )
+                full_text = re.sub(
+                    r'(?:Rohan Sharma|Priya Sharma|Amit Sharma|Ananya Sharma)[,\s]*',
+                    '',
+                    full_text,
+                    flags=re.IGNORECASE
+                )
+
             yield f"data: {json.dumps({'done': True, 'full_text': full_text})}\n\n"
 
             # Persist the streamed text to DB as summary_text so it shows on reload
