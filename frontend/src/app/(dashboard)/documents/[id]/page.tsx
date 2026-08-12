@@ -220,133 +220,132 @@ const generateSimplePrintHTML = (doc: DocumentDetail, selectedLanguage: string) 
     <html lang="en">
     <head>
       <meta charset="utf-8">
+      <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;600;700&family=Noto+Sans+Devanagari:wght@400;600;700&display=swap" rel="stylesheet">
+      <style>
+        * {
+          box-sizing: border-box;
+        }
+        body {
+          font-family: 'Noto Sans', 'Noto Sans Devanagari', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+          background-color: #ffffff !important;
+          color: #0f172a !important;
+          line-height: 1.6;
+          margin: 0;
+          padding: 0;
+          -webkit-print-color-adjust: exact;
+          print-color-adjust: exact;
+        }
+        .report-wrapper {
+          background-color: #ffffff !important;
+          color: #0f172a !important;
+          padding: 40px;
+          max-width: 800px;
+          margin: 0 auto;
+        }
+        .header-section {
+          background-color: #1e293b !important;
+          color: #ffffff !important;
+          padding: 30px;
+          border-radius: 12px;
+          margin-bottom: 35px;
+          border: 1px solid #0f172a;
+        }
+        .header-title {
+          font-size: 28px;
+          font-weight: 700;
+          margin: 0 0 10px 0;
+          color: #ffffff !important;
+          letter-spacing: -0.02em;
+        }
+        .header-meta {
+          font-size: 13px;
+          color: #cbd5e1 !important;
+          display: flex;
+          gap: 15px;
+          flex-wrap: wrap;
+        }
+        .meta-item {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+        }
+        .section {
+          margin-bottom: 40px;
+        }
+        .section-header {
+          display: flex;
+          align-items: center;
+          margin-bottom: 20px;
+          border-bottom: 2px solid #e2e8f0;
+          padding-bottom: 10px;
+        }
+        .section-title {
+          font-size: 18px;
+          font-weight: 700;
+          color: #0f172a !important;
+          margin: 0;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+        }
+        .summary-text {
+          font-size: 14px;
+          color: #334155 !important;
+          text-align: left;
+          margin-bottom: 25px;
+          white-space: pre-wrap;
+          line-height: 1.7;
+        }
+        .info-grid {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 20px;
+          margin-top: 20px;
+        }
+        .info-card {
+          flex: 1 1 calc(50% - 10px);
+          background-color: #f8fafc !important;
+          border: 1px solid #e2e8f0;
+          border-radius: 8px;
+          padding: 20px;
+          page-break-inside: avoid;
+        }
+        .info-card.full-width {
+          flex: 1 1 100%;
+        }
+        .info-card-title {
+          font-weight: 700;
+          font-size: 14px;
+          color: #0f172a !important;
+          margin-bottom: 10px;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+        .info-card-content {
+          font-size: 13px;
+          color: #475569 !important;
+          margin: 0;
+          white-space: pre-wrap;
+          line-height: 1.6;
+          font-family: inherit;
+        }
+        .table-container {
+          border: 1px solid #e2e8f0;
+          border-radius: 8px;
+          overflow: hidden;
+        }
+        .footer {
+          margin-top: 50px;
+          padding-top: 20px;
+          border-top: 1px solid #e2e8f0;
+          text-align: center;
+          font-size: 12px;
+          color: #94a3b8 !important;
+        }
+      </style>
     </head>
     <body>
       <div class="report-wrapper">
-        <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;600;700&family=Noto+Sans+Devanagari:wght@400;600;700&display=swap" rel="stylesheet">
-        <style>
-          * {
-            box-sizing: border-box;
-          }
-          body {
-            font-family: 'Noto Sans', 'Noto Sans Devanagari', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background-color: #ffffff !important;
-            color: #0f172a !important;
-            line-height: 1.6;
-            margin: 0;
-            padding: 0;
-            -webkit-print-color-adjust: exact;
-            print-color-adjust: exact;
-          }
-          .report-wrapper {
-            background-color: #ffffff !important;
-            color: #0f172a !important;
-            padding: 40px;
-            max-width: 800px;
-            margin: 0 auto;
-          }
-          .header-section {
-            background-color: #1e293b !important;
-            color: #ffffff !important;
-            padding: 30px;
-            border-radius: 12px;
-            margin-bottom: 35px;
-            border: 1px solid #0f172a;
-          }
-          .header-title {
-            font-size: 28px;
-            font-weight: 700;
-            margin: 0 0 10px 0;
-            color: #ffffff !important;
-            letter-spacing: -0.02em;
-          }
-          .header-meta {
-            font-size: 13px;
-            color: #cbd5e1 !important;
-            display: flex;
-            gap: 15px;
-            flex-wrap: wrap;
-          }
-          .meta-item {
-            display: flex;
-            align-items: center;
-            gap: 5px;
-          }
-          .section {
-            margin-bottom: 40px;
-          }
-          .section-header {
-            display: flex;
-            align-items: center;
-            margin-bottom: 20px;
-            border-bottom: 2px solid #e2e8f0;
-            padding-bottom: 10px;
-          }
-          .section-title {
-            font-size: 18px;
-            font-weight: 700;
-            color: #0f172a !important;
-            margin: 0;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-          }
-          .summary-text {
-            font-size: 14px;
-            color: #334155 !important;
-            text-align: left;
-            margin-bottom: 25px;
-            white-space: pre-wrap;
-            line-height: 1.7;
-          }
-          .info-grid {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 20px;
-            margin-top: 20px;
-          }
-          .info-card {
-            flex: 1 1 calc(50% - 10px);
-            background-color: #f8fafc !important;
-            border: 1px solid #e2e8f0;
-            border-radius: 8px;
-            padding: 20px;
-            page-break-inside: avoid;
-          }
-          .info-card.full-width {
-            flex: 1 1 100%;
-          }
-          .info-card-title {
-            font-weight: 700;
-            font-size: 14px;
-            color: #0f172a !important;
-            margin-bottom: 10px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-          }
-          .info-card-content {
-            font-size: 13px;
-            color: #475569 !important;
-            margin: 0;
-            white-space: pre-wrap;
-            line-height: 1.6;
-            font-family: inherit;
-          }
-          .table-container {
-            border: 1px solid #e2e8f0;
-            border-radius: 8px;
-            overflow: hidden;
-          }
-          .footer {
-            margin-top: 50px;
-            padding-top: 20px;
-            border-top: 1px solid #e2e8f0;
-            text-align: center;
-            font-size: 12px;
-            color: #94a3b8 !important;
-          }
-        </style>
-        
         <div class="header-section">
           <h1 class="header-title">Healthcare Policy Analysis Report</h1>
           <div class="header-meta">
@@ -941,24 +940,24 @@ export default function DocumentDetailPage() {
       const tPremium = results[ptr++];
 
       const translatedFields = (doc.extracted_fields || []).map(f => {
-        const name = f.field_name ? results[ptr++].translated_text : f.field_name;
-        const val = f.field_value ? results[ptr++].translated_text : f.field_value;
+        const nameText = results[ptr++].translated_text;
+        const valText = results[ptr++].translated_text;
         return {
           ...f,
-          field_name: name || f.field_name,
-          field_value: val || f.field_value
+          field_name: nameText || f.field_name,
+          field_value: valText || f.field_value
         };
       });
 
       const translatedRisks = (doc.risk_analyses || []).map(r => {
-        const clause = r.clause_text ? results[ptr++].translated_text : r.clause_text;
-        const expl = r.explanation ? results[ptr++].translated_text : r.explanation;
-        const rec = r.recommendation ? results[ptr++].translated_text : r.recommendation;
+        const clauseText = results[ptr++].translated_text;
+        const explText = results[ptr++].translated_text;
+        const recText = results[ptr++].translated_text;
         return {
           ...r,
-          clause_text: clause || r.clause_text,
-          explanation: expl || r.explanation,
-          recommendation: rec || r.recommendation
+          clause_text: clauseText || r.clause_text,
+          explanation: explText || r.explanation,
+          recommendation: recText || r.recommendation
         };
       });
 
