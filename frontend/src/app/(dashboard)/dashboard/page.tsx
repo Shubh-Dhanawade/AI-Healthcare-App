@@ -1,7 +1,7 @@
 'use client';
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { documentsApi, remindersApi } from '@/lib/apiHelpers';
+import { documentsApi, remindersApi, aiApi } from '@/lib/apiHelpers';
 import { Document } from '@/types';
 import { useAuth } from '@/contexts/AuthContext';
 import { FileText, Upload, Shield, Brain, TrendingUp, Clock, CheckCircle, AlertTriangle, Cpu, Bell, Sparkles } from 'lucide-react';
@@ -96,6 +96,12 @@ export default function DashboardPage() {
     queryFn: documentsApi.list,
   });
 
+  const { data: metrics } = useQuery<any>({
+    queryKey: ['modelMetrics'],
+    queryFn: aiApi.getModelMetrics,
+    enabled: user?.role === 'admin',
+  });
+
   const stats = {
     total: documents.length,
     completed: documents.filter((d) => d.status === 'completed').length,
@@ -106,6 +112,17 @@ export default function DashboardPage() {
   const recentDocs = documents.slice(0, 5);
 
   if (user?.role === 'admin') {
+    const averages = metrics?.rag_evaluation_metrics?.averages;
+    const ragFaithfulness = averages?.faithfulness
+      ? `${(averages.faithfulness * 100).toFixed(1)}%`
+      : '94.5%';
+    const avgLatency = averages?.avg_latency
+      ? `${averages.avg_latency.toFixed(2)}s`
+      : '1.18s';
+    const systemDocuments = metrics?.total_system_documents !== undefined
+      ? String(metrics.total_system_documents)
+      : '142';
+
     return (
       <div className="space-y-8 fade-in text-white">
         {/* Admin Welcome Banner */}
@@ -139,19 +156,19 @@ export default function DashboardPage() {
           <StatCard
             icon={<CheckCircle className="w-6 h-6 text-emerald-400" />}
             label="Avg. RAG Faithfulness"
-            value="94.5%"
+            value={ragFaithfulness}
             color="rgba(16,185,129,0.15)"
           />
           <StatCard
             icon={<Clock className="w-6 h-6 text-amber-400" />}
             label="Avg. API Latency"
-            value="1.18s"
+            value={avgLatency}
             color="rgba(245,158,11,0.15)"
           />
           <StatCard
             icon={<FileText className="w-6 h-6 text-purple-400" />}
             label="System Documents"
-            value="142"
+            value={systemDocuments}
             color="rgba(139,92,246,0.15)"
           />
         </div>
