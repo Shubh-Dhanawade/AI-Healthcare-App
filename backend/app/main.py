@@ -97,7 +97,11 @@ if os.path.exists(settings.UPLOAD_DIR):
     app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads")
 
 # Static files for data science analysis plots
-ds_analysis_dir = next((p for p in ["/app/data_science_analysis", "./data_science_analysis", "../data_science_analysis"] if os.path.exists(p)), None)
+ds_analysis_dir = next(
+    (p for p in ["/app/data_science_analysis", "./data_science_analysis", "../data_science_analysis"] 
+     if os.path.isdir(p) and os.path.exists(os.path.join(p, "roc_curves.png"))),
+    next((p for p in ["/app/data_science_analysis", "./data_science_analysis", "../data_science_analysis"] if os.path.isdir(p)), None)
+)
 if ds_analysis_dir:
     app.mount("/data_science_analysis", StaticFiles(directory=ds_analysis_dir), name="data_science_analysis")
 

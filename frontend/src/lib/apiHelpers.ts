@@ -222,7 +222,7 @@ export const exportApi = {
   
   getExportUrl: (id: string, language?: string) => {
     const token = typeof window !== 'undefined' ? sessionStorage.getItem('access_token') : null;
-    const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+    const baseUrl = process.env.NEXT_PUBLIC_API_URL?.trim() || 'http://localhost:8000/api/v1';
     const params = new URLSearchParams();
     if (token) params.append('token', token);
     if (language) params.append('language', language);

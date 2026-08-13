@@ -82,7 +82,7 @@ export default function AnalyticsPage() {
     }
   };
 
-  const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL?.replace('/api/v1', '') || 'http://localhost:8000';
+  const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL?.trim().replace('/api/v1', '') || 'http://localhost:8000';
 
   if (isLoading) {
     return (

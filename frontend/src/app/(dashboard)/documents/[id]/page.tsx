@@ -1128,7 +1128,7 @@ export default function DocumentDetailPage() {
         return;
       }
 
-      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+      const API_URL = process.env.NEXT_PUBLIC_API_URL?.trim() || 'http://localhost:8000/api/v1';
       const ttsUrl = `${API_URL}/ai/tts?text=${encodeURIComponent(chunk.text)}&lang=${encodeURIComponent(lang)}`;
 
       const audio = new Audio(ttsUrl);
@@ -1410,7 +1410,7 @@ export default function DocumentDetailPage() {
     setStreamError(null);
 
     const token = sessionStorage.getItem('access_token');
-    const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+    const API_URL = process.env.NEXT_PUBLIC_API_URL?.trim() || 'http://localhost:8000/api/v1';
     const controller = new AbortController();
     streamAbortRef.current = controller;
 
@@ -1732,7 +1732,7 @@ export default function DocumentDetailPage() {
       }));
 
       const token = sessionStorage.getItem('access_token');
-      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+      const API_URL = process.env.NEXT_PUBLIC_API_URL?.trim() || 'http://localhost:8000/api/v1';
 
       const response = await fetch(`${API_URL}/ai/chat/stream`, {
         method: 'POST',
