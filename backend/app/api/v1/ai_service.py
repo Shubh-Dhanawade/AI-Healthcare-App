@@ -888,6 +888,9 @@ async def get_model_metrics(
     
     total_queries_res = await db.execute(select(func.count(RAGQueryLog.id)))
     total_queries = total_queries_res.scalar() or 0
+
+    total_docs_res = await db.execute(select(func.count(Document.id)))
+    total_system_docs = total_docs_res.scalar() or 0
     
     # Auto-seed if database contains no RAG query logs yet
     if total_queries == 0:
@@ -1020,7 +1023,8 @@ async def get_model_metrics(
         "rag_evaluation_metrics": {
             "averages": averages,
             "recent_evals": recent_evals
-        }
+        },
+        "total_system_documents": total_system_docs
     }
 
 
