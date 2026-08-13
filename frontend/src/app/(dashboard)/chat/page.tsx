@@ -335,7 +335,7 @@ export default function ChatPage() {
     setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
 
     const token = sessionStorage.getItem('access_token');
-    const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+    const API_URL = process.env.NEXT_PUBLIC_API_URL?.trim() || 'http://localhost:8000/api/v1';
 
     try {
       const response = await fetch(`${API_URL}/ai/chat/stream`, {

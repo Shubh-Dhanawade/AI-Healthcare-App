@@ -468,6 +468,7 @@ export default function DocumentDetailPage() {
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const speechSessionIdRef = useRef<number>(0);
 
   const scrollToChatBottom = useCallback((smooth = true) => {
     if (messagesEndRef.current) {
@@ -1011,6 +1012,9 @@ export default function DocumentDetailPage() {
   };
 
   const speakText = (text: string, lang: string, startOffset = 0, onStop?: () => void, rateOverride?: number) => {
+    speechSessionIdRef.current += 1;
+    const thisSessionId = speechSessionIdRef.current;
+
     const activeRate = rateOverride ?? speechRate;
     if (audioRef.current) {
       audioRef.current.pause();
@@ -1028,6 +1032,7 @@ export default function DocumentDetailPage() {
     const textToSpeak = startOffset > 0 ? text.substring(startOffset) : text;
 
     const stopHandler = () => {
+      if (thisSessionId !== speechSessionIdRef.current) return;
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current = null;
@@ -1043,6 +1048,7 @@ export default function DocumentDetailPage() {
     };
 
     const fallbackToWebSpeechChunk = (chunkText: string, offset: number, onChunkEnd: () => void) => {
+      if (thisSessionId !== speechSessionIdRef.current || isPaused) return;
       if (typeof window === 'undefined' || !window.speechSynthesis) {
         onChunkEnd();
         return;
@@ -1058,16 +1064,23 @@ export default function DocumentDetailPage() {
       utterance.rate = activeRate;
 
       utterance.onboundary = (event) => {
+        if (thisSessionId !== speechSessionIdRef.current || isPaused) return;
         if (event.name === 'word') {
           const charIdx = offset + event.charIndex;
           setCurrentSpokenCharIndex(charIdx);
           setSavedSpeakIndex(charIdx);
         }
       };
-      utterance.onend = () => onChunkEnd();
+      utterance.onend = () => {
+        if (thisSessionId === speechSessionIdRef.current && !isPaused) {
+          onChunkEnd();
+        }
+      };
       utterance.onerror = (e) => {
         if (e.error !== 'interrupted' && e.error !== 'canceled') {
-          onChunkEnd();
+          if (thisSessionId === speechSessionIdRef.current && !isPaused) {
+            onChunkEnd();
+          }
         }
       };
       window.speechSynthesis.speak(utterance);
@@ -1103,6 +1116,7 @@ export default function DocumentDetailPage() {
     }
 
     const playNextChunk = (index: number) => {
+      if (thisSessionId !== speechSessionIdRef.current || isPaused) return;
       if (index >= chunks.length) {
         stopHandler();
         return;
@@ -1114,7 +1128,7 @@ export default function DocumentDetailPage() {
         return;
       }
 
-      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+      const API_URL = process.env.NEXT_PUBLIC_API_URL?.trim() || 'http://localhost:8000/api/v1';
       const ttsUrl = `${API_URL}/ai/tts?text=${encodeURIComponent(chunk.text)}&lang=${encodeURIComponent(lang)}`;
 
       const audio = new Audio(ttsUrl);
@@ -1127,6 +1141,7 @@ export default function DocumentDetailPage() {
       let animId: number;
 
       const updateProgressTicker = () => {
+        if (thisSessionId !== speechSessionIdRef.current || isPaused) return;
         if (audioRef.current && !audioRef.current.paused && audioRef.current.duration) {
           const ratio = audioRef.current.currentTime / audioRef.current.duration;
           const localOffset = Math.min(chunk.text.length, Math.floor(ratio * chunk.text.length));
@@ -1136,6 +1151,7 @@ export default function DocumentDetailPage() {
       };
 
       audio.onplay = () => {
+        if (thisSessionId !== speechSessionIdRef.current || isPaused) return;
         if (audioRef.current) {
           audioRef.current.playbackRate = activeRate;
         }
@@ -1148,18 +1164,32 @@ export default function DocumentDetailPage() {
 
       audio.onended = () => {
         cancelAnimationFrame(animId);
-        playNextChunk(index + 1);
+        if (thisSessionId === speechSessionIdRef.current && !isPaused) {
+          playNextChunk(index + 1);
+        }
       };
 
       audio.onerror = () => {
         cancelAnimationFrame(animId);
-        fallbackToWebSpeechChunk(chunk.text, chunk.start, () => playNextChunk(index + 1));
+        if (thisSessionId === speechSessionIdRef.current && !isPaused) {
+          fallbackToWebSpeechChunk(chunk.text, chunk.start, () => {
+            if (thisSessionId === speechSessionIdRef.current && !isPaused) {
+              playNextChunk(index + 1);
+            }
+          });
+        }
       };
 
       audio.play().catch((err) => {
         cancelAnimationFrame(animId);
         console.warn("Audio play blocked or error, falling back to Web Speech API:", err);
-        fallbackToWebSpeechChunk(chunk.text, chunk.start, () => playNextChunk(index + 1));
+        if (thisSessionId === speechSessionIdRef.current && !isPaused) {
+          fallbackToWebSpeechChunk(chunk.text, chunk.start, () => {
+            if (thisSessionId === speechSessionIdRef.current && !isPaused) {
+              playNextChunk(index + 1);
+            }
+          });
+        }
       });
     };
 
@@ -1353,6 +1383,24 @@ export default function DocumentDetailPage() {
     };
   }, []);
 
+  // Cancel speech synthesis and audio playback when active tab changes
+  useEffect(() => {
+    speechSessionIdRef.current += 1; // invalidate current session
+    if (audioRef.current) {
+      try {
+        audioRef.current.pause();
+      } catch (err) { }
+      audioRef.current = null;
+    }
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+    setIsPaused(false);
+    setSpeakingTab(null);
+    setCurrentSpokenCharIndex(-1);
+    setSavedSpeakIndex(0);
+  }, [activeTab]);
+
   // ── Auto-start SSE streaming summary when doc text is ready and no summary exists ──
   const startSummaryStream = useCallback(async (docId: string) => {
     if (hasStreamedRef.current || isStreaming) return;
@@ -1362,7 +1410,7 @@ export default function DocumentDetailPage() {
     setStreamError(null);
 
     const token = sessionStorage.getItem('access_token');
-    const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+    const API_URL = process.env.NEXT_PUBLIC_API_URL?.trim() || 'http://localhost:8000/api/v1';
     const controller = new AbortController();
     streamAbortRef.current = controller;
 
@@ -1684,7 +1732,7 @@ export default function DocumentDetailPage() {
       }));
 
       const token = sessionStorage.getItem('access_token');
-      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+      const API_URL = process.env.NEXT_PUBLIC_API_URL?.trim() || 'http://localhost:8000/api/v1';
 
       const response = await fetch(`${API_URL}/ai/chat/stream`, {
         method: 'POST',
@@ -2115,7 +2163,7 @@ export default function DocumentDetailPage() {
                       <Brain className="w-8 h-8 text-emerald-400 absolute inset-0 m-auto animate-bounce" />
                     </div>
                     <div>
-                      <p className="text-slate-200 font-bold text-sm">Preparing live summary...</p>
+                      <p className="text-slate-200 font-bold text-sm">Preparing summary...</p>
                       <p className="text-slate-400 text-xs mt-1">The AI is connecting to stream your policy analysis.</p>
                     </div>
                   </div>

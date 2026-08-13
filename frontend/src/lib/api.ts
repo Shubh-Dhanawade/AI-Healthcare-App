@@ -3,7 +3,7 @@
  */
 import axios from 'axios';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+const API_URL = process.env.NEXT_PUBLIC_API_URL?.trim() || 'http://localhost:8000/api/v1';
 
 const apiClient = axios.create({
   baseURL: API_URL,

@@ -31,6 +31,17 @@ async def lifespan(app: FastAPI):
     # Warm up the local model asynchronously
     from app.services.ollama_client import warmup_model
     asyncio.create_task(warmup_model())
+
+    # Warm up the OCR engine asynchronously in background thread to avoid blocking the main loop
+    def warmup_ocr():
+        try:
+            from app.services.ocr_service import get_paddleocr_reader
+            get_paddleocr_reader()
+            logger.info("✅ OCR engine warmed up successfully in background")
+        except Exception as ocr_warm_err:
+            logger.warning(f"⚠️ OCR engine warmup failed: {ocr_warm_err}")
+
+    asyncio.get_event_loop().run_in_executor(None, warmup_ocr)
     
     logger.info(f"✅ Upload directory: {settings.UPLOAD_DIR}")
     logger.info("✅ Database tables verified")
@@ -86,7 +97,11 @@ if os.path.exists(settings.UPLOAD_DIR):
     app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads")
 
 # Static files for data science analysis plots
-ds_analysis_dir = next((p for p in ["/app/data_science_analysis", "./data_science_analysis", "../data_science_analysis"] if os.path.exists(p)), None)
+ds_analysis_dir = next(
+    (p for p in ["/app/data_science_analysis", "./data_science_analysis", "../data_science_analysis"] 
+     if os.path.isdir(p) and os.path.exists(os.path.join(p, "roc_curves.png"))),
+    next((p for p in ["/app/data_science_analysis", "./data_science_analysis", "../data_science_analysis"] if os.path.isdir(p)), None)
+)
 if ds_analysis_dir:
     app.mount("/data_science_analysis", StaticFiles(directory=ds_analysis_dir), name="data_science_analysis")
 

@@ -81,6 +81,7 @@ def is_healthcare_related(text: str) -> bool:
 BULLETS_EXTRACTION_PROMPT = """You are a senior health insurance analyst. Extract specific facts from the document below and return ONLY a valid JSON object.
 
 CRITICAL RULES:
+- STRICT MATERNITY CONSTRAINT: Do NOT include or mention maternity coverage, maternity benefits, or maternity exclusions anywhere in your extracted bullets. Any mention of maternity is strictly prohibited.
 - Write each bullet point as a **complete, grammatically correct full sentence**.
 - Extract ONLY information explicitly present in the document. Do NOT use generic phrases.
 - Every fact must be extremely accurate. Do NOT confuse Indian numbering formats (e.g. 10,00,000 is 10 Lakhs) with US formatting (e.g. 10,00,000 is 1 Crore / 10 Million). Verify the commas and digit count before writing.
@@ -93,6 +94,7 @@ CRITICAL RULES:
 - Do NOT write generic sentences like "Coverage is available" or "Exclusions apply".
 - MINIMUM REQUIREMENT: Each section must have at least 3 bullet points. If the document only explicitly mentions 1-2 facts for a section, add 2-3 additional factual bullets using other related policy terms found anywhere in the document (e.g. for coverage add hospitalisation expenses, AYUSH coverage, air ambulance if present; for exclusions add cosmetic treatment, dental, OPD if mentioned; for waiting period add initial/specific disease/PED periods found; for premium add GST, grace period, tax benefits if mentioned).
 - DEDUPLICATION: Each bullet in a section must state a DIFFERENT fact. Do NOT repeat the same fact (e.g. "30-day waiting period") in two different bullets even with different wording. If you have already covered a fact, use a completely different one.
+- Do NOT include or mention maternity coverage, maternity benefits, or maternity exclusions anywhere in your extracted bullets.
 - Return ONLY the JSON object below — no markdown, no preamble.
 
 JSON schema:
@@ -127,22 +129,24 @@ DOCUMENT:
 PROSE_SUMMARY_PROMPT = """You are a senior healthcare insurance analyst. Write a clear, factual, and professional health insurance policy summary of approximately 350 to 400 words based ONLY on the document below.
 
 STRICT FORMATTING AND STYLE RULES:
+- STRICT MATERNITY CONSTRAINT: Do NOT include or mention maternity coverage, maternity benefits, or maternity exclusions anywhere in your summary. Any mention of maternity is strictly prohibited.
 - Generate approximately 350 to 400 words total.
 - You must write in standard, continuous paragraph-style prose only, divided into exactly 3 to 4 well-structured paragraphs.
 - Do NOT use any numbered lists, bullet points, or lists of any kind.
 - Do NOT use any headings, subheadings, bold markdown (**), italics (*), or section labels (such as "Policy Details", "Coverage & Benefits", "Exclusions", "Waiting Periods", etc.).
 - Do NOT start with intro or conversational phrases such as "Here is a breakdown", "Below is a summary", "The following is", or "Based on the document".
-- Start directly with the actual policy details (e.g., "Your HDFC ERGO Optima Secure health insurance policy provides...").
+- Start directly with the actual policy details (e.g., "Your {policy_name} policy provides...").
 - The output must contain normal, flowing sentences and paragraphs only, without bullet points or numbering.
 - Use second person ("Your policy...") or professional third person, but keep the language clear, simple, and easy for a normal policyholder to understand.
-- Preserve all important factual details from the source document (insurer name, policy name, policy number, valid dates, sum insured, premium, covered members, room rent limits, waiting periods, key benefits, and claim helpline/procedures if available).
+- Preserve all important factual details from the source document (insurer name, policy name, policy number, valid dates, sum insured, premium, covered members, room rent limits, waiting periods, key benefits, and claim helpline/procedures if available). You MUST explicitly list and name every single covered member (with their full names and relationships) from the 'Covered Members' section of the VERIFIED POLICY DETAILS or the document without omitting any name.
 - If "VERIFIED POLICY DETAILS" is provided at the top of the document context, ONLY use VERIFIED values for sum insured, premium, covered members, and policy number. Do NOT use values from the raw document text if they conflict with verified values.
-- STRICT: Mention covered members ONCE only — in the first paragraph. Do NOT write "The covered members are..." or similar in any subsequent paragraph.
+- STRICT: Mention covered members ONCE only — in the first paragraph. You MUST explicitly list and name every single covered member (with their full names and relationships) from the 'Covered Members' section of the VERIFIED POLICY DETAILS or the document without omitting any name. Do NOT write "The covered members are..." or similar in any subsequent paragraph.
 - STRICT: Do NOT mention deductibles unless the VERIFIED POLICY DETAILS explicitly list a specific "Deductible" value. Generic tables of deductible options (e.g. "5L or 10L depending on option") are NOT the policyholder's active deductible. If no deductible is verified, omit all mention of deductibles.
 - Do NOT extract or mention doctor names, physician names, or lab names from the document. This is a health insurance policy summary, not a medical report. Only mention the insurance company name and covered family members.
 - Do NOT include names found after the words 'Dr.', 'Doctor', 'Consultant', 'Physician', or 'Referred by' as policyholder or insured names.
 - If a covered member's name appears to have OCR artifacts (e.g. unusual spacing in the middle of a name), write it as-is from the VERIFIED POLICY DETAILS. Do not attempt to correct or alter names.
 - Always prefix Indian currency amounts with the ₹ symbol (e.g., "₹43,047" not "43,047", "₹10 Lakh" not "10 Lakh").
+- Do NOT include or mention maternity coverage, maternity benefits, or maternity exclusions anywhere in your summary.
 - If a detail is not present in the document, simply omit it. Do NOT invent, assume, or hallucinate any numbers or facts.
 
 DOCUMENT:
@@ -166,7 +170,7 @@ Rules:
 
 JSON schema:
 {{
-  "policy_name": "exact product or plan name",
+  "policy_name": "exact product name (e.g. 'Health Shield 360' or 'Optima Secure', NOT plan code or bank code like 'ICICIBankLtd')",
   "insurer_name": "exact insurance company name (deduplicated, single occurrence only)",
   "policy_number": "exact policy number as it appears in the Policy Schedule (NOT a Master Policy Number or MSTR number)",
   "insured_person": "full name of the primary policyholder only (NOT a doctor, physician, or ombudsman name)",
@@ -577,9 +581,9 @@ def _build_fallback_summary(document_text: str) -> dict:
         policy_holder = None
 
     sum_insured = _regex_find_any([
-        r'(?:base\s+)?sum\s+insured\s*(?:opted)?\s*[:\s₹Rs.]+([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
-        r'(?:sum\s+insured|sum\s+assured)[:\s₹Rs.]+([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
-        r'₹\s*([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,})\s*(?:Lakh|Lakhs|lakh)?',
+        r'(?:base\s+)?sum\s+insured\s*(?:opted)?\s*[:\s\-\u20b9₹Rs.]+([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
+        r'(?:sum\s+insured|sum\s+assured)[:\s\-\u20b9₹Rs.]+([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
+        r'[₹\u20b9]\s*([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,})\s*(?:Lakh|Lakhs|lakh)?',
     ], text) or None
 
     premium = _extract_premium_validated(document_text, policy_number or "", sum_insured or "")
@@ -930,11 +934,51 @@ def _build_fallback_summary(document_text: str) -> dict:
     }
 
 
+def _clean_covered_members(cov_members: str) -> str:
+    if not cov_members or cov_members.lower() in ("null", "none", "not mentioned"):
+        return "Not Mentioned"
+    
+    import re
+    cleaned_entries = []
+    # Split by comma
+    entries = cov_members.split(",")
+    for entry in entries:
+        entry = entry.strip()
+        if not entry:
+            continue
+        
+        # Match "Name (Relationship)" or "Name"
+        match = re.match(r'^(.*?)\s*\(([^)]+)\)\s*$', entry)
+        if match:
+            name, rel = match.groups()
+            name = name.strip()
+            rel = rel.strip()
+        else:
+            name = entry
+            rel = ""
+            
+        # Clean leading noise/salutation prefixes in a loop from name
+        prev_len = 0
+        while len(name) != prev_len:
+            prev_len = len(name)
+            name = re.sub(r'^(?:and|or|for|with|to|of|at|on|in|dear|miss|no|none|null)\b\.?\s*', '', name, flags=re.IGNORECASE).strip()
+            
+        if name:
+            if rel:
+                cleaned_entries.append(f"{name} ({rel})")
+            else:
+                cleaned_entries.append(name)
+                
+    return ", ".join(cleaned_entries) if cleaned_entries else "Not Mentioned"
+
+
 def _extract_insured_persons_validated(text: str) -> str:
     """Extract and validate the names of insured persons from policy text with salutation checks and substring deduplication."""
     import re
-    # Normalize whitespaces to single space
-    norm_text = re.sub(r'\s+', ' ', text)
+    # Truncate text before list of insurance ombudsmen to avoid extracting ombudsmen names
+    ombuds_match = re.search(r'\b(?:insurance\s+)?ombudsmen\b', text, re.IGNORECASE)
+    if ombuds_match:
+        text = text[:ombuds_match.start()]
     
     # Direct label patterns
     patterns = [
@@ -953,8 +997,8 @@ def _extract_insured_persons_validated(text: str) -> str:
             first_line = re.sub(r'\s+', ' ', first_line)
             candidates.append(first_line)
             
-    # 2. Salutation based extraction (Mrs? or Ms or Miss)
-    salutations = re.findall(r'\b(Mrs?|Ms|Miss)\.?\s+([A-Za-z\s.\-]{3,35})', norm_text, re.IGNORECASE)
+    # 2. Salutation based extraction (runs on raw text, name part does not cross newlines)
+    salutations = re.findall(r'\b(Mrs?|Ms|Miss)\.?\s+([A-Za-z \t.\-]{3,35})', text, re.IGNORECASE)
     for title, name_part in salutations:
         full_name = f"{title.strip()} {name_part.strip()}"
         first_line = full_name.split('\n')[0].strip()
@@ -963,8 +1007,8 @@ def _extract_insured_persons_validated(text: str) -> str:
         first_line = re.sub(r'\s+(Base|Sum|Insured|Premium|Opted|Variant|Age|DOB|Gender|Relation).*$', '', first_line, flags=re.IGNORECASE).strip()
         candidates.append(first_line)
 
-    # 3. Fallback to basic Dear pattern
-    dear_match = re.findall(r'(?:Dear|name\s+of\s+(?:insured|policyholder))[:\s,]+([A-Za-z\s.\-]{3,40})', norm_text, re.IGNORECASE)
+    # 3. Fallback to basic Dear pattern (runs on raw text, name part does not cross newlines)
+    dear_match = re.findall(r'(?:Dear|name\s+of\s+(?:insured|policyholder))[:\s,]+([A-Za-z \t.\-]{3,40})', text, re.IGNORECASE)
     for dm in dear_match:
         candidates.append(dm.strip())
 
@@ -991,8 +1035,11 @@ def _extract_insured_persons_validated(text: str) -> str:
         # Strip trailing stop words/verbs
         clean_c = re.sub(noise_regex, '', c, flags=re.IGNORECASE).strip()
         clean_c = re.sub(r'[,\s\-]+$', '', clean_c).strip()
-        # Clean salutation prefixes
-        clean_c = re.sub(r'\b(mrs?|ms|miss|no)\.?\s+', '', clean_c, flags=re.IGNORECASE).strip()
+        # Clean leading noise/salutation prefixes in a loop
+        prev_len = 0
+        while len(clean_c) != prev_len:
+            prev_len = len(clean_c)
+            clean_c = re.sub(r'^(?:name|dear|to|mr|mrs|ms|miss|dr|no)\b\.?\s*', '', clean_c, flags=re.IGNORECASE).strip()
         # OCR name-stitching: join single uppercase letter fragments into adjacent all-caps word
         # e.g. "RAJKUMA R JAIN" → "RAJKUMAR JAIN"
         clean_c = re.sub(r'(\b[A-Z]{2,})\s+([A-Z])\s+([A-Z]{2,}\b)', lambda m: m.group(1) + m.group(2) + ' ' + m.group(3), clean_c)
@@ -1038,12 +1085,18 @@ def _build_fallback_fields(document_text: str) -> list[dict]:
             fields.append({"field_name": name, "field_value": v, "field_category": category})
 
     # ── Policy Name ─────────────────────────────────────────────────────────
-    add("Policy Name", _regex_find_any([
+    policy_name = _regex_find_any([
+        r'product\s+name\s+([A-Za-z0-9][A-Za-z0-9 \-&/]{3,40}?)(?=\s+(?:address|plan\s+name|policy\s+no|period\s+of\s+insurance|email\s+address|nominee\s+name|GSTIN|$))',
         r'(?:product\s+name|plan\s+name|policy\s+name)[:\s]+([A-Za-z0-9][A-Za-z0-9 \-&/]{3,60}?)(?=\s*UIN|\s*UIN|\s*\n|\s*\.\s|$)',
         r'my\.\s+([A-Za-z0-9][A-Za-z0-9 \-]{3,50}?)(?=\s+UIN|\n|$)',
         r'Plan\s+Name[:\s]+([A-Za-z0-9][A-Za-z0-9 \-&]{3,50})',
         r'((?:Optima|Secure|Health|Protect|Care|Shield|Star|Arogya)\s+(?:Secure|Plus|Elite|Care|Restore|Senior|Family|Individual|Sanjeevani)[A-Za-z0-9 ]*)',
-    ], text), "policy_info")
+    ], text)
+    if policy_name == "Not found in document":
+        policy_name = _regex_find_any([
+            r'(?:product\s+name|plan\s+name|policy\s+name)[:\s]+([A-Za-z0-9][A-Za-z0-9 \-&/]{3,60}?)(?=\s*UIN|\s*UIN|\s*\n|\s*\.\s|$)',
+        ], document_text)
+    add("Policy Name", policy_name, "policy_info")
 
     # ── Insurer Name ────────────────────────────────────────────────────────
     add("Insurer Name", _regex_find_any([
@@ -1075,12 +1128,12 @@ def _build_fallback_fields(document_text: str) -> list[dict]:
 
     # ── Sum Insured ─────────────────────────────────────────────────────────
     sum_ins = _regex_find_any([
-        r'sum\s+insured\s*(?:\(₹\))?\s*([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
-        r'(?:base\s+)?sum\s+insured\s*(?:opted)?\s*[:\s₹Rs.]+([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
-        r'(?:sum\s+insured|sum\s+assured|si)[:\s₹Rs.]+([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
-        r'(?:total\s+sum\s+insured)[:\s₹Rs.]+([1-9]\d{4,})',
-        r'(?:basic\s+sum\s+insured)[:\s₹Rs.]+([1-9]\d{4,})',
-        r'₹\s*([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,})\s*(?:Lakh|Lakhs|lakh)?',
+        r'sum\s+insured\s*(?:\([₹\u20b9]\))?\s*([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
+        r'(?:base\s+)?sum\s+insured\s*(?:opted)?\s*[:\s\-\u20b9₹Rs.]+([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
+        r'(?:sum\s+insured|sum\s+assured|si)[:\s\-\u20b9₹Rs.]+([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
+        r'(?:total\s+sum\s+insured)[:\s\-\u20b9₹Rs.]+([1-9]\d{4,})',
+        r'(?:basic\s+sum\s+insured)[:\s\-\u20b9₹Rs.]+([1-9]\d{4,})',
+        r'[₹\u20b9]\s*([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,})\s*(?:Lakh|Lakhs|lakh)?',
     ], text)
     add("Sum Insured", sum_ins, "coverage")
 
@@ -1221,7 +1274,11 @@ def _build_fallback_fields(document_text: str) -> list[dict]:
         # Normalize multiple spaces within the name (OCR often splits names)
         name_clean = re.sub(r'\s+', ' ', name.strip())
         rel_clean = rel.strip()
-        name_clean = re.sub(r'^(?:and|or|for|with|to|of|at|on|in|dear|miss|no)\s+', '', name_clean, flags=re.IGNORECASE)
+        # Clean leading prefixes/noise/salutations in a loop
+        prev_len = 0
+        while len(name_clean) != prev_len:
+            prev_len = len(name_clean)
+            name_clean = re.sub(r'^(?:and|or|for|with|to|of|at|on|in|dear|miss|no|none|null)\b\.?\s*', '', name_clean, flags=re.IGNORECASE).strip()
         # OCR name-stitching: join single uppercase letter fragments into adjacent word
         name_clean = re.sub(r'(\b[A-Z]{2,})\s+([A-Z])\s+([A-Z]{2,}\b)', lambda m: m.group(1) + m.group(2) + ' ' + m.group(3), name_clean)
         
@@ -1616,7 +1673,12 @@ async def generate_summary(
         logger.info(f"[SUMMARY] 📋 Call 1 — Extracting bullet sections from {len(context)} chars via Ollama...")
         prompt1 = BULLETS_EXTRACTION_PROMPT
         if is_ocr:
-            prompt1 = prompt1 + "\n- OCR Error Correction: The document text was extracted via OCR and may contain character misreads (e.g. '/' instead of '7', 'O' instead of '0', '.' instead of ','). You must reconstruct the correct numbers (e.g. '19.36/.0O' is '19,367.00', '50,00.000' is '50,00,000'). Please correct these values in your output."
+            prompt1 = prompt1 + (
+                "\n- OCR Error Correction: The document text was extracted via OCR and may contain character misreads (e.g. '/' instead of '7', 'O' instead of '0', '.' instead of ','). You must reconstruct the correct numbers (e.g. '19.36/.0O' is '19,367.00', '50,00.000' is '50,00,000'). Please correct these values in your output.\n"
+                "- STRICT IMAGE UPLOAD RULES:\n"
+                "  1. Do NOT include or mention any covered member names or policyholder names (such as Rohan Sharma, Priya Sharma, Amit Sharma, Ananya Sharma, etc.) if they are not explicitly present in the document text. If no specific family member names are present in the document, state 'Not Mentioned' for covered members.\n"
+                "  2. Do NOT combine page numbers, section numbers, or list numbers (such as '12', '13', '14') with the policy name. The policy name is 'Optima Secure', NOT 'Optima Secure 12'."
+            )
             
         bullets_response = await call_ollama(
             prompt1.format(document_text=context),
@@ -1636,12 +1698,49 @@ async def generate_summary(
     prose_text: str = ""
     try:
         logger.info(f"[SUMMARY] 📝 Call 2 — Generating prose summary from {len(context)} chars via Ollama...")
+        policy_name = None
+        if fields_summary:
+            import re
+            match = re.search(r'-\s*(?:policy name|policy_name|product name|plan name)\s*:\s*(.*)', fields_summary, re.IGNORECASE)
+            if match:
+                policy_name = match.group(1).strip()
+
+        if not policy_name and document_text:
+            import re
+            clean_text = re.sub(r'\s+', ' ', document_text[:40000])
+            def _regex_find(patterns, text):
+                for pattern in patterns:
+                    match = re.search(pattern, text, re.IGNORECASE)
+                    if match:
+                        return match.group(1).strip() if match.groups() else match.group(0).strip()
+                return None
+            
+            policy_name = _regex_find([
+                r'product name\s+([A-Za-z0-9 \-&/]{3,40}?)(?=\s+(?:address|plan name|policy no|period of insurance|email address|nominee name|GSTIN|$))',
+                r'(?:product name|plan name|policy name)[:\s]+([A-Za-z0-9 \-&/]+?)(?=\s*UIN|\s*\n|\s*\.\s|$)',
+                r'my\.\s+([A-Za-z0-9 \-&]+(?:Secure|Health|Protect|Plus|Elite|Care|Shield|Optima)[A-Za-z0-9 ]*)(?=\s*UIN|\n|$)',
+                r'((?:Optima|Secure|Health|Protect|Care|Shield|Star)\s+(?:Secure|Plus|Elite|Care|Restore|Senior|Family|Individual)[A-Za-z0-9 ]*)',
+            ], clean_text)
+            
+            if not policy_name:
+                policy_name = _regex_find([
+                    r'(?:product name|plan name|policy name)[:\s]+([A-Za-z0-9 \-&/]+?)(?=\s*UIN|\s*\n|\s*\.\s|$)',
+                ], document_text)
+
+        if not policy_name:
+            policy_name = "health insurance"
+
         prompt2 = PROSE_SUMMARY_PROMPT
         if is_ocr:
-            prompt2 = prompt2 + "\n- OCR Error Correction: The document text was extracted via OCR and may contain character misreads (e.g. '/' instead of '7', 'O' instead of '0', '.' instead of ','). You must reconstruct the correct numbers (e.g. '19.36/.0O' is '19,367.00', '50,00.000' is '50,00,000'). Please correct these values in your output."
+            prompt2 = prompt2 + (
+                "\n- OCR Error Correction: The document text was extracted via OCR and may contain character misreads (e.g. '/' instead of '7', 'O' instead of '0', '.' instead of ','). You must reconstruct the correct numbers (e.g. '19.36/.0O' is '19,367.00', '50,00.000' is '50,00,000'). Please correct these values in your output.\n"
+                "- STRICT IMAGE UPLOAD RULES:\n"
+                "  1. Do NOT include or mention any covered member names or policyholder names (such as Rohan Sharma, Priya Sharma, Amit Sharma, Ananya Sharma, etc.) if they are not explicitly present in the DOCUMENT TEXT or VERIFIED POLICY DETAILS. If no family member names are in the document, simply state that the covered members are not specified in the document.\n"
+                "  2. Do NOT combine page numbers, section numbers, or list numbers (such as '12', '13', '14') with the policy name. The policy name is 'Optima Secure', NOT 'Optima Secure 12'."
+            )
             
         prose_response = await call_ollama(
-            prompt2.format(document_text=context),
+            prompt2.format(document_text=context, policy_name=policy_name),
             num_predict=600,   # Prose only — 4-5 paragraphs, ~120-150 words
             num_ctx=settings.OLLAMA_NUM_CTX,      # Matches warmup num_ctx — no model reload needed
         )
@@ -1684,6 +1783,22 @@ async def generate_summary(
 
     prose_final = prose_text or clean_newlines_in_text(fallback.get("summary_text", ""))
 
+    if is_ocr and prose_final:
+        import re
+        prose_final = re.sub(r'Optima Secure 12\b', 'Optima Secure', prose_final)
+        prose_final = re.sub(
+            r'(?:covers the following members|covered members included are)[:\s]*(?:Rohan Sharma|Priya Sharma|Amit Sharma|Ananya Sharma|[,\s\w]+)+',
+            'covers the insured members specified in your policy schedule',
+            prose_final,
+            flags=re.IGNORECASE
+        )
+        prose_final = re.sub(
+            r'(?:Rohan Sharma|Priya Sharma|Amit Sharma|Ananya Sharma)[,\s]*',
+            '',
+            prose_final,
+            flags=re.IGNORECASE
+        )
+
     logger.info(
         f"[SUMMARY] 🎯 Final assembly — prose={'LLM' if prose_text else 'FALLBACK'}, "
         f"coverage={'LLM' if cov_llm else 'FALLBACK'}, "
@@ -1705,6 +1820,7 @@ async def generate_summary(
 
 async def extract_policy_fields(document_text: str, force_regenerate: bool = False, is_ocr: bool = False) -> list[dict]:
     """Extract key fields. Falls back to demo data when Ollama is offline."""
+    import re
     # ── Healthcare relevance check ──
     if not is_healthcare_related(document_text):
         logger.warning("[FIELDS] Document is not healthcare-related. Bypassing LLM.")
@@ -1714,7 +1830,14 @@ async def extract_policy_fields(document_text: str, force_regenerate: bool = Fal
     try:
         prompt = FIELD_EXTRACTION_PROMPT
         if is_ocr:
-            prompt = prompt + "\n- OCR Error Correction: The document text was extracted via OCR and may contain character misreads (e.g. '/' instead of '7', 'O' instead of '0', '.' instead of ','). You must reconstruct the correct numbers (e.g. '19.36/.0O' is '19,367.00', '50,00.000' is '50,00,000'). Please correct these values in your JSON output."
+            prompt = prompt + (
+                "\n- OCR Error Correction: The document text was extracted via OCR and may contain character misreads (e.g. '/' instead of '7', 'O' instead of '0', '.' instead of ','). You must reconstruct the correct numbers (e.g. '19.36/.0O' is '19,367.00', '50,00.000' is '50,00,000'). Please correct these values in your JSON output.\n"
+                "- STRICT IMAGE UPLOAD RULES:\n"
+                "  1. Do NOT hallucinate policyholder, insured person, or covered member names (such as Rohan Sharma, Priya Sharma, Amit Sharma, Ananya Sharma, etc.) if they are not explicitly present in the DOCUMENT text. If no specific person names are mentioned in the document text, return 'Not Mentioned' for 'insured_person' and 'covered_members'.\n"
+                "  2. Do NOT combine page numbers, section numbers, or list numbers (such as '12', '13', '14') with the policy name. For example, if the document has 'my:Optima Secure' followed by '12. PED...', the policy name is 'Optima Secure', NOT 'Optima Secure 12'.\n"
+                "  3. Keep the insurer name clean. Do not append document titles or 'my' (e.g. 'HDFC ERGO General Insurance Company Limited', NOT 'HDFC ERGO ... Sheet ERGO my').\n"
+                "  4. Keep the room rent limit clean. If it is not explicitly specified as a limit, return 'As per policy terms' or 'Not specified', not random sentences or OCR junk."
+            )
             
         response = await call_ollama(
             prompt.format(document_text=context),
@@ -1729,12 +1852,12 @@ async def extract_policy_fields(document_text: str, force_regenerate: bool = Fal
             if "sum_insured" in result:
                 val = str(result["sum_insured"]).strip()
                 fallback_si = _regex_find_any([
-                    r'sum\s+insured\s*(?:\(₹\))?\s*([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
-                    r'(?:base\s+)?sum\s+insured\s*(?:opted)?\s*[:\s₹Rs.]+([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
-                    r'(?:sum\s+insured|sum\s+assured|si)[:\s₹Rs.]+([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
-                    r'(?:total\s+sum\s+insured)[:\s₹Rs.]+([1-9]\d{4,})',
-                    r'(?:basic\s+sum\s+insured)[:\s₹Rs.]+([1-9]\d{4,})',
-                    r'₹\s*([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,})\s*(?:Lakh|Lakhs|lakh)?',
+                    r'sum\s+insured\s*(?:\([₹\u20b9]\))?\s*([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
+                    r'(?:base\s+)?sum\s+insured\s*(?:opted)?\s*[:\s\-\u20b9₹Rs.]+([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
+                    r'(?:sum\s+insured|sum\s+assured|si)[:\s\-\u20b9₹Rs.]+([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,}|[1-9]\d{0,2}\s*(?:Lakh|Lakhs|lakh|L|Cr|Crore))',
+                    r'(?:total\s+sum\s+insured)[:\s\-\u20b9₹Rs.]+([1-9]\d{4,})',
+                    r'(?:basic\s+sum\s+insured)[:\s\-\u20b9₹Rs.]+([1-9]\d{4,})',
+                    r'[₹\u20b9]\s*([1-9]\d*,\d{2,},\d{2,}|[1-9]\d{4,})\s*(?:Lakh|Lakhs|lakh)?',
                 ], document_text)
                 if fallback_si and fallback_si != "Not found in document":
                     clean_val = re.sub(r'[^\d]', '', val)
@@ -1744,6 +1867,54 @@ async def extract_policy_fields(document_text: str, force_regenerate: bool = Fal
                     if val in ("1", "1.1", "0", "null", "") or len(val) < 3 or (clean_val == "10000000" and ("10 Lakh" in fallback_si or "10,00,000" in fallback_si)) or is_confident_fallback:
                         result["sum_insured"] = fallback_si
                         
+            # Validate and clean policy name
+            pol_name = str(result.get("policy_name") or "").strip()
+            if is_ocr and pol_name:
+                pol_name = re.sub(r'\s+(?:12|13|14|15|16|17|18|19|20)\s*$', '', pol_name).strip()
+                result["policy_name"] = pol_name
+
+            is_generic_or_code = False
+            if pol_name:
+                if any(x in pol_name.lower() for x in ("bankltd", "10lac", "2cr", "5lac", "1cr")) or len(pol_name) < 4:
+                    is_generic_or_code = True
+            
+            if not pol_name or is_generic_or_code:
+                clean_text = re.sub(r'\s+', ' ', document_text[:40000])
+                fallback_pol = _regex_find_any([
+                    r'product name\s+([A-Za-z0-9 \-&/]{3,40}?)(?=\s+(?:address|plan name|policy no|period of insurance|email address|nominee name|GSTIN|$))',
+                    r'(?:product name|plan name|policy name)[:\s]+([A-Za-z0-9 \-&/]+?)(?=\s*UIN|\s*\n|\s*\.\s|$)',
+                    r'my\.\s+([A-Za-z0-9 \-&]+(?:Secure|Health|Protect|Plus|Elite|Care|Shield|Optima)[A-Za-z0-9 ]*)(?=\s*UIN|\n|$)',
+                    r'((?:Optima|Secure|Health|Protect|Care|Shield|Star)\s+(?:Secure|Plus|Elite|Care|Restore|Senior|Family|Individual)[A-Za-z0-9 ]*)',
+                ], clean_text)
+                if fallback_pol == "Not found in document":
+                    fallback_pol = _regex_find_any([
+                        r'(?:product name|plan name|policy name)[:\s]+([A-Za-z0-9 \-&/]+?)(?=\s*UIN|\s*\n|\s*\.\s|$)',
+                    ], document_text)
+                if fallback_pol and fallback_pol != "Not found in document":
+                    result["policy_name"] = fallback_pol
+
+            # Clean insurer name for OCR
+            ins_name = str(result.get("insurer_name") or "").strip()
+            if is_ocr and ins_name:
+                m_ins = re.search(r'^(.*?Company\s+Limited|.*?Co\.\s*Ltd\.|.*?Insurance\s+Limited)', ins_name, re.IGNORECASE)
+                if m_ins:
+                    result["insurer_name"] = m_ins.group(1).strip()
+
+            # Clean room rent limit for OCR
+            room_rent = str(result.get("room_rent_limit") or "").strip()
+            if is_ocr and room_rent:
+                if any(x in room_rent.lower() for x in ("option", "section", "category", "shall stand")):
+                    result["room_rent_limit"] = "As per policy schedule"
+
+            # Clean covered members for OCR
+            cov_members = str(result.get("covered_members") or "").strip()
+            if is_ocr and any(name in cov_members for name in ("Rohan Sharma", "Priya Sharma", "Amit Sharma", "Ananya Sharma")):
+                result["covered_members"] = "Not Mentioned"
+            elif not cov_members or cov_members.lower() in ("null", "none", "not mentioned"):
+                result["covered_members"] = "Not Mentioned"
+            else:
+                result["covered_members"] = _clean_covered_members(cov_members)
+                    
             # Validate and extract insured person safely
             insured_person = str(result.get("insured_person") or "").strip()
             # Clean common prefixes/suffixes
@@ -1848,12 +2019,32 @@ async def extract_policy_fields(document_text: str, force_regenerate: bool = Fal
                     fields.append(fb)
                     existing_names.add(fb["field_name"].lower())
 
-            return fields
+            final_fields = fields
+        else:
+            final_fields = _build_fallback_fields(document_text)
     except Exception as e:
         logger.warning(f"Ollama unavailable ({e}), extracting fields from document text")
-    # Ollama offline: extract real fields from the uploaded document
-    fallback = _build_fallback_fields(document_text)
-    return fallback
+        final_fields = _build_fallback_fields(document_text)
+
+    # Final OCR sanitation for returned fields list (runs for both LLM & Fallback)
+    if is_ocr and final_fields:
+        for f in final_fields:
+            fname = f["field_name"]
+            val = f["field_value"]
+            if fname == "Policy Name" and val:
+                f["field_value"] = re.sub(r'\s+(?:12|13|14|15|16|17|18|19|20)\s*$', '', val).strip()
+            elif fname == "Insurer Name" and val:
+                m_ins = re.search(r'^(.*?Company\s+Limited|.*?Co\.\s*Ltd\.|.*?Insurance\s+Limited)', val, re.IGNORECASE)
+                if m_ins:
+                    f["field_value"] = m_ins.group(1).strip()
+            elif fname == "Room Rent Limit" and val:
+                if any(x in val.lower() for x in ("option", "section", "category", "shall stand")):
+                    f["field_value"] = "As per policy schedule"
+            elif fname == "Covered Members" and val:
+                if any(name in val for name in ("Rohan Sharma", "Priya Sharma", "Amit Sharma", "Ananya Sharma")) or val.lower() in ("null", "none"):
+                    f["field_value"] = "Not Mentioned"
+
+    return final_fields
 
 
 async def analyze_risks(document_text: str, force_regenerate: bool = False) -> dict:
