@@ -13,6 +13,7 @@ class UserRegister(BaseModel):
     email: EmailStr
     full_name: str = Field(..., min_length=2, max_length=255)
     password: str = Field(..., min_length=8, max_length=128)
+    role: Optional[str] = Field("user", max_length=20)
 
 
 class UserLogin(BaseModel):

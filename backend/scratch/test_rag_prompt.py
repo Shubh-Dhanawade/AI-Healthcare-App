@@ -17,8 +17,17 @@ async def main():
         res = await db.execute(stmt)
         doc = res.scalar_one_or_none()
         
+        if not doc:
+            print("Hardcoded document ID not found. Attempting to fetch first available document...")
+            stmt = select(Document).limit(1).options(
+                selectinload(Document.summary),
+                selectinload(Document.extracted_fields)
+            )
+            res = await db.execute(stmt)
+            doc = res.scalar_one_or_none()
+        
     if not doc:
-        print("Document not found.")
+        print("No documents found in database.")
         return
         
     # Package policy data
