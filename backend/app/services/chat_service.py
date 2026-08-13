@@ -285,6 +285,28 @@ async def run_chat_query(
     llm_start = time.time()
     response = await call_ollama(prompt, num_predict=600 if is_comparison else 450, num_ctx=settings.OLLAMA_NUM_CTX)
     llm_time = time.time() - llm_start
+
+    # Post-process response to correct contradiction on excluded maternity query
+    query_lower = query.lower()
+    is_maternity_query = any(k in query_lower for k in ["matern", "pregnan", "childbirth", "delivery"])
+    maternity_excluded = False
+    if policies:
+        doc = policies[0]
+        fields = doc.get("extracted_fields", [])
+        for f in fields:
+            if f.get("field_name", "").lower() == "maternity coverage":
+                val = str(f.get("field_value") or "").lower()
+                if "exclud" in val or "not covered" in val or "not benefit" in val:
+                    maternity_excluded = True
+                    break
+        text = doc.get("text", "") or ""
+        if "excl18" in text.lower() or "exclusion 18" in text.lower():
+            maternity_excluded = True
+            
+    if is_maternity_query and maternity_excluded:
+        stripped_resp = response.strip()
+        if stripped_resp.lower().startswith("yes"):
+            response = re.sub(r'^\s*yes\b[.,\s]*', 'No. ', response, flags=re.IGNORECASE).strip()
     
     total_time = time.time() - start_time
     logger.info(f"⏱️ Non-streaming response generated in {total_time:.4f}s [Retrieval: {retrieval_time:.4f}s, LLM: {llm_time:.4f}s]")
@@ -418,14 +440,60 @@ async def run_chat_query_stream_with_prompt(
     full_response_parts: List[str] = []
     first_token_time: Optional[float] = None
 
+    # Detect if query is about maternity and maternity is excluded in the active policy
+    query_lower = query.lower()
+    is_maternity_query = any(k in query_lower for k in ["matern", "pregnan", "childbirth", "delivery"])
+    maternity_excluded = False
+    if policies:
+        doc = policies[0]
+        fields = doc.get("extracted_fields", [])
+        for f in fields:
+            if f.get("field_name", "").lower() == "maternity coverage":
+                val = str(f.get("field_value") or "").lower()
+                if "exclud" in val or "not covered" in val or "not benefit" in val:
+                    maternity_excluded = True
+                    break
+        text = doc.get("text", "") or ""
+        if "excl18" in text.lower() or "exclusion 18" in text.lower():
+            maternity_excluded = True
+
     try:
         max_tokens = 700 if is_comparison else 500
+        buffer = []
+        max_buffer_tokens = 15
+
         async for token in call_ollama_stream(prompt, num_predict=max_tokens, num_ctx=settings.OLLAMA_NUM_CTX):
             if first_token_time is None:
                 first_token_time = time.time() - start_time
                 logger.info(f"⚡ Time to first token: {first_token_time:.4f}s")
-            full_response_parts.append(token)
+            
+            if len(buffer) < max_buffer_tokens:
+                buffer.append(token)
+                continue
+                
+            if buffer:
+                buffered_text = "".join(buffer)
+                if is_maternity_query and maternity_excluded:
+                    stripped_text = buffered_text.strip()
+                    if stripped_text.lower().startswith("yes"):
+                        new_text = re.sub(r'^\s*yes\b[.,\s]*', 'No. ', buffered_text, flags=re.IGNORECASE)
+                        buffered_text = new_text
+                yield buffered_text
+                full_response_parts.append(buffered_text)
+                buffer = []
+                
             yield token
+            full_response_parts.append(token)
+            
+        if buffer:
+            buffered_text = "".join(buffer)
+            if is_maternity_query and maternity_excluded:
+                stripped_text = buffered_text.strip()
+                if stripped_text.lower().startswith("yes"):
+                    new_text = re.sub(r'^\s*yes\b[.,\s]*', 'No. ', buffered_text, flags=re.IGNORECASE)
+                    buffered_text = new_text
+            yield buffered_text
+            full_response_parts.append(buffered_text)
             
         # Yield structured sources footer so the frontend can render document badges
         if filtered_chunks:

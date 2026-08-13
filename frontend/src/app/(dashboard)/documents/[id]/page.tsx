@@ -1389,7 +1389,7 @@ export default function DocumentDetailPage() {
     if (audioRef.current) {
       try {
         audioRef.current.pause();
-      } catch (err) {}
+      } catch (err) { }
       audioRef.current = null;
     }
     if (typeof window !== 'undefined' && window.speechSynthesis) {
@@ -2163,7 +2163,7 @@ export default function DocumentDetailPage() {
                       <Brain className="w-8 h-8 text-emerald-400 absolute inset-0 m-auto animate-bounce" />
                     </div>
                     <div>
-                      <p className="text-slate-200 font-bold text-sm">Preparing live summary...</p>
+                      <p className="text-slate-200 font-bold text-sm">Preparing summary...</p>
                       <p className="text-slate-400 text-xs mt-1">The AI is connecting to stream your policy analysis.</p>
                     </div>
                   </div>

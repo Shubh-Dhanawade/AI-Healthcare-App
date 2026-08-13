@@ -934,11 +934,51 @@ def _build_fallback_summary(document_text: str) -> dict:
     }
 
 
+def _clean_covered_members(cov_members: str) -> str:
+    if not cov_members or cov_members.lower() in ("null", "none", "not mentioned"):
+        return "Not Mentioned"
+    
+    import re
+    cleaned_entries = []
+    # Split by comma
+    entries = cov_members.split(",")
+    for entry in entries:
+        entry = entry.strip()
+        if not entry:
+            continue
+        
+        # Match "Name (Relationship)" or "Name"
+        match = re.match(r'^(.*?)\s*\(([^)]+)\)\s*$', entry)
+        if match:
+            name, rel = match.groups()
+            name = name.strip()
+            rel = rel.strip()
+        else:
+            name = entry
+            rel = ""
+            
+        # Clean leading noise/salutation prefixes in a loop from name
+        prev_len = 0
+        while len(name) != prev_len:
+            prev_len = len(name)
+            name = re.sub(r'^(?:and|or|for|with|to|of|at|on|in|dear|miss|no|none|null)\b\.?\s*', '', name, flags=re.IGNORECASE).strip()
+            
+        if name:
+            if rel:
+                cleaned_entries.append(f"{name} ({rel})")
+            else:
+                cleaned_entries.append(name)
+                
+    return ", ".join(cleaned_entries) if cleaned_entries else "Not Mentioned"
+
+
 def _extract_insured_persons_validated(text: str) -> str:
     """Extract and validate the names of insured persons from policy text with salutation checks and substring deduplication."""
     import re
-    # Normalize whitespaces to single space
-    norm_text = re.sub(r'\s+', ' ', text)
+    # Truncate text before list of insurance ombudsmen to avoid extracting ombudsmen names
+    ombuds_match = re.search(r'\b(?:insurance\s+)?ombudsmen\b', text, re.IGNORECASE)
+    if ombuds_match:
+        text = text[:ombuds_match.start()]
     
     # Direct label patterns
     patterns = [
@@ -957,8 +997,8 @@ def _extract_insured_persons_validated(text: str) -> str:
             first_line = re.sub(r'\s+', ' ', first_line)
             candidates.append(first_line)
             
-    # 2. Salutation based extraction (Mrs? or Ms or Miss)
-    salutations = re.findall(r'\b(Mrs?|Ms|Miss)\.?\s+([A-Za-z\s.\-]{3,35})', norm_text, re.IGNORECASE)
+    # 2. Salutation based extraction (runs on raw text, name part does not cross newlines)
+    salutations = re.findall(r'\b(Mrs?|Ms|Miss)\.?\s+([A-Za-z \t.\-]{3,35})', text, re.IGNORECASE)
     for title, name_part in salutations:
         full_name = f"{title.strip()} {name_part.strip()}"
         first_line = full_name.split('\n')[0].strip()
@@ -967,8 +1007,8 @@ def _extract_insured_persons_validated(text: str) -> str:
         first_line = re.sub(r'\s+(Base|Sum|Insured|Premium|Opted|Variant|Age|DOB|Gender|Relation).*$', '', first_line, flags=re.IGNORECASE).strip()
         candidates.append(first_line)
 
-    # 3. Fallback to basic Dear pattern
-    dear_match = re.findall(r'(?:Dear|name\s+of\s+(?:insured|policyholder))[:\s,]+([A-Za-z\s.\-]{3,40})', norm_text, re.IGNORECASE)
+    # 3. Fallback to basic Dear pattern (runs on raw text, name part does not cross newlines)
+    dear_match = re.findall(r'(?:Dear|name\s+of\s+(?:insured|policyholder))[:\s,]+([A-Za-z \t.\-]{3,40})', text, re.IGNORECASE)
     for dm in dear_match:
         candidates.append(dm.strip())
 
@@ -995,8 +1035,11 @@ def _extract_insured_persons_validated(text: str) -> str:
         # Strip trailing stop words/verbs
         clean_c = re.sub(noise_regex, '', c, flags=re.IGNORECASE).strip()
         clean_c = re.sub(r'[,\s\-]+$', '', clean_c).strip()
-        # Clean salutation prefixes
-        clean_c = re.sub(r'\b(mrs?|ms|miss|no)\.?\s+', '', clean_c, flags=re.IGNORECASE).strip()
+        # Clean leading noise/salutation prefixes in a loop
+        prev_len = 0
+        while len(clean_c) != prev_len:
+            prev_len = len(clean_c)
+            clean_c = re.sub(r'^(?:name|dear|to|mr|mrs|ms|miss|dr|no)\b\.?\s*', '', clean_c, flags=re.IGNORECASE).strip()
         # OCR name-stitching: join single uppercase letter fragments into adjacent all-caps word
         # e.g. "RAJKUMA R JAIN" → "RAJKUMAR JAIN"
         clean_c = re.sub(r'(\b[A-Z]{2,})\s+([A-Z])\s+([A-Z]{2,}\b)', lambda m: m.group(1) + m.group(2) + ' ' + m.group(3), clean_c)
@@ -1231,7 +1274,11 @@ def _build_fallback_fields(document_text: str) -> list[dict]:
         # Normalize multiple spaces within the name (OCR often splits names)
         name_clean = re.sub(r'\s+', ' ', name.strip())
         rel_clean = rel.strip()
-        name_clean = re.sub(r'^(?:and|or|for|with|to|of|at|on|in|dear|miss|no)\s+', '', name_clean, flags=re.IGNORECASE)
+        # Clean leading prefixes/noise/salutations in a loop
+        prev_len = 0
+        while len(name_clean) != prev_len:
+            prev_len = len(name_clean)
+            name_clean = re.sub(r'^(?:and|or|for|with|to|of|at|on|in|dear|miss|no|none|null)\b\.?\s*', '', name_clean, flags=re.IGNORECASE).strip()
         # OCR name-stitching: join single uppercase letter fragments into adjacent word
         name_clean = re.sub(r'(\b[A-Z]{2,})\s+([A-Z])\s+([A-Z]{2,}\b)', lambda m: m.group(1) + m.group(2) + ' ' + m.group(3), name_clean)
         
@@ -1861,9 +1908,12 @@ async def extract_policy_fields(document_text: str, force_regenerate: bool = Fal
 
             # Clean covered members for OCR
             cov_members = str(result.get("covered_members") or "").strip()
-            if is_ocr:
-                if any(name in cov_members for name in ("Rohan Sharma", "Priya Sharma", "Amit Sharma", "Ananya Sharma")) or not cov_members or cov_members.lower() in ("null", "none"):
-                    result["covered_members"] = "Not Mentioned"
+            if is_ocr and any(name in cov_members for name in ("Rohan Sharma", "Priya Sharma", "Amit Sharma", "Ananya Sharma")):
+                result["covered_members"] = "Not Mentioned"
+            elif not cov_members or cov_members.lower() in ("null", "none", "not mentioned"):
+                result["covered_members"] = "Not Mentioned"
+            else:
+                result["covered_members"] = _clean_covered_members(cov_members)
                     
             # Validate and extract insured person safely
             insured_person = str(result.get("insured_person") or "").strip()
